@@ -2248,7 +2248,10 @@ export interface FunctionOutput {
   /** `map` is p.221's object-to-fields map (§770). */
   kind: "value" | "array" | "object_set" | "table" | "map"
     /** Workshop p.284's 2D or 3D aggregation, for a chart layer (§771). */
-    | "aggregation";
+    | "aggregation"
+    /** `action-types` p.75's Ontology edit function (§773): objects of one
+     * type by primary key, and the properties to set on each. */
+    | "edits";
   data_type?: string;
   object_type_id?: string;
 }
@@ -2293,6 +2296,9 @@ export interface FunctionResult {
   /** An aggregation's answer (§771): two or three dimensions, and buckets. */
   dimensions?: 2 | 3 | null;
   buckets?: { key: string; segment?: string; value: number }[] | null;
+  /** An edit function's answer (§773): each object by its primary key, and
+   * the properties to set on it. */
+  edits?: { primary_key: string; properties: Record<string, unknown> }[] | null;
 }
 
 /** p.255's proposal to promote an object type (§767): "Other users must

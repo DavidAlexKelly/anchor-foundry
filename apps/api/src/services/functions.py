@@ -52,7 +52,9 @@ PARAMETER_TYPES = (*engine.SCALAR_TYPES, "object", "object_set")
 #: (§770): a key column, then one column per field. `aggregation` is Chart
 #: XY's "TwoDimensionalAggregation or ThreeDimensionalAggregation" (workshop
 #: p.284; §771): a bucket and a value, or a bucket, a segment and a value.
-OUTPUT_KINDS = ("value", "array", "object_set", "table", "map", "aggregation")
+#: `edits` is `action-types` p.75's Ontology edit function (§773): a key
+#: column, then one column per property to set, for an action's Function rule.
+OUTPUT_KINDS = ("value", "array", "object_set", "table", "map", "aggregation", "edits")
 MAX_PARAMETERS = 20
 MAX_INPUTS = 10
 #: The objects of one type a call reads. Above it a call is refused, by name:
@@ -116,10 +118,11 @@ def parse_output(raw: Any) -> dict[str, Any]:
         if data_type not in engine.SCALAR_TYPES:
             raise FunctionError(f"a {kind} output is one of {', '.join(engine.SCALAR_TYPES)}")
         return {"kind": kind, "data_type": data_type}
-    if kind in ("object_set", "map"):
+    if kind in ("object_set", "map", "edits"):
         if not raw.get("object_type_id"):
-            raise FunctionError(f"an {'object set' if kind == 'object_set' else 'object map'} "
-                                "output names its object type")
+            said = {"object_set": "an object set", "map": "an object map",
+                    "edits": "an edit"}[kind]
+            raise FunctionError(f"{said} output names its object type")
         return {"kind": kind, "object_type_id": str(raw["object_type_id"])}
     return {"kind": kind}
 
@@ -167,13 +170,22 @@ async def check_version(
         raise FunctionError("a function needs its SQL")
     referenced = {*inputs, *(p["object_type_id"] for p in parameters
                              if p["data_type"] in ("object", "object_set"))}
-    if output["kind"] in ("object_set", "map"):
+    if output["kind"] in ("object_set", "map", "edits"):
         referenced.add(output["object_type_id"])
     types = await _types(conn, workspace_id, referenced)
     engine.check_sql(sql, [p["api_name"] for p in parameters])
     tables = _tables(inputs, types)
     params: dict[str, Any] = {p["api_name"]: None for p in parameters}
-    await anyio.to_thread.run_sync(lambda: engine.run(tables, sql, params, output))
+    dry = await anyio.to_thread.run_sync(lambda: engine.run(tables, sql, params, output))
+    if output["kind"] == "edits":
+        # What an edit sets has to be somewhere to set it: a property of the
+        # type it edits, said at publish rather than by an action's click.
+        declared = {str(p["api_name"]) for p in types[output["object_type_id"]]["properties"]}
+        for column in dry["columns"]:
+            if column["name"] not in declared:
+                raise FunctionError(
+                    f"the query sets {column['name']!r}, which is not a property of "
+                    f"{types[output['object_type_id']]['api_name']}")
     return {"version": version, "parameters": parameters, "inputs": inputs,
             "output": output, "sql": sql}
 

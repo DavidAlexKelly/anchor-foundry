@@ -248,6 +248,14 @@ def test_a_webhook_rule_reaches_outside_the_ontology() -> None:
     ) == ["a webhook"]
 
 
+def test_a_function_rule_reaches_outside_the_ontology() -> None:
+    """A function is a workspace's (db 0153; §773), as a webhook is, and the
+    file carries none to build it from. One naming no function names nothing."""
+    assert transfer.outside_ontology(
+        {"kind": "function", "config": {"function_id": GONE}}) == ["a function"]
+    assert transfer.outside_ontology({"kind": "function", "config": {}}) == []
+
+
 def test_a_static_recipient_list_reaches_outside_the_ontology() -> None:
     """p.94's list of user ids. A user is organisation-scoped, so this survives
     a copy inside one organisation and not between two — and an export cannot

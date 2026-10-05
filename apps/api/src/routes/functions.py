@@ -97,6 +97,10 @@ class FunctionResult(BaseModel):
     #: An aggregation's answer (§771): 2 or 3, and its buckets.
     dimensions: int | None = None
     buckets: list[dict[str, Any]] | None = None
+    #: An edit function's answer (§773): each object by its primary key, and
+    #: the properties to set on it. A call here only says what an action
+    #: would do; the action is what applies it.
+    edits: list[dict[str, Any]] | None = None
 
 
 @router.get("", response_model=list[FunctionSummary])

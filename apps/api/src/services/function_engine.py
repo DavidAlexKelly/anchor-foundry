@@ -35,6 +35,9 @@ TIMEOUT_SECONDS = 10.0
 MAX_TABLE_ROWS = 1000
 #: What an array or object set output may hold.
 MAX_ARRAY_ITEMS = 10_000
+#: `action-types` p.130's "Number of objects you can edit in a single action
+#: submission": what an edit function may return (§773).
+MAX_EDITS = 10_000
 
 #: p.80's Workshop variable types, as DuckDB spells them.
 SCALAR_TYPES: dict[str, str] = {
@@ -51,6 +54,15 @@ _PARAM_RE = re.compile(r"\$([A-Za-z_][A-Za-z0-9_]*)")
 
 class FunctionError(ValueError):
     """A function that cannot be saved, or a call that cannot complete."""
+
+
+class UserFacingError(FunctionError):
+    """p.166's "threw an error intended to be displayed to the user" (§773):
+    the SQL's own `error('…')`, its message said as written."""
+
+
+#: DuckDB's `error(message)`, which is how a query refuses on purpose.
+_ERROR_CALL_RE = re.compile(r"\berror\s*\(", re.I)
 
 
 @dataclass(frozen=True)
@@ -136,6 +148,13 @@ def run(
         except duckdb.InterruptException as exc:
             raise FunctionError(f"the function ran for more than {timeout:g} seconds "
                                 "and was stopped") from exc
+        except duckdb.InvalidInputException as exc:
+            # Raised by `error()` and by a few built-ins on bad input; the
+            # query's own call is told apart by the query having one.
+            message = _clean(exc)
+            if _ERROR_CALL_RE.search(sql):
+                raise UserFacingError(message.removeprefix("Invalid Input Error: ")) from exc
+            raise FunctionError(message) from exc
         except duckdb.Error as exc:
             raise FunctionError(_clean(exc)) from exc
         finally:
@@ -194,6 +213,34 @@ def _aggregation(con: duckdb.DuckDBPyConnection, names: list[str]) -> dict[str, 
     return {"kind": "aggregation", "dimensions": len(names), "buckets": buckets}
 
 
+def _edits(con: duckdb.DuckDBPyConnection, names: list[str], described: list[Any]) -> dict[str, Any]:
+    """`action-types` p.75's Ontology edit function (§773): each row an object
+    of the output's type by its primary key, and the properties to set on it.
+    What the action does with each - modify one that exists, create one that
+    does not - is the executor's (`actions.function_edit_rules`)."""
+    if len(names) < 2:
+        raise FunctionError("an edit function's query gives each object's primary key and "
+                            "then at least one property to set")
+    rows = con.execute(f"SELECT * FROM __function_output LIMIT {MAX_EDITS + 1}").fetchall()
+    if len(rows) > MAX_EDITS:
+        raise FunctionError(f"the function returned more than {MAX_EDITS:,} edits, the most "
+                            "one action may make")
+    edits: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in rows:
+        if row[0] is None:
+            continue  # names no object, so it is no edit; as a map's row is
+        key = str(row[0])
+        if key in seen:
+            raise FunctionError(f"the function edits {key!r} twice; one row says what "
+                                "becomes of one object")
+        seen.add(key)
+        edits.append({"primary_key": key, "properties": {
+            name: json_value(value) for name, value in zip(names[1:], row[1:])}})
+    return {"kind": "edits", "columns": [{"name": r[0], "data_type": r[1]} for r in described[1:]],
+            "edits": edits}
+
+
 def _shape(con: duckdb.DuckDBPyConnection, output: dict[str, Any]) -> dict[str, Any]:
     described = con.execute("DESCRIBE __function_output").fetchall()
     names = [row[0] for row in described]
@@ -209,6 +256,8 @@ def _shape(con: duckdb.DuckDBPyConnection, output: dict[str, Any]) -> dict[str, 
         return _map(con, names, described)
     if kind == "aggregation":
         return _aggregation(con, names)
+    if kind == "edits":
+        return _edits(con, names, described)
     target = "VARCHAR" if kind == "object_set" else SCALAR_TYPES[str(output["data_type"])]
     try:
         values = [row[0] for row in con.execute(

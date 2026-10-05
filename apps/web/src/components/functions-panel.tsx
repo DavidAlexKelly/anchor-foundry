@@ -263,7 +263,8 @@ function VersionDialog({ workspaceId, existing, onClose }: {
               {SCALAR_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
             </select>
           )}
-          {(draft.output.kind === "object_set" || draft.output.kind === "map") && (
+          {(draft.output.kind === "object_set" || draft.output.kind === "map"
+            || draft.output.kind === "edits") && (
             <TypePicker
               workspaceId={workspaceId}
               testId="fn-output-object"
@@ -281,6 +282,13 @@ function VersionDialog({ workspaceId, existing, onClose }: {
         <p className="field-hint">
           A bucket and a value, or a bucket, a segment and a value, as a Chart XY
           layer draws them (Workshop p.284).
+        </p>
+      )}
+      {draft.output.kind === "edits" && (
+        <p className="field-hint">
+          The query&apos;s first column is the primary key of each object to change, and
+          every other column a property to set on it. An object that does not exist is
+          created — what an action&apos;s Function rule applies (action-types p.75).
         </p>
       )}
       {draft.output.kind === "map" && (
@@ -400,6 +408,26 @@ function RunDialog({ workspaceId, fn, onClose }: {
                     <td>{key}</td>
                     {(result.columns ?? []).map((c) => (
                       <td key={c.name}>{String(fields[c.name] ?? "")}</td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          {result.kind === "edits" && (
+            <table className="table" data-testid="fn-result-edits">
+              <thead>
+                <tr>
+                  <th>Object</th>
+                  {(result.columns ?? []).map((c) => <th key={c.name}>{c.name}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                {(result.edits ?? []).map((e) => (
+                  <tr key={e.primary_key}>
+                    <td>{e.primary_key}</td>
+                    {(result.columns ?? []).map((c) => (
+                      <td key={c.name}>{String(e.properties[c.name] ?? "")}</td>
                     ))}
                   </tr>
                 ))}

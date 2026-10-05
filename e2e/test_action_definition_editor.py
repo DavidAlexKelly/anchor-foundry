@@ -202,6 +202,8 @@ def test_the_editor_offers_the_rule_kinds_that_execute(page, api):
     assert options == [
         "Set a property", "Create an object", "Link to an object", "Remove a link",
         "Delete an object", "Send a notification", "Call a webhook",
+        # p.22's Function rule (§773).
+        "Call a function",
     ]
 
 
@@ -793,7 +795,7 @@ def test_the_editor_offers_the_webhook_rule(page, api):
     mod = build(api, "Action editor webhook kind")
     open_editor(page, mod)
     options = page.get_by_label("Rule 1 kind").locator("option").all_inner_texts()
-    assert options[-1] == "Call a webhook"
+    assert "Call a webhook" in options
 
 
 def test_a_webhook_rule_typed_in_the_dialog_saves_and_runs(page, api, webhook_target):

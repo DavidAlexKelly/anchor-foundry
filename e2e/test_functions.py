@@ -127,3 +127,32 @@ def test_a_table_function_draws_its_rows(page, api, world) -> None:
     expect(table.locator("thead th")).to_have_text(["region", "n"])
     expect(table.locator("tbody tr").first).to_contain_text("north")
     expect(page.get_by_test_id("fn-result-line")).to_have_text("2 rows")
+
+
+def test_an_edit_function_is_written_and_says_what_it_would_change(page, world) -> None:
+    """§773's output, for an action's Function rule: written in the dialog
+    against the type it edits, and run to show the edits an action would
+    apply - which this call does not."""
+    mod, slug = world["mod"], world["slug"]
+    name = f"Bump {uuid.uuid4().hex[:4]}"
+    api_name = name.lower().replace(" ", "_")
+    open_objects(page, mod)
+    page.get_by_test_id("new-function").click()
+    page.get_by_test_id("fn-name").fill(name)
+    pick_type(page, "fn-input-picker", {"id": world["sites"], "api_name": slug})
+    page.get_by_test_id("fn-add-input").click()
+    page.get_by_test_id("fn-output-kind").select_option("edits")
+    page.get_by_test_id("fn-sql").fill(
+        f"SELECT __primary_key, capacity + 1 AS capacity FROM {slug} "
+        "WHERE region = 'south'")
+    expect(page.get_by_test_id("fn-problem")).to_have_text("Choose the object type it edits.")
+    pick_type(page, "fn-output-object", {"id": world["sites"], "api_name": slug})
+    expect(page.get_by_test_id("fn-problem")).to_have_count(0)
+    page.get_by_test_id("fn-save").click()
+    expect(page.get_by_test_id(f"fn-version-{api_name}")).to_have_text("1.0.0", timeout=15000)
+    page.get_by_role("button", name=f"Run {api_name}").click()
+    page.get_by_test_id("fn-run").click()
+    expect(page.get_by_test_id("fn-result-line")).to_have_text("1 edit", timeout=15000)
+    edits = page.get_by_test_id("fn-result-edits")
+    expect(edits.locator("thead th")).to_have_text(["Object", "capacity"])
+    expect(edits.locator("tbody tr").first.locator("td")).to_have_text(["S3", "26"])

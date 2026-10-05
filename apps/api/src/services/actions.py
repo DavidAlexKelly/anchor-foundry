@@ -2511,7 +2511,9 @@ _RULE_KINDS = frozenset(
     {"modify_object", "create_object", "delete_object", "create_link",
      "delete_link", "notify", "webhook",
      # p.63-64's, on an action on an interface (§761; db 0149).
-     "create_interface_link", "delete_interface_link"}
+     "create_interface_link", "delete_interface_link",
+     # p.22's Function rule (§773): `action_functions`.
+     "function"}
 )
 
 #: `action-types` p.105-107's two ways to configure a webhook in an action. The
@@ -2538,6 +2540,25 @@ DEFAULT_WEBHOOK_MODE = "side_effect"
 #: What it buys is that every rule kind reads `bound[config["parameter"]]` and
 #: none of them needed changing.
 WEBHOOK_OUTPUT_PREFIX = "webhook."
+
+
+async def _functions_named(
+    conn: AsyncConnection, workspace_id: UUID, rules: list[dict[str, Any]]
+) -> dict[str, dict[str, Any]]:
+    """The functions this definition's Function rules name, with their
+    versions (§773). One that is not here, or not an id, is left out, and the
+    rule's check refuses it by saying so."""
+    from . import functions as functions_service
+
+    found: dict[str, dict[str, Any]] = {}
+    for rule in rules:
+        # Only a Function rule names one; any other's is no id, and is passed.
+        named = str((rule.get("config") or {}).get("function_id") or "")
+        try:
+            found[named] = await functions_service.get_function(conn, workspace_id, UUID(named))
+        except (NotFoundError, ValueError):
+            continue
+    return found
 
 
 def webhook_output_name(output: str) -> str:
@@ -3380,8 +3401,12 @@ def _validate_definition(
     webhooks: dict[str, dict[str, Any]] | None = None,
     reference_properties: dict[str, set[str]] | None = None,
     interface_links: dict[str, dict[str, Any]] | None = None,
+    functions: dict[str, dict[str, Any]] | None = None,
 ) -> None:
     """Refuse a definition that could not be executed, at save time.
+
+    `functions` is `{id: the function with its versions}` for the functions
+    the definition's Function rule names (§773).
 
     `interface_links` is the interface's effective link constraints by name
     when the action is on an interface (§761), and None when it is on an
@@ -3490,6 +3515,11 @@ def _validate_definition(
     # p.106's "only a single webhook as a writeback", tracked across the loop
     # because the rule that breaks it is the *second* one.
     writeback_seen = False
+    # p.22: "When this rule is present, no other rule may be configured"
+    # (§773).
+    from . import action_functions
+
+    action_functions.check_rules(rules)
     # The writeback outputs seen so far, with the types `notifications.parse`
     # needs to check a reference. Kept beside `seen` rather than derived from
     # it, because `seen` is a set of names and that function asks for types.
@@ -3499,6 +3529,13 @@ def _validate_definition(
         if kind not in _RULE_KINDS:
             raise ValueError(f"unknown rule kind {kind!r}")
         config = rule.get("config") or {}
+        if kind == "function":
+            action_functions.check_rule(
+                config, functions=functions or {},
+                parameters={str(p.get("api_name", "")) for p in parameters},
+                object_type_id=None if interface_links is not None else object_type_id,
+            )
+            continue
         if kind == "create_object":
             # Checked here rather than at execute time, because every refusal
             # below is one somebody can still fix while they are looking at the
@@ -4183,6 +4220,7 @@ async def set_definition(
         webhooks=await webhooks_by_id(conn, workspace_id),
         reference_properties=await _reference_properties(conn, workspace_id, parameters),
         interface_links=interface_links,
+        functions=await _functions_named(conn, workspace_id, rules),
     )
 
     # **The refusal decision 0007 names.** Checked against what is *going*, not
