@@ -89,6 +89,33 @@ def test_a_click_downloads_the_set_as_a_csv_file(page, api) -> None:
     expect(status(page)).to_contain_text("Exported 2 objects to north sites.csv.")
 
 
+def test_a_click_downloads_the_set_as_an_excel_file(page, api) -> None:
+    """p.489's own format (§787): a workbook whose one sheet holds the set,
+    read back here as the zip of XML parts it is."""
+    import re
+    import zipfile
+
+    mod = build(api, "Export excel", {"format": "excel", "file_name": "north sites",
+                                      "properties": ["name", "region"]})
+    open_module(page, mod)
+    with page.expect_download() as waiting:
+        page.get_by_role("button", name="Export", exact=True).click()
+    download = waiting.value
+    assert download.suggested_filename == "north sites.xlsx"
+    with zipfile.ZipFile(download.path()) as book:
+        assert book.testzip() is None
+        assert "xl/workbook.xml" in book.namelist()
+        sheet = book.read("xl/worksheets/sheet1.xml").decode()
+    texts = re.findall(r'<c r="([A-Z]+\d+)" t="inlineStr"><is><t>([^<]*)</t>', sheet)
+    assert texts == [
+        ("A1", "Key"), ("B1", "Name"), ("C1", "Region"),
+        ("A2", "S1"), ("B2", "Alpha, the first"), ("C2", "north"),
+        # Text by its cell type, so no apostrophe and nothing to run.
+        ("A3", "S2"), ("B3", "=HYPERLINK(1)"), ("C3", "north"),
+    ], sheet
+    expect(status(page)).to_contain_text("Exported 2 objects to north sites.xlsx.")
+
+
 def test_a_click_copies_the_set_to_the_clipboard(page, api) -> None:
     """p.489's other destination. Tab-separated, which is what a spreadsheet
     makes rows and columns of when it is pasted into one."""
@@ -124,6 +151,18 @@ def test_the_builder_configures_an_export(page, api) -> None:
     assert effect == {"type": "export", "config": {
         "variable": "v_north", "properties": ["region"], "file_name": "regions",
     }}, effect
+
+    # p.489's Excel is a format of its own (§787).
+    page.get_by_test_id("effect-export-format").select_option("excel")
+    page.get_by_role("button", name="Save", exact=True).click()
+    # The version line already says "saved" from the save above, so wait for
+    # the document itself.
+    for _ in range(100):
+        config = mod.definition()["events"]["e_1"]["effects"][0]["config"]
+        if "format" in config:
+            break
+        page.wait_for_timeout(100)
+    assert config.get("format") == "excel", config
 
     # Choosing the clipboard drops the file name field: a paste has no name.
     page.get_by_test_id("effect-export-format").select_option("clipboard")

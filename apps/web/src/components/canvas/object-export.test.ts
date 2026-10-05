@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  MAX_EXPORT_ROWS, collectRows, csvCell, csvOf, exportColumns, exportFileName, staticTypeOf,
-  tsvOf,
+  MAX_EXPORT_ROWS, collectRows, csvCell, csvOf, exportColumns, exportFileName, sheetRowsOf,
+  staticTypeOf, tsvOf,
   type ExportRow,
 } from "./object-export";
 
@@ -177,3 +177,24 @@ describe("staticTypeOf", () => {
     expect(staticTypeOf("v_a", vars)).toBeNull();
   });
 });
+
+describe("an Excel export (§787)", () => {
+  const now = new Date("2026-09-24T10:00:00Z");
+
+  it("is named .xlsx, once, whatever ending the builder typed", () => {
+    expect(exportFileName("sites", "Site", now, "xlsx")).toBe("sites.xlsx");
+    expect(exportFileName("sites.csv", "Site", now, "xlsx")).toBe("sites.xlsx");
+    expect(exportFileName("sites.XLSX", "Site", now, "xlsx")).toBe("sites.xlsx");
+    expect(exportFileName("sites.xlsx", "Site", now)).toBe("sites.csv");
+    expect(exportFileName("", "Site", now, "xlsx")).toBe("Site 2026-09-24.xlsx");
+  });
+
+  it("keeps a number a number and a boolean a boolean, and a structure as its JSON", () => {
+    const columns = exportColumns([{ api_name: "n", display_name: "Count" },
+                                   { api_name: "ok" }, { api_name: "where" }, { api_name: "x" }]);
+    expect(sheetRowsOf(columns, [
+      { primary_key: "S1", properties: { n: 3, ok: false, where: { lat: 1 }, x: null } },
+    ])).toEqual([["Key", "Count", "ok", "where", "x"], ["S1", 3, false, '{"lat":1}', null]]);
+  });
+});
+

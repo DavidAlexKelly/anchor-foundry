@@ -6,11 +6,11 @@
  * > clipboard. An application builder may optionally configure a file name and
  * > select the set of properties that should be included in the export."
  *
- * **CSV where p.489 says Excel**, which is the format p.489 itself falls back
- * to whenever the columns are not plain properties; `EXPORT_FORMATS` in
- * `workshop_events.py` says why there is no XLSX writer. The clipboard gets
- * **tab-separated** text instead, because that is what a spreadsheet makes
- * rows and columns of when it is pasted into one.
+ * **Excel, as p.489 says** (§787; `lib/xlsx.ts`), or CSV, the format p.489
+ * itself falls back to "if function-backed columns or linked object columns
+ * are included". The clipboard gets **tab-separated** text instead, because
+ * that is what a spreadsheet makes rows and columns of when it is pasted
+ * into one.
  *
  * Pure, so what is written can be checked without a browser: the effect in
  * `events.ts` fetches the rows and hands them here, and the download and the
@@ -100,6 +100,20 @@ export function csvOf(columns: readonly Column[], rows: readonly ExportRow[]): s
   return `${lines.join("\r\n")}\r\n`;
 }
 
+/** The sheet's rows for `xlsxOf` (§787): the header, then one row per object.
+ * A number or a boolean keeps its type, so a spreadsheet can sum the column;
+ * a structure is its JSON, as in CSV. */
+export function sheetRowsOf(columns: readonly Column[], rows: readonly ExportRow[]):
+    (string | number | boolean | null)[][] {
+  const cellOf = (value: unknown) =>
+    typeof value === "number" || typeof value === "boolean" ? value
+      : value === null || value === undefined ? null : text(value);
+  return [
+    columns.map((c) => c.header),
+    ...rows.map((row) => columns.map((c) => cellOf(valueOf(row, c)))),
+  ];
+}
+
 /** The clipboard's text: tab-separated, which is what a spreadsheet splits a
  * paste on. A tab or line break inside a value would split it into cells of
  * its own, so each becomes a space. */
@@ -113,14 +127,19 @@ export function tsvOf(columns: readonly Column[], rows: readonly ExportRow[]): s
 
 /** The download's name: the configured one, or the type and today's date.
  *
- * Reduced to characters every file system takes, and given a `.csv` ending
- * once - a builder who typed "sites.csv" should not get "sites.csv.csv".
+ * Reduced to characters every file system takes, and given its ending once -
+ * a builder who typed "sites.csv" should not get "sites.csv.csv", and one
+ * who typed it for an Excel export gets "sites.xlsx".
  */
-export function exportFileName(configured: string | null | undefined, typeName: string, now: Date): string {
+export function exportFileName(
+  configured: string | null | undefined, typeName: string, now: Date,
+  extension: "csv" | "xlsx" = "csv",
+): string {
   const day = now.toISOString().slice(0, 10);
   const base = (configured ?? "").trim() || `${typeName || "objects"} ${day}`;
-  const safe = base.replace(/\.csv$/i, "").replace(/[^A-Za-z0-9 ._-]+/g, "_").trim() || "objects";
-  return `${safe}.csv`;
+  const safe = base.replace(/\.(csv|xlsx)$/i, "").replace(/[^A-Za-z0-9 ._-]+/g, "_").trim()
+    || "objects";
+  return `${safe}.${extension}`;
 }
 
 /** Every row of a set, a page at a time, or a refusal when there are more

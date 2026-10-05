@@ -1103,10 +1103,12 @@ def test_an_export_needs_an_object_set_it_declares() -> None:
 
 
 def test_an_export_refuses_a_format_it_cannot_write() -> None:
-    """Excel is written as CSV (`EXPORT_FORMATS` says why), so `xlsx` is not a
-    format an event can name - it would promise a file this does not make."""
-    with pytest.raises(we.EventError, match="is not one of csv, clipboard"):
+    """p.489's Excel is `excel` (§787); a format of another name would
+    promise a file this does not make."""
+    with pytest.raises(we.EventError, match="is not one of excel, csv, clipboard"):
         export_event({"variable": "v_sites", "format": "xlsx"})
+    for fmt in ("excel", "csv", "clipboard"):
+        export_event({"variable": "v_sites", "format": fmt})
 
 
 def test_an_exports_properties_are_a_list_of_names() -> None:

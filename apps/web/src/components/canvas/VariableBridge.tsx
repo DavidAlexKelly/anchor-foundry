@@ -29,8 +29,9 @@ import {
 } from "@/lib/api";
 import type { ExportRequest, FunctionExportRequest } from "./event-run";
 import { exportContent, exportFileName as functionExportFileName, mimeOf } from "@/lib/function-export";
+import { XLSX_MIME, xlsxOf } from "@/lib/xlsx";
 import {
-  collectRows, csvOf, exportColumns, exportFileName, tsvOf,
+  collectRows, csvOf, exportColumns, exportFileName, sheetRowsOf, tsvOf,
 } from "./object-export";
 import {
   CanvasActionsProvider,
@@ -599,10 +600,16 @@ async function exportObjects(
       await navigator.clipboard.writeText(tsvOf(columns, rows));
       return { ok: true, message: `Copied ${count} to the clipboard.` };
     }
-    const name = exportFileName(request.fileName, type.display_name, new Date());
-    const url = URL.createObjectURL(
-      new Blob([csvOf(columns, rows)], { type: "text/csv;charset=utf-8" }),
-    );
+    // p.489: "if function-backed columns or linked object columns are
+    // included, the export file format will be CSV and not Excel" - which
+    // here is a table's export (p.223), whose format is always CSV.
+    const excel = request.format === "excel";
+    const name = exportFileName(request.fileName, type.display_name, new Date(),
+                                excel ? "xlsx" : "csv");
+    const url = URL.createObjectURL(excel
+      ? new Blob([xlsxOf(type.display_name, sheetRowsOf(columns, rows)) as BlobPart],
+                 { type: XLSX_MIME })
+      : new Blob([csvOf(columns, rows)], { type: "text/csv;charset=utf-8" }));
     const link = document.createElement("a");
     link.href = url;
     link.download = name;
