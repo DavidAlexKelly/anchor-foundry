@@ -767,6 +767,11 @@ class OpenSearchInstanceStore:
                 # `size: 0` for `aggregate_object_set`'s reason: the watermark
                 # is the answer and the documents are not.
                 "size": 0,
+                # The exact count. OpenSearch stops counting at 10,000 unless
+                # asked, and past that a delete would leave "10,000" unmoved -
+                # the watcher would miss it, and the restore check (§803)
+                # would call a type of 12,000 objects one of 10,000.
+                "track_total_hits": True,
                 "aggs": {"newest": {"max": {"field": "updated_at"}}},
             },
             # A type nobody has synced has no index, which is "no objects yet"
@@ -800,6 +805,7 @@ class OpenSearchInstanceStore:
                 "sort": [{"updated_at": "desc"}, {"primary_key": "asc"}],
                 "from": offset,
                 "size": limit,
+                "track_total_hits": True,  # exact past 10,000 (§803)
             },
             # **An object type that has never synced now has no index at all.**
             # Before the split it read from the workspace's index, which existed
@@ -933,6 +939,7 @@ class OpenSearchInstanceStore:
                      {"object_type_id": "asc"}],
             "from": offset,
             "size": limit,
+            "track_total_hits": True,  # exact past 10,000 (§803)
         }
         resp = await self._client.search(
             index=instance_mapping.all_types_pattern(search_prefix),
@@ -1046,6 +1053,7 @@ class OpenSearchInstanceStore:
         body: dict[str, Any] = {
             "query": {"bool": self._set_clauses(object_type_id, filters)},
             "size": 0,
+            "track_total_hits": True,  # exact past 10,000 (§803)
         }
         if agg.numeric:
             # The typed field §220's mapping declares, **not** its `.keyword`
@@ -1300,6 +1308,7 @@ class OpenSearchInstanceStore:
             "sort": _sort_clause(sort),
             "from": offset,
             "size": limit,
+            "track_total_hits": True,  # exact past 10,000 (§803)
         }
         resp = await self._client.search(
             index=_index_name(search_prefix, object_type_id), body=body,
@@ -1370,6 +1379,7 @@ class OpenSearchInstanceStore:
             "sort": [{"primary_key": "asc"}],
             "from": offset,
             "size": limit,
+            "track_total_hits": True,  # exact past 10,000 (§803)
         }
         resp = await self._client.search(
             index=_index_name(search_prefix, object_type_id), body=body,
