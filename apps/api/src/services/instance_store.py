@@ -1808,6 +1808,10 @@ async def split_workspace_index(
     return {"instances": moved, "object_types": len(types)}
 
 
+#: Objects per page of a backfill (§813).
+BACKFILL_PAGE = 5000
+
+
 async def backfill(
     conn: "AsyncConnection",
     gateway: "InstanceStoreGateway",
@@ -1833,73 +1837,85 @@ async def backfill(
     NULL, so it would degrade to null rather than fail loudly, which is the
     worst of both.
     """
-    rows = await fetch_all(
-        conn,
-        """
-        SELECT i.id, i.object_type_id, i.source_id, i.primary_key, i.properties,
-               i.updated_at
-          FROM object_instances i
-          JOIN object_types t ON t.id = i.object_type_id
-         WHERE t.workspace_id = :wid
-         ORDER BY i.object_type_id, i.source_id
-        """,
-        {"wid": str(workspace_id)},
-    )
-
     import json as _json
     from collections import defaultdict
     from sqlalchemy import text as _sql
 
-    # One bulk call per (object_type, source): the gateway's upsert signature
-    # is per-source, and grouping keeps that one round trip per group rather
-    # than one per row.
-    grouped: dict[tuple[UUID, UUID], list[tuple[str, dict[str, Any]]]] = defaultdict(list)
-    newest: dict[tuple[UUID, UUID], datetime] = {}
-    remapped = 0
-    for row in rows:
-        properties = row["properties"]
-        if isinstance(properties, str):
-            properties = _json.loads(properties)
-        key = (UUID(str(row["object_type_id"])), UUID(str(row["source_id"])))
-        grouped[key].append((str(row["primary_key"]), properties))
-        newest[key] = max(newest.get(key, row["updated_at"]), row["updated_at"])
-
-        new_id = _doc_id(UUID(str(row["source_id"])), str(row["primary_key"]))
-        if new_id != str(row["id"]):
-            result = await conn.execute(
-                _sql("UPDATE action_runs SET instance_id = CAST(:new AS uuid) "
-                     "WHERE instance_id = CAST(:old AS uuid)"),
-                {"new": new_id, "old": str(row["id"])},
-            )
-            remapped += result.rowcount or 0
-
-    # Each type's declared properties, read once per type rather than once per
-    # (type, source): a type with eight sources would otherwise ask the same
-    # question eight times, and the answer cannot change inside a backfill.
-    #
-    # **Read at all** because decision 0006 made an index carry its type's
-    # mapping. A backfill replaying rows with nothing declared would create
-    # every index with an empty strict mapping and then have every document it
-    # was copying refused - which is the correct refusal reaching the one
-    # caller that has the declaration and had not been asked for it.
     from . import ontology
 
+    # **A page at a time** (§813), by the `(source_id, primary_key)` unique
+    # index. This read a whole workspace in one query, held every row in
+    # memory and remapped the audit trail one `UPDATE` per row: at a million
+    # objects, a gigabyte in a task with one and a million round trips.
+    # Paging changes none of what is written - every document id is derived,
+    # so where a page ends cannot change what a document is.
     declared_by_type: dict[UUID, list[dict[str, Any]]] = {}
-    for object_type_id, _source_id in grouped:
-        if object_type_id not in declared_by_type:
-            declared_by_type[object_type_id] = await ontology.list_properties(
-                conn, object_type_id
-            )
-
-    copied = 0
-    for (object_type_id, source_id), group in grouped.items():
-        copied += await gateway.upsert_instances(
-            search_prefix=search_prefix,
-            object_type_id=object_type_id,
-            source_id=source_id,
-            rows=group,
-            synced_at=newest[(object_type_id, source_id)],
-            declared=declared_by_type[object_type_id],
+    sources: set[tuple[UUID, UUID]] = set()
+    copied = remapped = 0
+    after: tuple[str, str] | None = None
+    while True:
+        rows = await fetch_all(
+            conn,
+            """
+            SELECT i.id, i.object_type_id, i.source_id, i.primary_key, i.properties,
+                   i.updated_at
+              FROM object_instances i
+              JOIN object_types t ON t.id = i.object_type_id
+             WHERE t.workspace_id = :wid
+               AND (CAST(:after_source AS uuid) IS NULL
+                    OR (i.source_id, i.primary_key) > (CAST(:after_source AS uuid), :after_key))
+             ORDER BY i.source_id, i.primary_key
+             LIMIT :page
+            """,
+            {"wid": str(workspace_id), "after_source": after[0] if after else None,
+             "after_key": after[1] if after else "", "page": BACKFILL_PAGE},
         )
-    return {"instances": copied, "sources": len(grouped), "action_runs_remapped": remapped}
+        if not rows:
+            break
+        after = (str(rows[-1]["source_id"]), str(rows[-1]["primary_key"]))
+
+        # One bulk call per (object_type, source) in the page: the gateway's
+        # upsert signature is per-source.
+        grouped: dict[tuple[UUID, UUID], list[tuple[str, dict[str, Any]]]] = defaultdict(list)
+        newest: dict[tuple[UUID, UUID], datetime] = {}
+        moved: list[dict[str, str]] = []
+        for row in rows:
+            properties = row["properties"]
+            if isinstance(properties, str):
+                properties = _json.loads(properties)
+            key = (UUID(str(row["object_type_id"])), UUID(str(row["source_id"])))
+            grouped[key].append((str(row["primary_key"]), properties))
+            newest[key] = max(newest.get(key, row["updated_at"]), row["updated_at"])
+            # A Postgres instance's id is random, so every one moves.
+            moved.append({"old": str(row["id"]),
+                          "new": _doc_id(UUID(str(row["source_id"])), str(row["primary_key"]))})
+
+        # The page's ids in one statement rather than one each.
+        result = await conn.execute(
+            _sql("UPDATE action_runs a SET instance_id = m.new "
+                 "FROM jsonb_to_recordset(CAST(:moved AS jsonb)) AS m(old uuid, new uuid) "
+                 "WHERE a.instance_id = m.old"),
+            {"moved": _json.dumps(moved)},
+        )
+        remapped += result.rowcount or 0
+
+        # Each type's declared properties, read once per type: the answer
+        # cannot change inside a backfill. **Read at all** because decision
+        # 0006 made an index carry its type's mapping - replayed with nothing
+        # declared, every document would be refused by an empty strict one.
+        for (object_type_id, source_id), group in grouped.items():
+            if object_type_id not in declared_by_type:
+                declared_by_type[object_type_id] = await ontology.list_properties(
+                    conn, object_type_id
+                )
+            copied += await gateway.upsert_instances(
+                search_prefix=search_prefix,
+                object_type_id=object_type_id,
+                source_id=source_id,
+                rows=group,
+                synced_at=newest[(object_type_id, source_id)],
+                declared=declared_by_type[object_type_id],
+            )
+            sources.add((object_type_id, source_id))
+    return {"instances": copied, "sources": len(sources), "action_runs_remapped": remapped}
 
