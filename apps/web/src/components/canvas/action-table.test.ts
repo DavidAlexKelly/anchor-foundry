@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  csvEntries, csvPlan, csvValue, nextCell, parseCsv, pendingRows, rowFor, rowProblems, tableColumns,
+  afterBatch, batchable, batchProblem, csvEntries, csvPlan, csvValue, nextCell, parseCsv, pendingRows, rowFor, rowProblems, tableColumns,
   type TableRow,
 } from "./action-table";
 
@@ -163,3 +163,31 @@ describe("csvEntries", () => {
     ]);
   });
 });
+
+describe("one batch call (§796)", () => {
+  const rows = [{ subjectId: "i1" }, { subjectId: "i2" }];
+  it("is for an action the Object Table's batch takes, with every row about an object", () => {
+    expect(batchable({ inline_edit_refusals: [], object_type_id: "t" }, rows)).toBe(true);
+    // One that creates, deletes or links goes a row at a time.
+    expect(batchable({ inline_edit_refusals: ["has a 'create_object' rule"],
+                       object_type_id: "t" }, rows)).toBe(false);
+    // An action on an interface has no one type.
+    expect(batchable({ inline_edit_refusals: [], object_type_id: null }, rows)).toBe(false);
+    expect(batchable({ inline_edit_refusals: [], object_type_id: "t" },
+                     [...rows, { subjectId: "" }])).toBe(false);
+  });
+});
+
+describe("a batch's limit and answer (§796)", () => {
+  it("is p.131's row limit", () => {
+    expect(batchProblem(200, 200)).toBeNull();
+    expect(batchProblem(201, 200)).toBe("One submission takes at most 200 rows (action-types p.131).");
+  });
+
+  it("marks every row done, or every row refused with the batch's reason", () => {
+    expect(afterBatch({ ok: true })).toEqual({ status: "done" });
+    expect(afterBatch({ ok: false, error: "no" })).toEqual({ status: "refused", message: "no" });
+    expect(afterBatch({ ok: false })).toEqual({ status: "refused", message: "Refused." });
+  });
+});
+

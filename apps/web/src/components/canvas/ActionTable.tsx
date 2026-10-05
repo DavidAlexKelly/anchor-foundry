@@ -11,12 +11,20 @@
  * > edits do not conflict." (p.512)
  *
  * One row is one submission of the action: the object it is about and a cell
- * per parameter the form would draw. **Submit sends the rows in order, after
- * checking every one first** - an object picked, required values filled, no
- * object in two rows, and each row's submission criteria asked of the server
- * (`/check`, which writes nothing). A row the server still refuses is marked
- * with its reason and the rest carry on, since each row is its own
- * submission; a row that went through is marked done and is not sent again.
+ * per parameter the form would draw. **Submit checks every row first** - an
+ * object picked, required values filled, no object in two rows, and each
+ * row's submission criteria asked of the server (`/check`, which writes
+ * nothing).
+ *
+ * **Then the rows go as one batch call when the action can take one** (§796):
+ * p.512's "batch call limits apply to the table layout, as well as the
+ * requirement that edits do not conflict". That is the Object Table's batch
+ * (`execute-batch`, p.138's whole-or-nothing), for an action that changes only
+ * the object a row is about: every row lands, or none, and its row limit is
+ * p.131's. An action the batch cannot take - one that creates, deletes or
+ * links - sends its rows in order, one submission each. There a row the
+ * server refuses is marked with its reason and the rest carry on, and a row
+ * that went through is marked done and is not sent again.
  */
 
 import { useQueryClient } from "@tanstack/react-query";
@@ -27,8 +35,8 @@ import { submittedValues } from "@/lib/array-parameter";
 import { multipleChoice } from "@/lib/parameter-constraint";
 import type { ActionType } from "@/lib/types";
 import {
-  csvEntries, csvPlan, nextCell, parseCsv, pendingRows, rowFor, rowProblems, tableColumns,
-  type TableRow,
+  afterBatch, batchable, batchProblem, csvEntries, csvPlan, nextCell, parseCsv, pendingRows, rowFor, rowProblems,
+  tableColumns, type TableRow,
 } from "./action-table";
 import { invalidateCanvasReads } from "./refresh";
 
@@ -219,6 +227,35 @@ export function ActionTable({
       setRows((all) => all.map((r) => (refusals.has(r.key)
         ? { ...r, status: "refused", message: refusals.get(r.key) } : r)));
       setSending(false);
+      return;
+    }
+    if (batchable(actionType, pending)) {
+      // One call for every row (§796): all of them, or none.
+      const tooMany = batchProblem(pending.length, actionType.inline_edit_row_limit);
+      if (tooMany) {
+        setRows((all) => all.map((r) => (pending.some((p) => p.key === r.key)
+          ? { ...r, status: "refused", message: tooMany } : r)));
+        setSending(false);
+        return;
+      }
+      pending.forEach((row) => update(row.key, (r) => ({ ...r, status: "submitting" })));
+      const result = await actionApi.executeBatch(
+        workspaceId, projectId, actionType.id,
+        pending.map((row) => ({ instance_id: row.subjectId,
+                                values: submittedValues(row.values, parameters) })),
+        "workshop",
+      ).catch((e: Error) => ({ ok: false, error: e.message }));
+      const outcome = afterBatch(result);
+      pending.forEach((row) => update(row.key, (r) => ({ ...r, ...outcome })));
+      await invalidateCanvasReads(queryClient);
+      setSending(false);
+      if (result.ok) {
+        onSubmitted(pending.map((row) => ({
+          object_type_id: String(actionType.object_type_id),
+          primary_key: String(subjects.find((x) => x.id === row.subjectId)?.primary_key ?? ""),
+          change: "modified",
+        })), pending);
+      }
       return;
     }
     const touched: Touched[] = [];
