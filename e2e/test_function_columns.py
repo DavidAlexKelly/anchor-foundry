@@ -59,7 +59,8 @@ def world(api):
     return {"api": api, "mod": mod, "sites": sites, "fn": fn}
 
 
-def module(world, name: str, columns: str, declared: list | None, export: bool = False):
+def module(world, name: str, columns: str, declared: list | None, export: bool = False,
+           sort=None, page_size: int = 25):
     mod = Module(world["api"], name, beside=world["mod"])
     definition = {
         "format": 2,
@@ -70,8 +71,8 @@ def module(world, name: str, columns: str, declared: list | None, export: bool =
                               "suffixText": ""}},
             "tbl": {"resolvedName": "CanvasObjectTable",
                     "props": {"objectSetVariable": "v_all", "columns": columns,
-                              "pageSize": 25, "activeVariable": None, "autoSelect": False,
-                              "exportCsv": export}},
+                              "pageSize": page_size, "activeVariable": None, "autoSelect": False,
+                              "exportCsv": export, **({"sort": sort} if sort else {})}},
         }),
         "variables": {
             "v_all": {"id": "v_all", "kind": "object_set", "label": "Sites",
@@ -192,3 +193,28 @@ def test_a_set_variable_in_place_of_the_runtime_input(page, world):
     expect(page.get_by_test_id("function-S2-level")).to_have_text("High", timeout=15000)
     expect(page.get_by_test_id("function-S1-level")).to_have_text("Low")
     expect(page.get_by_test_id("function-S3-level")).to_have_text("No value")
+
+
+def keys_in_order(page) -> list[str]:
+    return page.locator(".canvas-block > .data-grid").first.locator(
+        "tbody tr td:first-child").all_inner_texts()
+
+
+def test_a_table_sorted_by_a_derived_column(page, world):
+    """p.173: "When sorting object sets that use derived properties, the object
+    set size is limited to 200 rows … a function-backed column … supports
+    sorting up to 1,000 rows" (§781) - so both sort, over the whole set."""
+    mod = module(world, "Function columns sorted", "code,doubled,spare", [
+        column(world, "doubled", "doubled"),
+        {"api_name": "spare", "kind": "column_math", "expression": "capacity - 5"}],
+        sort="-doubled")
+    open_module(page, mod)
+    expect(page.get_by_test_id("function-S2-doubled")).to_have_text("60", timeout=15000)
+    eventually(lambda: keys_in_order(page), lambda k: k[:3] == ["S2", "S3", "S1"],
+               what="the rows by the function's value, highest first")
+    mod = module(world, "Function columns sorted math", "code,spare", [
+        {"api_name": "spare", "kind": "column_math", "expression": "capacity - 5"}],
+        sort=["spare"], page_size=2)
+    open_module(page, mod)
+    eventually(lambda: keys_in_order(page), lambda k: k == ["S1", "S3"],
+               what="the first page of the rows by the column's value, lowest first")

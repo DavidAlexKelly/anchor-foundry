@@ -164,6 +164,7 @@ import { FunctionLayerEditor } from "./function-column-editor";
 import { inputValues } from "./function-inputs";
 import { functionLayerOf, gridFrom, pointsFrom } from "./function-layers";
 import { derivedForExport } from "./derived-export";
+import { derivedSortLimit, readUpTo, sortRowsBy, splitSorts } from "./derived-sort";
 import { FunctionPivotSettings, FunctionPivotView, pivotFieldsOf } from "./function-pivot-table";
 import { derivedCell } from "@/lib/derived-values";
 import { unknownColumns, visibleColumns } from "./column-visibility";
@@ -6576,11 +6577,21 @@ export function CanvasObjectTable({
   // p.223's Default sort(s), read from whichever shape the document holds and
   // sent as whichever shape the request wants - one ordering still goes as the
   // string the API has always taken.
-  const sortRequest = useMemo(() => tableSortsToRequest(tableSortsOf(sort)), [sort]);
   // The set's type, from its definition, read before its page (§693).
   const effectiveTypeId = usingSet
     ? (setDefinition as { object_type_id?: string } | undefined)?.object_type_id ?? null
     : objectTypeId;
+  // p.173's sort by a derived column (§781): the first sort naming one is
+  // ordered here, over the whole set, and the store orders by the rest.
+  const sortableDerived = useMemo(
+    () => columnsFor(derivedColumns, String(effectiveTypeId ?? "")),
+    [derivedColumns, effectiveTypeId],
+  );
+  const sortSplit = useMemo(
+    () => splitSorts(tableSortsOf(sort), sortableDerived.map((c) => c.api_name)),
+    [sort, sortableDerived],
+  );
+  const sortRequest = useMemo(() => tableSortsToRequest(sortSplit.server), [sortSplit]);
   const type = useQuery({
     queryKey: ["object-type", effectiveTypeId],
     queryFn: () => objApi.getType(workspaceId, effectiveTypeId!),
@@ -6599,6 +6610,35 @@ export function CanvasObjectTable({
     omit: heavy,
   });
   const { offset, setOffset } = setPage;
+  const sortColumn = sortSplit.derived
+    ? sortableDerived.find((c) => c.api_name === sortSplit.derived!.property) : undefined;
+  const derivedSorted = useQuery({
+    queryKey: ["canvas-derived-sort", JSON.stringify(setDefinition ?? null), sortRequest,
+               sortSplit.derived?.key ?? null, sortColumn ?? null, variableValues],
+    queryFn: async () => {
+      const column = sortColumn!;
+      const read = await readUpTo(async (at, limit) => {
+        const got = await objApi.evaluateObjectSet(workspaceId, setDefinition, {
+          limit, offset: at, sort: sortRequest, omit: heavy });
+        return { rows: got.instances, total: got.total };
+      }, derivedSortLimit(column));
+      if ("tooMany" in read) return read;
+      const wanted = derivedInputs(
+        [column.api_name], type.data?.properties ?? [], sortableDerived);
+      const values = await derivedForExport(read.rows, [column], {
+        readDerived: wanted.properties.length > 0 || Object.keys(wanted.derivations).length > 0
+          ? (keys) => objApi.derivedValues(workspaceId, String(effectiveTypeId), { keys, ...wanted })
+          : undefined,
+        callFunction: (c, keys) => objApi.executeFunction(
+          workspaceId, c.function_id, callValues(c, keys, variableValues), c.version),
+      }, wanted.properties);
+      return { rows: sortRowsBy(read.rows, values, column.api_name,
+                                sortSplit.derived!.descending) };
+    },
+    enabled: !!sortColumn && usingSet && !combined && typesKnown && !!setDefinition,
+  });
+  const derivedOrder = derivedSorted.data && "rows" in derivedSorted.data
+    ? derivedSorted.data.rows : null;
   // p.222's hubble:icon (§671): the property holding each object's image.
   const iconProperty = iconPropertyOf(type.data?.properties ?? []);
 
@@ -6771,10 +6811,15 @@ export function CanvasObjectTable({
 
   // One shape for both paths, so everything below reads the same. The set path
   // returns `instances`; the explore path returns `items`.
-  const rows = usingSet ? setPage.rows : page.data?.items;
-  const total = usingSet ? setPage.total : page.data?.total;
+  // Waiting on the whole set's order rather than drawing the store's first,
+  // which would be a page in an order that is about to change under the reader.
+  const awaitingOrder = !!sortColumn && derivedSorted.isPending && derivedSorted.fetchStatus !== "idle";
+  const rows = derivedOrder
+    ? derivedOrder.slice(offset, offset + pageSize)
+    : awaitingOrder ? undefined : usingSet ? setPage.rows : page.data?.items;
+  const total = derivedOrder ? derivedOrder.length : usingSet ? setPage.total : page.data?.total;
   const active = usingSet
-    ? { isError: setPage.isError, isPending: setPage.isPending }
+    ? { isError: setPage.isError, isPending: setPage.isPending || awaitingOrder }
     : { isError: page.isError, isPending: page.isPending };
   const setFilters = setPage.filters;
 
@@ -7629,6 +7674,15 @@ export function CanvasObjectTable({
               </button>)}
             </div>
           )}
+          {derivedSorted.data && "tooMany" in derivedSorted.data && (
+            // p.173's limit, said where the order would have been.
+            <p className="canvas-widget-empty" data-testid="table-derived-sort-limit">
+              Sorting by {sortColumn?.display_name || sortColumn?.api_name} reads at most{" "}
+              {derivedSortLimit(sortColumn!).toLocaleString()} objects (Workshop p.173), and
+              this set holds {derivedSorted.data.tooMany.toLocaleString()} - so the rows are
+              not in that order.
+            </p>
+          )}
           {usingSet && total > rows.length && (
             <div className="canvas-table-pager">
               <button
@@ -7864,14 +7918,21 @@ function sortOfLoop(
  * on **hidden property types not displayed**" — and the picker satisfies it,
  * because it lists what the *type* declares rather than what the table shows.
  */
-function TableSortsField({ sort, properties, setProp }: {
+function TableSortsField({ sort, properties, derived = [], setProp }: {
   sort: unknown;
   /** Every property the type declares. Empty while the ontology resolves, and
    * empty is why the text box is still here rather than deleted. */
   properties: readonly SortableProperty[];
+  /** The module's derived columns for this type, sortable over p.173's
+   * limits (§781). */
+  derived?: readonly { api_name: string; display_name?: string }[];
   setProp: (cb: (props: { sort: string | string[] }) => void) => void;
 }) {
-  const sortable = orderableProperties(properties);
+  const sortable = [
+    ...orderableProperties(properties),
+    ...derived.map((c) => ({ api_name: c.api_name,
+                             display_name: `${c.display_name || c.api_name} (derived)` })),
+  ];
   const entries = tableSortsOf(sort);
   const write = (next: ReturnType<typeof tableSortsOf>) => {
     const keys = next.map((e) => e.key);
@@ -8132,7 +8193,7 @@ function InlineEditField({ actions, columns, inlineEdit, mapping, feeds, variabl
 }
 
 function ObjectTableSettings() {
-  const { workspaceId } = useCanvasEnv();
+  const { workspaceId, derivedColumns } = useCanvasEnv();
   const { declared, resolved } = useCanvasVariables();
   const {
     objectTypeId, filterProperty, filterParameter, searchParameter,
@@ -8721,6 +8782,7 @@ function ObjectTableSettings() {
       <TableSortsField
         sort={sort}
         properties={detail.data?.properties ?? []}
+        derived={columnsFor(derivedColumns, String(detail.data?.id ?? ""))}
         setProp={setProp}
       />
       {/* p.224-225's Display & formatting, in p.224's order. */}
