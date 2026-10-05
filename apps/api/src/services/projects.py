@@ -56,6 +56,48 @@ async def list_for_user(
     )
 
 
+#: Projects on one page of the workspace grid (§823).
+PROJECT_PAGE = 60
+
+
+def _escape_like(term: str) -> str:
+    """A search for "a_b" means "a_b", not "a<anything>b"."""
+    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+async def search_for_user(
+    conn: AsyncConnection, user_id: UUID, workspace_id: UUID,
+    *, search: str = "", offset: int = 0,
+) -> tuple[list[dict[str, Any]], int]:
+    """A page of the projects the caller can see, by name or slug, and how
+    many match in all (§823). The grid rendered every project in the
+    workspace: 9,974 cards on the development one."""
+    term = search.strip()
+    params: dict[str, Any] = {
+        "uid": str(user_id), "wid": str(workspace_id),
+        "q": f"%{_escape_like(term)}%" if term else None,
+        "page": PROJECT_PAGE, "offset": max(0, offset),
+    }
+    where = """
+          FROM v_user_projects v
+          JOIN projects p ON p.id = v.project_id
+         WHERE v.user_id = :uid AND p.workspace_id = :wid
+           AND (CAST(:q AS text) IS NULL OR p.name ILIKE :q OR p.slug ILIKE :q)
+    """
+    rows = await fetch_all(
+        conn,
+        f"""
+        SELECT p.id, p.name, p.slug, p.description, p.permission_mode,
+               v.role AS effective_role, p.created_at, p.updated_at {where}
+         ORDER BY p.name, p.id
+         LIMIT :page OFFSET :offset
+        """,
+        params,
+    )
+    total = await fetch_one(conn, f"SELECT count(*) AS n {where}", params)
+    return rows, int(total["n"]) if total else 0
+
+
 async def get(conn: AsyncConnection, project_id: UUID) -> dict[str, Any]:
     row = await fetch_one(
         conn,

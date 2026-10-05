@@ -316,6 +316,46 @@ def test_a_page_looks_up_its_one_project_by_slug_or_id(client: TestClient, fx: F
     assert client.get(base, headers=hdr(fx.editor_sub), params={"slug": made["slug"][:-1]}).json() == []
 
 
+def test_the_project_grid_is_searched_and_paged(
+    client: TestClient, fx: Fixture, monkeypatch,
+) -> None:
+    """The workspace grid drew every project (§823). A page, a search by name
+    or slug, and the total it was taken from."""
+    from src.services import projects as proj_service
+
+    base = f"/api/workspaces/{fx.workspace}/projects"
+    for name in (f"Grid {fx.tag} a", f"Grid {fx.tag} b", f"Grid {fx.tag} c"):
+        assert client.post(base, headers=hdr(fx.editor_sub), json={"name": name}).status_code == 201
+
+    def page(q: str = "", offset: int = 0) -> dict:
+        r = client.get(f"{base}/search", headers=hdr(fx.editor_sub),
+                       params={"q": q, "offset": offset})
+        assert r.status_code == 200, r.text
+        return r.json()
+
+    everything = client.get(base, headers=hdr(fx.editor_sub)).json()
+    assert page()["total"] == len(everything)
+    found = page(f"GRID {fx.tag} A")
+    assert [p["name"] for p in found["items"]] == [f"Grid {fx.tag} a"] and found["total"] == 1
+    # By slug too, which is what the URL shows.
+    slug = found["items"][0]["slug"]
+    assert [p["slug"] for p in page(slug)["items"]] == [slug]
+    assert page(f"grid {fx.tag} nothing at all")["total"] == 0
+    # A wildcard is a character: "_" finds only names or slugs with one.
+    literal = {p["id"] for p in everything if "_" in p["name"] or "_" in p["slug"]}
+    assert {p["id"] for p in page("_")["items"]} == literal
+
+    monkeypatch.setattr(proj_service, "PROJECT_PAGE", 2)
+    first, second = page(f"Grid {fx.tag}"), page(f"Grid {fx.tag}", offset=2)
+    assert first["total"] == second["total"] == 3
+    assert [p["name"] for p in first["items"] + second["items"]] == [
+        f"Grid {fx.tag} a", f"Grid {fx.tag} b", f"Grid {fx.tag} c"]
+    assert page(f"Grid {fx.tag}", offset=-5)["items"] == first["items"]
+    # A viewer sees the grid too; the search is by their view.
+    r = client.get(f"{base}/search", headers=hdr(fx.viewer_sub), params={"q": f"Grid {fx.tag} a"})
+    assert r.status_code == 200 and r.json()["total"] == 1
+
+
 def test_a_project_lookup_is_the_callers_own_view(client: TestClient, fx: Fixture) -> None:
     """A project the caller has been shut out of is not found by name either,
     and the role on it is theirs."""

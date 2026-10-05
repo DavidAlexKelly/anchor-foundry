@@ -84,6 +84,26 @@ async def list_projects(
     return [ProjectSummary(**row) for row in rows]
 
 
+class ProjectPage(BaseModel):
+    items: list[ProjectSummary]
+    #: How many match in all, so the grid can say what it has not shown yet.
+    total: int
+
+
+@router.get("/search", response_model=ProjectPage)
+async def search_projects(
+    q: str = "",
+    offset: int = 0,
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> ProjectPage:
+    """The workspace grid, a page at a time and searched by name or slug
+    (§823). Declared before `/{project_id}`, whose UUID it is not."""
+    async with user_connection(access.auth.user_id) as conn:
+        rows, total = await proj_service.search_for_user(
+            conn, access.auth.user_id, access.workspace_id, search=q, offset=offset)
+    return ProjectPage(items=[ProjectSummary(**row) for row in rows], total=total)
+
+
 @router.post("", response_model=ProjectSummary, status_code=status.HTTP_201_CREATED)
 async def create_project(
     body: ProjectCreate,

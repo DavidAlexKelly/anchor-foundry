@@ -1,8 +1,9 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { useParams } from "next/navigation";
+import { useState } from "react";
 import { api } from "@/lib/api";
 import { useWorkspaceBySlug } from "@/components/use-workspace";
 import { CreateProjectButton } from "@/components/create-project";
@@ -11,11 +12,23 @@ export default function WorkspacePage() {
   const params = useParams<{ workspace: string }>();
   const { workspace, isPending: wsPending, notFound } = useWorkspaceBySlug(params.workspace);
 
-  const projects = useQuery({
-    queryKey: ["projects", workspace?.id],
-    queryFn: () => api.projects(workspace!.id),
+  // A page at a time, searched (§823): the grid drew every project in the
+  // workspace, and a workspace can hold thousands. Keyed under
+  // ["projects", id] so creating a project refreshes it.
+  const [search, setSearch] = useState("");
+  const projects = useInfiniteQuery({
+    queryKey: ["projects", workspace?.id, { page: search }],
+    queryFn: ({ pageParam }) => api.projectPage(workspace!.id, search, pageParam),
+    initialPageParam: 0,
+    getNextPageParam: (last, pages) => {
+      const shown = pages.reduce((n, p) => n + p.items.length, 0);
+      return shown < last.total && last.items.length > 0 ? shown : undefined;
+    },
     enabled: !!workspace,
+    placeholderData: (previous) => previous,
   });
+  const shown = projects.data?.pages.flatMap((p) => p.items) ?? [];
+  const total = projects.data?.pages[0]?.total ?? 0;
 
   if (wsPending) return <main className="page"><div className="state">Loading…</div></main>;
   if (notFound) {
@@ -85,11 +98,29 @@ export default function WorkspacePage() {
         </div>
       </div>
 
+      <div className="row-actions" style={{ marginBottom: 12 }}>
+        <input
+          type="search"
+          aria-label="Search projects"
+          placeholder="Search projects"
+          data-testid="project-search"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+        {projects.data && (
+          <span className="field-hint" data-testid="project-count">
+            {shown.length < total ? `${shown.length} of ${total} projects` : `${total} ${total === 1 ? "project" : "projects"}`}
+          </span>
+        )}
+      </div>
       {projects.isPending && <div className="state">Loading projects…</div>}
       {projects.isError && (
         <div className="state error">Couldn&apos;t load projects. Refresh to try again.</div>
       )}
-      {projects.data && projects.data.length === 0 && (
+      {projects.data && total === 0 && search.trim() !== "" && (
+        <div className="state">No projects match.</div>
+      )}
+      {projects.data && total === 0 && search.trim() === "" && (
         <div className="empty">
           <h2>No projects yet</h2>
           <p>
@@ -98,9 +129,9 @@ export default function WorkspacePage() {
           </p>
         </div>
       )}
-      {projects.data && projects.data.length > 0 && (
-        <div className="grid">
-          {projects.data.map((p) => (
+      {shown.length > 0 && (
+        <div className="grid" data-testid="project-grid">
+          {shown.map((p) => (
             <Link key={p.id} className="card" href={`/${params.workspace}/${p.slug}`}>
               <h3>{p.name}</h3>
               <span className="slug">{p.slug}</span>
@@ -113,6 +144,19 @@ export default function WorkspacePage() {
               </div>
             </Link>
           ))}
+        </div>
+      )}
+      {projects.hasNextPage && (
+        <div className="row-actions" style={{ marginTop: 16 }}>
+          <button
+            type="button"
+            className="btn quiet"
+            data-testid="project-more"
+            disabled={projects.isFetchingNextPage}
+            onClick={() => projects.fetchNextPage()}
+          >
+            {projects.isFetchingNextPage ? "Loading…" : "Show more"}
+          </button>
         </div>
       )}
     </main>
