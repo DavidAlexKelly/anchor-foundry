@@ -79,7 +79,7 @@ async def for_nodes(conn: Any, *, workspace_id: UUID, nodes: list[str]) -> list[
                    ca.created_at, ca.updated_at, ca.definition
               FROM canvas_apps ca
               JOIN projects p ON p.id = ca.project_id
-             WHERE rls_project_workspace_id(ca.project_id) = :wid
+             WHERE ca.workspace_id = :wid
                AND EXISTS (SELECT 1 FROM unnest(CAST(:needles AS text[])) AS n(needle)
                             WHERE position(n.needle in ca.definition::text) > 0)
             """,

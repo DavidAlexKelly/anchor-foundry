@@ -206,7 +206,7 @@ async def _checked_module(
         """
         SELECT id, name, definition, publish_scope
           FROM canvas_apps
-         WHERE id = :aid AND rls_project_workspace_id(project_id) = :wid
+         WHERE id = :aid AND workspace_id = :wid
         """,
         {"aid": str(canvas_app_id), "wid": str(workspace_id)},
     )

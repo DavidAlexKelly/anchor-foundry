@@ -2803,7 +2803,7 @@ async def parameter_usages(
         """
         SELECT ca.name, ca.definition
           FROM canvas_apps ca
-         WHERE rls_project_workspace_id(ca.project_id) = :wid
+         WHERE ca.workspace_id = :wid
            AND position(:needle in ca.definition::text) > 0
         """,
         {"wid": str(workspace_id), "needle": target},
