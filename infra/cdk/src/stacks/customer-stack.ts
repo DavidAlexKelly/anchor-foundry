@@ -19,6 +19,9 @@ export interface CustomerStackProps extends StackProps {
   /** See DataStoresConstruct - defaults to true, only ever overridden for
    * throwaway dry-run stacks (app.ts's `deletionProtection` context flag). */
   readonly deletionProtection?: boolean;
+  /** Where objects live: "postgres" (the default) or "opensearch", after the
+   * cutover in docs/deploying.md (§814; app.ts's `objectStore` context). */
+  readonly objectStore?: "postgres" | "opensearch";
 }
 
 /**
@@ -95,6 +98,7 @@ export class CustomerStack extends Stack {
       vpc,
       orgSlug: props.orgSlug,
       deletionProtection: props.deletionProtection,
+      objectIndex: props.objectStore === "opensearch",
     });
     Tags.of(data.dataBucket).add("platform:component", "storage");
     Tags.of(data.database).add("platform:component", "database");
@@ -132,6 +136,7 @@ export class CustomerStack extends Stack {
       workerImage: `${props.vendorEcrRegistry}/platform-worker`,
       webImage: `${props.vendorEcrRegistry}/platform-web`,
       imageTag: props.imageTag,
+      objectIndexSecret: props.objectStore === "opensearch" ? data.searchMasterSecret : undefined,
     });
     Tags.of(services.apiService).add("platform:component", "app-server");
     Tags.of(services.workerService).add("platform:component", "pipeline-runs");

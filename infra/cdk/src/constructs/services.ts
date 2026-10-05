@@ -29,6 +29,11 @@ export interface ServicesProps {
   /** The security group in front of the VPC's interface endpoints. The
    * transform runner is allowed to reach these and nothing else. */
   readonly vpcEndpointSecurityGroup: ec2.ISecurityGroup;
+  /** Set when objects live in the OpenSearch domain (§814): the API and the
+   * worker are given its master user and read and write objects there.
+   * Unset, both use Postgres - the two read the same pair of variables, so
+   * they cannot disagree about where objects are. */
+  readonly objectIndexSecret?: secretsmanager.ISecret;
 }
 
 /**
@@ -293,6 +298,14 @@ export class ServicesConstruct extends Construct {
       DATABASE_PASSWORD: ecs.Secret.fromSecretsManager(props.appDbSecret, "password"),
     };
 
+    // Only the two services that touch objects, and only when asked (§814).
+    const objectIndexEnv: Record<string, string> = {};
+    if (props.objectIndexSecret) {
+      props.objectIndexSecret.grantRead(apiTaskRole);
+      props.objectIndexSecret.grantRead(workerTaskRole);
+      objectIndexEnv.OPENSEARCH_SECRET_ARN = props.objectIndexSecret.secretArn;
+    }
+
     const makeService = (
       name: string,
       image: string,
@@ -376,7 +389,7 @@ export class ServicesConstruct extends Construct {
       // ALB is the only thing that can reach this service. uvicorn's own
       // forwarded-allow-ips is left alone, because trusting "*" there takes
       // the *first* entry, which the sender writes.
-      extraEnv: { LISTENER_PROXY_HOPS: "1" },
+      extraEnv: { LISTENER_PROXY_HOPS: "1", ...objectIndexEnv },
     });
     // Everything anchor_worker/transform_dispatch.py needs to find the runner.
     // Passed as configuration rather than discovered at run time: a worker that
@@ -395,7 +408,7 @@ export class ServicesConstruct extends Construct {
       cpu: 1024,
       memory: 2048,
       mountScratch: true,
-      extraEnv: transformRunnerEnv,
+      extraEnv: { ...transformRunnerEnv, ...objectIndexEnv },
     });
 
     // ---- Permission to dispatch, and nothing more ---------------------------
