@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  cellKey, fieldsOf, pivotFrom, pivotProblem, rowKey, shown, type PivotFields,
+  cellKey, fieldsOf, pivotFrom, pivotProblem, rowKey, shown, visibleRows, type PivotFields,
 } from "./function-pivot";
 import type { FunctionResult } from "@/lib/types";
 
@@ -68,6 +68,67 @@ describe("the grid", () => {
     const grid = pivotFrom(table(["y", "n"], [[2021, 1]]), { rows: ["y"], column: null,
                                                              values: ["n"] });
     expect(grid.rowKeys).toEqual([["2021"]]);
+  });
+});
+
+describe("p.340's expandable rows", () => {
+  // p.341's three levels: region alone, then product type, then product name,
+  // in the order a ROLLUP may give them - deepest first.
+  const LEVELS = table(["region", "type", "name", "year", "total"], [
+    ["NA", "Electronics", "A", "2021", 5],
+    ["NA", "Electronics", null, "2021", 150],
+    ["NA", "Clothing", null, "2021", 90],
+    ["NA", null, null, "2021", 300],
+    ["EU", null, null, "2021", 40],
+    ["NA", null, null, null, 300],
+    ["NA", "Electronics", null, null, 150],
+    // An expandable field without the one it opens from has no line.
+    ["NA", null, "A", "2021", 5],
+    // Nor does an expansion of no row.
+    [null, "Clothing", null, "2021", 9],
+    [null, null, null, "2021", 340],
+  ]);
+  const DEEP: PivotFields = { rows: ["region"], column: "year", values: ["total"],
+                              expandable: ["type", "name"] };
+
+  it("puts each line under the line it opens from", () => {
+    const grid = pivotFrom(LEVELS, DEEP);
+    expect(grid.rowKeys).toEqual([
+      ["NA"], ["NA", "Electronics"], ["NA", "Electronics", "A"], ["NA", "Clothing"], ["EU"]]);
+    expect([...grid.parents]).toEqual([rowKey(["NA"]), rowKey(["NA", "Electronics"])]);
+    expect(grid.cells.get(cellKey(["NA", "Electronics"], "2021"))).toEqual({ total: 150 });
+    expect(grid.cells.get(cellKey(["NA"], "2021"))).toEqual({ total: 300 });
+    expect(grid.rowTotals.get(rowKey(["NA", "Electronics"]))).toEqual({ total: 150 });
+    expect(grid.columnTotals.get("2021")).toEqual({ total: 340 });
+    expect(grid.unplaced).toBe(2);
+  });
+
+  it("shows a deeper line only when every line it opens from is open", () => {
+    const grid = pivotFrom(LEVELS, DEEP);
+    expect(visibleRows(grid, 1, new Set())).toEqual([["NA"], ["EU"]]);
+    expect(visibleRows(grid, 1, new Set([rowKey(["NA"])])))
+      .toEqual([["NA"], ["NA", "Electronics"], ["NA", "Clothing"], ["EU"]]);
+    expect(visibleRows(grid, 1, new Set([rowKey(["NA", "Electronics"])])))
+      .toEqual([["NA"], ["EU"]]);
+    expect(visibleRows(grid, 1, new Set([rowKey(["NA"]), rowKey(["NA", "Electronics"])])))
+      .toHaveLength(5);
+  });
+
+  it("draws a line the function left out, so its children open from it", () => {
+    const grid = pivotFrom(table(["region", "type", "n"], [["NA", "Food", 3], ["EU", null, 1]]),
+                           { rows: ["region"], column: null, values: ["n"],
+                             expandable: ["type"] });
+    expect(grid.rowKeys).toEqual([["NA"], ["NA", "Food"], ["EU"]]);
+    expect(grid.cells.get(cellKey(["NA"], ""))).toBeUndefined();
+    expect(grid.parents.has(rowKey(["NA"]))).toBe(true);
+  });
+
+  it("needs a row field to open from, and fields the function gives", () => {
+    expect(pivotProblem(LEVELS, DEEP)).toBeNull();
+    expect(pivotProblem(LEVELS, { ...DEEP, rows: [] }))
+      .toBe("Expandable rows open from a row field; choose one (Workshop p.340).");
+    expect(pivotProblem(LEVELS, { ...DEEP, expandable: ["type", "colour"] }))
+      .toBe("The function gives no field colour.");
   });
 });
 

@@ -6,6 +6,7 @@
  * by `pivotFrom`, and its settings. The grid's rules are `function-pivot.ts`'.
  */
 
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { objects as objApi, ApiError } from "@/lib/api";
 import { useCanvasEnv, useCanvasVariables } from "./context";
@@ -14,7 +15,7 @@ import { versionOf } from "./function-columns";
 import { inputValues, unsetRequired } from "./function-inputs";
 import type { FunctionLayer } from "./function-layers";
 import {
-  cellKey, fieldsOf, pivotFrom, pivotProblem, rowKey, shown, type PivotFields,
+  cellKey, fieldsOf, pivotFrom, pivotProblem, rowKey, shown, visibleRows, type PivotFields,
 } from "./function-pivot";
 
 export function FunctionPivotView({ fn, fields, title }: {
@@ -39,6 +40,18 @@ export function FunctionPivotView({ fn, fields, title }: {
   const hasColumnTotals = !!grid && fields.rows.length > 0
     && (grid.columnTotals.size > 0 || !!grid.grand);
   const columns = grid?.columnKeys ?? [];
+  // p.340's expandable rows: one more column, holding each line's chevron
+  // and, for a line opened from another, its own value.
+  const expandable = fields.expandable ?? [];
+  const deep = expandable.length > 0 && fields.rows.length > 0;
+  const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
+  const toggle = (key: string) => setOpen((was) => {
+    const next = new Set(was);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    return next;
+  });
+  const lines = grid ? (deep ? visibleRows(grid, fields.rows.length, open) : grid.rowKeys) : [];
   const valueCells = (v: Record<string, unknown> | undefined | null, key: string) =>
     fields.values.map((f) => (
       <td key={`${key}-${f}`} className="canvas-pivot-cell">{shown(v?.[f])}</td>
@@ -69,6 +82,11 @@ export function FunctionPivotView({ fn, fields, title }: {
                     {f}
                   </th>
                 ))}
+                {deep && (
+                  <th scope="col" className="canvas-pivot-corner" rowSpan={multi ? 2 : 1}>
+                    {expandable.join(" › ")}
+                  </th>
+                )}
                 {columns.map((c) => (
                   <th key={c} scope="col" colSpan={fields.values.length}>
                     {fields.column ? c : fields.values.length === 1 ? fields.values[0] : ""}
@@ -88,9 +106,27 @@ export function FunctionPivotView({ fn, fields, title }: {
               )}
             </thead>
             <tbody>
-              {grid.rowKeys.map((key) => (
-                <tr key={rowKey(key)}>
-                  {key.map((g, i) => <th key={i} scope="row">{g}</th>)}
+              {lines.map((key) => (
+                <tr key={rowKey(key)} data-testid="pivot-function-line">
+                  {key.slice(0, deep ? fields.rows.length : key.length).map((g, i) => (
+                    <th key={i} scope="row">{key.length === fields.rows.length || !deep ? g : ""}</th>
+                  ))}
+                  {deep && (
+                    <th scope="row" style={{ paddingLeft: 6 + 14 * (key.length - fields.rows.length) }}>
+                      {grid.parents.has(rowKey(key)) && (
+                        <button
+                          type="button"
+                          className="link-button"
+                          aria-expanded={open.has(rowKey(key))}
+                          aria-label={`${open.has(rowKey(key)) ? "Collapse" : "Expand"} ${key.join(" / ")}`}
+                          onClick={() => toggle(rowKey(key))}
+                        >
+                          {open.has(rowKey(key)) ? "▾" : "▸"}
+                        </button>
+                      )}{" "}
+                      {key.length > fields.rows.length ? key[key.length - 1] : ""}
+                    </th>
+                  )}
                   {columns.flatMap((c) =>
                     valueCells(grid.cells.get(cellKey(key, c)), `${rowKey(key)}-${c}`))}
                   {hasRowTotals && valueCells(grid.rowTotals.get(rowKey(key)), `${rowKey(key)}-t`)}
@@ -98,7 +134,9 @@ export function FunctionPivotView({ fn, fields, title }: {
               ))}
               {hasColumnTotals && (
                 <tr className="canvas-pivot-total">
-                  <th scope="row" colSpan={Math.max(fields.rows.length, 1)}>Total</th>
+                  <th scope="row" colSpan={Math.max(fields.rows.length, 1) + (deep ? 1 : 0)}>
+                    Total
+                  </th>
                   {columns.flatMap((c) => valueCells(grid.columnTotals.get(c), `t-${c}`))}
                   {hasRowTotals && valueCells(grid.grand, "grand")}
                 </tr>
@@ -111,7 +149,8 @@ export function FunctionPivotView({ fn, fields, title }: {
           {grid.unplaced > 0 && (
             <p className="canvas-widget-empty">
               {grid.unplaced.toLocaleString()} {grid.unplaced === 1 ? "row names" : "rows name"}{" "}
-              only some of the row fields, which this grid has no line for.
+              only some of the row fields, or an expandable field without the one it
+              opens from, which this grid has no line for.
             </p>
           )}
           {call.data?.truncated && (
@@ -128,13 +167,14 @@ export function FunctionPivotView({ fn, fields, title }: {
 
 /** The settings for a function-backed pivot (p.336): the function, its
  * version, its inputs, and the group-by and value fields. */
-export function FunctionPivotSettings({ fn, rows, column, values, onChange }: {
+export function FunctionPivotSettings({ fn, rows, expand, column, values, onChange }: {
   fn: FunctionLayer;
   rows: string;
+  expand: string;
   column: string;
   values: string;
-  onChange: (next: { fn?: FunctionLayer; fnRows?: string; fnColumn?: string;
-                     fnValues?: string }) => void;
+  onChange: (next: { fn?: FunctionLayer; fnRows?: string; fnExpand?: string;
+                     fnColumn?: string; fnValues?: string }) => void;
 }) {
   const { workspaceId } = useCanvasEnv();
   const list = useQuery({
@@ -198,6 +238,19 @@ export function FunctionPivotSettings({ fn, rows, column, values, onChange }: {
         />
       </label>
       <label className="field">
+        <span className="field-label">Expandable rows</span>
+        <input
+          aria-label="Pivot expandable rows"
+          placeholder="product_type, product_name (optional)"
+          value={expand}
+          onChange={(e) => onChange({ fnExpand: e.target.value })}
+        />
+        <span className="field-hint">
+          Fields a row opens into, outermost first (Workshop p.340). A row naming the
+          first of them sits under the row without it.
+        </span>
+      </label>
+      <label className="field">
         <span className="field-label">Column field</span>
         <input
           aria-label="Pivot column field"
@@ -227,6 +280,7 @@ export function FunctionPivotSettings({ fn, rows, column, values, onChange }: {
 
 /** The fields a saved pivot names. */
 export function pivotFieldsOf(rows: string | null, column: string | null,
-                              values: string | null): PivotFields {
-  return { rows: fieldsOf(rows), column: (column ?? "").trim() || null, values: fieldsOf(values) };
+                              values: string | null, expand: string | null = null): PivotFields {
+  return { rows: fieldsOf(rows), column: (column ?? "").trim() || null, values: fieldsOf(values),
+           expandable: fieldsOf(expand) };
 }
