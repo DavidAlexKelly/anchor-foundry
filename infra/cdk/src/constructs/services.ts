@@ -61,6 +61,9 @@ export class ServicesConstruct extends Construct {
   public readonly transformScratch: efs.FileSystem;
   public readonly webService: ecs.FargateService;
   public readonly alb: elbv2.ApplicationLoadBalancer;
+  /** Every container's log stream, for the alarms that read it (§815). */
+  public readonly logGroup: logs.LogGroup;
+  public readonly apiTargetGroup: elbv2.ApplicationTargetGroup;
 
   constructor(scope: Construct, id: string, props: ServicesProps) {
     super(scope, id);
@@ -68,6 +71,7 @@ export class ServicesConstruct extends Construct {
 
     this.cluster = new ecs.Cluster(this, "Cluster", { vpc, containerInsights: true });
     const logGroup = new logs.LogGroup(this, "Logs", { retention: logs.RetentionDays.ONE_MONTH });
+    this.logGroup = logGroup;
 
     // ---- Task roles (least privilege per service, §10) ----------------------
     const apiTaskRole = new iam.Role(this, "ApiTaskRole", {
@@ -474,7 +478,7 @@ export class ServicesConstruct extends Construct {
       targets: [this.webService],
       healthCheck: { path: "/", healthyHttpCodes: "200-399" },
     });
-    listener.addTargets("Api", {
+    this.apiTargetGroup = listener.addTargets("Api", {
       priority: 10,
       conditions: [elbv2.ListenerCondition.pathPatterns(["/api/*", "/graphql"])],
       port: 8000,

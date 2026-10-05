@@ -9,6 +9,7 @@ import { Construct } from "constructs";
 import { AuthConstruct } from "../constructs/auth";
 import { DataStoresConstruct } from "../constructs/data-stores";
 import { MigrationTriggerConstruct } from "../constructs/migration";
+import { MonitoringConstruct } from "../constructs/monitoring";
 import { ServicesConstruct } from "../constructs/services";
 
 export interface CustomerStackProps extends StackProps {
@@ -22,6 +23,8 @@ export interface CustomerStackProps extends StackProps {
   /** Where objects live: "postgres" (the default) or "opensearch", after the
    * cutover in docs/deploying.md (§814; app.ts's `objectStore` context). */
   readonly objectStore?: "postgres" | "opensearch";
+  /** Subscribed to the stack's alarms (§815; app.ts's `alarmEmail` context). */
+  readonly alarmEmail?: string;
 }
 
 /**
@@ -163,6 +166,17 @@ export class CustomerStack extends Stack {
     data.search.connections.allowFrom(services.apiService, ec2.Port.tcp(443), "api to opensearch");
     data.search.connections.allowFrom(services.workerService, ec2.Port.tcp(443), "worker to opensearch");
 
+    // ---- Alarms on what the services write and report (§815) --------------
+    const monitoring = new MonitoringConstruct(this, "Monitoring", {
+      logGroup: services.logGroup,
+      cluster: services.cluster,
+      apiService: services.apiService,
+      workerService: services.workerService,
+      apiTargetGroup: services.apiTargetGroup,
+      database: data.database,
+      alarmEmail: props.alarmEmail,
+    });
+
     // ---- WAF on the ALB with AWS managed rule sets (§10) --------------------
     const waf = new wafv2.CfnWebACL(this, "Waf", {
       scope: "REGIONAL",
@@ -238,6 +252,7 @@ export class CustomerStack extends Stack {
     new CfnOutput(this, "DatabaseInstanceIdentifier", { value: data.database.instanceIdentifier });
     new CfnOutput(this, "SearchDomainName", { value: data.search.domainName });
     new CfnOutput(this, "ClusterName", { value: services.cluster.clusterName });
+    new CfnOutput(this, "AlarmTopicArn", { value: monitoring.topic.topicArn });
     new CfnOutput(this, "ApiServiceName", { value: services.apiService.serviceName });
     new CfnOutput(this, "WorkerServiceName", { value: services.workerService.serviceName });
     new CfnOutput(this, "WebServiceName", { value: services.webService.serviceName });
