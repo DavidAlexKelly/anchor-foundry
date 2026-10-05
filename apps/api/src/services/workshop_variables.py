@@ -146,7 +146,16 @@ TRANSFORMS = (
     # not in the values: `evaluate` names what it needs and the caller reads
     # it from the store (`variable_aggregates.py`).
     "object_set_aggregation",
+    # p.73's "Function: For function-backed, dynamically computed variables"
+    # (§772; decision 0018). Asked of the caller as an aggregation is: see
+    # `variable_aggregates`.
+    "function",
 )
+
+#: The kinds a function-backed variable can be (§772): `functions` p.80's
+#: "mapping between Workshop variable types and their equivalents" - a value
+#: for the scalars, a list for an array, a set for a set.
+FUNCTION_KINDS = ("string", "number", "boolean", "date", "timestamp", "array", "object_set")
 
 # **`STORE_TRANSFORMS` is gone** (§617). It held the transforms that need the
 # instance store and so could not be a pure function here: `object_property`
@@ -857,6 +866,14 @@ def parse(
                 f"variable {label!r} is a time series set but is not derived from an "
                 "object - a series is a property of an object, so it needs an "
                 "object_series derivation naming which object and which property"
+            )
+        if derivation is not None and derivation.transform == "function" \
+                and kind not in FUNCTION_KINDS:
+            # `functions` p.80's mapping has no row for these: a function
+            # answers with a value, a list or a set, never an object or a struct.
+            raise VariableError(
+                f"variable {label!r} is a {kind}, which a function cannot fill - "
+                f"a function variable is one of {', '.join(FUNCTION_KINDS)}"
             )
         external_id, interface = _parse_interface(
             label, value.get("external_id"), value.get("interface")
@@ -1623,6 +1640,17 @@ def _check_arity(vid: str, d: Derivation) -> None:
         prop = d.config.get("property")
         if name != "count" and (not prop or not isinstance(prop, str)):
             raise VariableError(f"variable {vid!r}: {name} needs a property to aggregate")
+    elif d.transform == "function":
+        if not isinstance(d.config.get("function_id"), str) or not d.config["function_id"]:
+            raise VariableError(f"variable {vid!r}: a function variable names its function")
+        names = d.config.get("parameters")
+        if not isinstance(names, list) or len(names) != len(d.inputs) \
+                or not all(isinstance(n, str) for n in names):
+            raise VariableError(
+                f"variable {vid!r}: a function variable names the parameter each of its "
+                "inputs feeds")
+        if not isinstance(d.config.get("values", {}), dict):
+            raise VariableError(f"variable {vid!r}: a function variable's values are an object")
     elif d.transform == "object_property":
         if len(d.inputs) != 1:
             raise VariableError(
@@ -2001,6 +2029,22 @@ def _apply(
 ) -> Any:
     d = variable.derivation
     assert d is not None
+    if d.transform == "function":
+        # p.73's function-backed variable (§772): a question for the caller,
+        # as an aggregation is, keyed by the function, its version and what it
+        # is given - so the same call is made once a resolve.
+        request = {
+            "function": d.config["function_id"], "version": d.config.get("version"),
+            "kind": variable.kind,
+            "values": {**d.config.get("values", {}),
+                       **dict(zip(d.config["parameters"], inputs))},
+        }
+        key = aggregate_key(request)
+        if aggregates is not None and key in aggregates:
+            return aggregates[key]
+        if wanted is not None:
+            wanted[key] = request
+        return None
     if d.transform == "object_set_aggregation":
         if _is_union(inputs[0]):
             raise VariableError(

@@ -56,6 +56,8 @@ export const DEFINITION_TYPES: readonly DefinitionType[] = [
 const OWN_TYPE: Record<string, DefinitionType> = {
   object_property: "object_property",
   object_set_aggregation: "object_set_aggregation",
+  // p.73's Function (§772): a filter entry with nothing to find until now.
+  function: "function",
 };
 
 export function definitionTypeOf(variable: WorkshopVariable): DefinitionType {

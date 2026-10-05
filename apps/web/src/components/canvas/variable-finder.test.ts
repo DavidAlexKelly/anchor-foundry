@@ -31,6 +31,10 @@ describe("definitionTypeOf (p.73)", () => {
       .toBe("object_set_aggregation");
   });
 
+  it("calls a function-backed variable a function (§772)", () => {
+    expect(definitionTypeOf(derived("a", "function"))).toBe("function");
+  });
+
   it("calls every other derivation a variable transformation", () => {
     // p.73's own catch-all: "a series of common operations, possibly
     // referencing other variables". A transform added later lands here rather
