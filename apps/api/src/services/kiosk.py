@@ -290,7 +290,20 @@ async def launch(
 
 
 # ---- the launch history (p.611) ------------------------------------------------
+#: Sessions the launch history shows at once.
+SESSION_PAGE = 200
+
+
 async def sessions(conn: AsyncConnection, organisation_id: UUID) -> list[dict[str, Any]]:
+    """The launch history, **active sessions first** (§820).
+
+    p.610: active sessions "can also be ended by Administrators from the
+    Session Launch History table", and that table is the only place to end
+    one. It was the newest 200, and a session lasts a week, so one launched
+    before 200 others dropped off the table while still running, and could
+    no longer be ended. Every active session now comes before the ended ones,
+    so the page cuts only from history.
+    """
     return await fetch_all(
         conn,
         """
@@ -302,10 +315,10 @@ async def sessions(conn: AsyncConnection, organisation_id: UUID) -> list[dict[st
           LEFT JOIN canvas_apps a ON a.id = s.app_id
           LEFT JOIN users u ON u.id = s.launched_by
          WHERE s.organisation_id = :oid
-         ORDER BY s.created_at DESC
-         LIMIT 200
+         ORDER BY (s.ended_at IS NULL AND s.expires_at > now()) DESC, s.created_at DESC
+         LIMIT :page
         """,
-        {"oid": str(organisation_id)},
+        {"oid": str(organisation_id), "page": SESSION_PAGE},
     )
 
 
