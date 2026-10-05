@@ -5,7 +5,7 @@
 > properties, link types, action types, shared properties, interfaces, and
 > functions." (p.28)
 
-Six of those seven exist here, plus **object type groups**, which p.28's list
+All seven exist here, plus **object type groups**, which p.28's list
 predates: p.262 says separately that "Groups are searchable in Ontology
 Manager's Search bar and Search bar dialog", and §172 added them here in the
 same commit that created them, so there was never a window where a group could
@@ -14,11 +14,11 @@ exist and not be findable.
 **Interfaces are the sixth and arrived one unit after the thing itself** (§251
 declared them, §252 made them findable), which is a gap this file has been
 here before: §164 built shared properties and §167 added them to this search,
-and the note below says why that window is worth closing fast. Functions are
-still `○` in §1.3 and are absent for the reason interfaces used to be - there
-is nothing to find. Named rather than silently skipped, because "search found
-nothing" and "search does not look there" read identically to whoever typed
-the query.
+and the note below says why that window is worth closing fast. **Functions
+are the seventh** (§777): they existed from §768 on decision 0018's option B,
+and were not looked for here until then - the same window again, and "search
+found nothing" and "search does not look there" read identically to whoever
+typed the query.
 
 **Shared properties were the fifth, and were missing for a while after they
 existed** (§164 built them, §167 added them here). That gap was worth closing
@@ -82,6 +82,7 @@ async def search(
     already has one of those.
     """
     from . import actions as actions_service
+    from . import functions as functions_service
     from . import interfaces as interfaces_service
     from . import object_type_groups
     from . import ontology as ontology_service
@@ -243,6 +244,26 @@ async def search(
             "object_type_id": None,
             "object_type_name": "",
             "usage_count": int(row["implementation_count"]),
+            "matched_field": field,
+            "matched_value": str(row[field] or ""),
+        })
+
+    # **The seventh kind p.28 names** (§777): "search across … and
+    # functions". A function belongs to no object type either, and its count
+    # is its **versions** - whether a call names one or takes the newest is
+    # what somebody opening it is deciding (`functions` p.49).
+    for row in await functions_service.list_functions(conn, workspace_id):
+        field = _matched_field(row, needle)
+        if not field:
+            continue
+        results.append({
+            "kind": "function",
+            "id": str(row["id"]),
+            "api_name": row["api_name"],
+            "display_name": row["display_name"],
+            "object_type_id": None,
+            "object_type_name": "",
+            "usage_count": int(row["version_count"]),
             "matched_field": field,
             "matched_value": str(row[field] or ""),
         })

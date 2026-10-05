@@ -31,6 +31,7 @@ import {
   KIND_LABELS,
   destinationFor,
   implementationSummary,
+  versionSummary,
 } from "@/lib/search-destination";
 import { nextIndex, previewRows } from "@/lib/search-keys";
 import type { OntologySearchHit } from "@/lib/types";
@@ -41,6 +42,7 @@ export function OntologySearch({
   onOpenSharedProperty,
   onOpenGroup,
   onOpenInterface,
+  onOpenFunction,
 }: {
   workspaceId: string;
   /** Where a hit goes. Four of the six kinds belong to an object type, which
@@ -64,6 +66,8 @@ export function OntologySearch({
    * property. An interface is implemented *by* object types rather than owned
    * by one (`object-link-types` p.4), so it has no type's screen to borrow. */
   onOpenInterface: (interfaceId: string) => void;
+  /** p.28's seventh kind (§777): a function, opened to run. */
+  onOpenFunction: (functionId: string) => void;
 }) {
   const [query, setQuery] = useState("");
   // **Focus, not hover** (§317). p.30 puts the quick links behind a hover, and
@@ -110,6 +114,7 @@ export function OntologySearch({
     if (to.open === "object_type") onOpenType(to.id);
     else if (to.open === "group") onOpenGroup(to.id);
     else if (to.open === "interface") onOpenInterface(to.id);
+    else if (to.open === "function") onOpenFunction(to.id);
     else onOpenSharedProperty(to.id);
   };
 
@@ -296,6 +301,10 @@ export function OntologySearch({
                          an interface has no owning type to name. */
                       <span className="slug" style={{ marginLeft: 8 }}>
                         {implementationSummary(hit.usage_count ?? 0)}
+                      </span>
+                    ) : hit.kind === "function" ? (
+                      <span className="slug" style={{ marginLeft: 8 }}>
+                        {versionSummary(hit.usage_count ?? 0)}
                       </span>
                     ) : hit.kind !== "object_type" ? (
                       <span className="slug" style={{ marginLeft: 8 }}>

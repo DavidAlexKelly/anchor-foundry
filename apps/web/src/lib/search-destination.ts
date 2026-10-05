@@ -48,7 +48,8 @@ export type Destination =
   | { open: "object_type"; id: string }
   | { open: "shared_property"; id: string }
   | { open: "group"; id: string }
-  | { open: "interface"; id: string };
+  | { open: "interface"; id: string }
+  | { open: "function"; id: string };
 
 /**
  * The screen this hit opens.
@@ -76,6 +77,8 @@ export function destinationFor(hit: Locatable): Destination | null {
       return { open: "group", id: hit.id };
     case "interface":
       return { open: "interface", id: hit.id };
+    case "function":
+      return { open: "function", id: hit.id };
   }
 }
 
@@ -95,7 +98,14 @@ export const KIND_LABELS: Record<OntologySearchHit["kind"], string> = {
   shared_property: "Shared property",
   group: "Group",
   interface: "Interface",
+  function: "Function",
 };
+
+/** How a function's row reads (§777): how many versions it has published,
+ * which is what decides whether a call pins one (`functions` p.49). */
+export function versionSummary(count: number): string {
+  return `${count} version${count === 1 ? "" : "s"}`;
+}
 
 /**
  * How an interface's reach reads on its own row.

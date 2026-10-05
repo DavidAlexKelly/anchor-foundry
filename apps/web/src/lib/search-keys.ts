@@ -29,6 +29,9 @@ export function previewRows(hit: OntologySearchHit): [string, string][] {
     ["Matched", `${hit.matched_field}: ${hit.matched_value}`],
   ];
   if (hit.object_type_id) rows.push(["On", hit.object_type_name]);
-  if (hit.usage_count !== null) rows.push(["Used by", String(hit.usage_count)]);
+  // A function's count is its versions, not its users (§777).
+  if (hit.usage_count !== null) {
+    rows.push([hit.kind === "function" ? "Versions" : "Used by", String(hit.usage_count)]);
+  }
   return rows;
 }

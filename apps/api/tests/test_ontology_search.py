@@ -302,6 +302,33 @@ def test_the_limit_is_honoured(client: TestClient, fx: Fixture, ontology: dict) 
     assert len(r.json()) == 2
 
 
+def test_a_function_is_found_with_its_version_count(client: TestClient, fx: Fixture) -> None:
+    """p.28's seventh kind (§777): "search across … and functions"."""
+    word = f"zephyrfn{uuid.uuid4().hex[:6]}"
+    kind = client.post(f"{wbase(fx)}/object-types", headers=hdr(fx.editor_sub), json={
+        "api_name": f"t_{word}", "display_name": "T", "title_property": "k",
+        "properties": [{"api_name": "k", "data_type": "string"}]}).json()
+    body = {"version": "1.0.0", "inputs": [kind["id"]],
+            "output": {"kind": "value", "data_type": "integer"},
+            "sql": f"SELECT count(*) FROM t_{word}"}
+    made = client.post(f"{wbase(fx)}/functions", headers=hdr(fx.editor_sub), json={
+        "api_name": f"fn_{word}", "display_name": "Counter",
+        "description": f"counts the {word} things", "version": body})
+    assert made.status_code == 201, made.text
+    [hit] = [h for h in search(client, fx, f"fn_{word}") if h["kind"] == "function"]
+    assert hit == {"kind": "function", "id": made.json()["id"], "api_name": f"fn_{word}",
+                   "display_name": "Counter", "object_type_id": None,
+                   "object_type_name": "", "usage_count": 1,
+                   "matched_field": "api_name", "matched_value": f"fn_{word}"}
+    assert client.post(f"{wbase(fx)}/functions/{made.json()['id']}/versions",
+                       headers=hdr(fx.editor_sub),
+                       json={**body, "version": "1.1.0"}).status_code == 201
+    [hit] = [h for h in search(client, fx, "things") if h["id"] == made.json()["id"]]
+    assert (hit["usage_count"], hit["matched_field"]) == (2, "description")
+    # And a query it does not match leaves it out.
+    assert made.json()["id"] not in {h["id"] for h in search(client, fx, f"t_{word}")}
+
+
 # --- The browser's copy of the kinds (§316) -----------------------------------
 
 
@@ -364,5 +391,6 @@ def test_the_two_lists_are_actually_being_read() -> None:
     repo's standing finding, one file over.
     """
     assert "interface" in kinds_returned()
+    assert "function" in kinds_returned()
     assert "object_type" in kinds_returned()
-    assert len(kinds_declared()) >= 7
+    assert len(kinds_declared()) >= 8
