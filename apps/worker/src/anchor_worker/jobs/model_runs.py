@@ -154,12 +154,23 @@ def _enqueue_due_cron_models(context: OpExecutionContext, platform_db: PlatformD
     for model_id, workspace_id in candidates:
         with platform_db.connect_scoped_to(workspace_id) as conn:
             with conn.cursor() as cur:
+                # **The claim** (§853): locked, and still due. Two passes can
+                # hold the same candidate - a pass still working when the next
+                # minute's starts, or the old and new worker during a deploy -
+                # and each used to enqueue it. A pass that finds the row locked
+                # leaves it to the one holding it; one that arrives after that
+                # pass committed finds next_run_at moved on.
                 cur.execute(
-                    "SELECT trigger_mode, cron_schedule FROM models WHERE id = %s", (model_id,)
+                    """
+                    SELECT trigger_mode, cron_schedule FROM models
+                     WHERE id = %s AND (next_run_at IS NULL OR next_run_at <= now())
+                       FOR UPDATE SKIP LOCKED
+                    """,
+                    (model_id,),
                 )
                 row = cur.fetchone()
                 if row is None or row[0] != "cron" or not row[1]:
-                    continue  # changed since discovery - re-verified, matches cleanup's pattern
+                    continue  # changed since discovery, or claimed - re-verified
                 cron_schedule = row[1]
                 try:
                     next_run = croniter(cron_schedule, datetime.now(timezone.utc)).get_next(datetime)
@@ -191,10 +202,22 @@ def _enqueue_due_upstream_models(context: OpExecutionContext, platform_db: Platf
     for model_id, workspace_id in candidates:
         with platform_db.connect_scoped_to(workspace_id) as conn:
             with conn.cursor() as cur:
-                cur.execute("SELECT trigger_mode FROM models WHERE id = %s", (model_id,))
+                # The claim, as for cron (§853): locked, and nothing in flight.
+                cur.execute(
+                    """
+                    SELECT trigger_mode, upstream_watermark FROM models m
+                     WHERE id = %s
+                       AND NOT EXISTS (SELECT 1 FROM model_runs mr
+                                        WHERE mr.model_id = m.id
+                                          AND mr.status IN ('queued', 'running'))
+                       FOR UPDATE SKIP LOCKED
+                    """,
+                    (model_id,),
+                )
                 row = cur.fetchone()
                 if row is None or row[0] != "upstream":
-                    continue  # changed since discovery - re-verified, matches cron's pattern
+                    continue  # changed since discovery, or claimed - re-verified
+                reacted_to = row[1]
                 # Newest input version this model has not yet reacted to,
                 # ignoring versions it produced itself (the self-loop guard
                 # 0021 documents). NULL means the versions vanished between
@@ -211,8 +234,8 @@ def _enqueue_due_upstream_models(context: OpExecutionContext, platform_db: Platf
                     (model_id, model_id),
                 )
                 watermark = cur.fetchone()[0]
-                if watermark is None:
-                    continue
+                if watermark is None or (reacted_to is not None and watermark <= reacted_to):
+                    continue  # nothing new since the watermark another pass just set
                 cur.execute(
                     "INSERT INTO model_runs (model_id, trigger_kind) VALUES (%s, 'upstream')",
                     (model_id,),
@@ -313,13 +336,22 @@ def _execute_queued_model_runs(context: OpExecutionContext, platform_db: Platfor
                            m.name, m.output_dataset_id, m.input_health_policy
                       FROM model_runs mr
                       JOIN models m ON m.id = mr.model_id
-                     WHERE mr.id = %s
+                     WHERE mr.id = %s AND mr.status = 'queued'
+                       FOR UPDATE OF mr SKIP LOCKED
                     """,
                     (run_id,),
                 )
                 row = cur.fetchone()
+                # **The claim** (§853). This read used to take no lock, and the
+                # 'running' below was written whatever the status had become:
+                # a pass that read the run as queued while another was between
+                # its read and that write ran the model too - two executions,
+                # two output versions. Minute passes overlap whenever a run
+                # outlasts a minute, so this needed no second worker. Locked,
+                # the run belongs to whichever pass took the lock; the rest skip
+                # it, and find it running once that pass commits.
                 if row is None or row[0] != "queued":
-                    continue  # already handled or gone - re-verified
+                    continue  # claimed by another pass, handled, or gone
                 (_, model_id, project_id, language, code, model_name,
                  output_dataset_id, health_policy) = row
 
