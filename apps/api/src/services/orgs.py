@@ -14,6 +14,7 @@ from collections.abc import Sequence
 from typing import Any, Protocol
 from uuid import UUID
 
+from anyio import to_thread
 from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection
@@ -139,7 +140,7 @@ async def bootstrap_first_owner(
     # the platform already bootstrapped, this leaves one orphaned unused
     # Cognito user rather than a DB row with no matching identity - the
     # safer failure direction for something a human can clean up by hand.
-    sub = cognito.admin_create_user(owner_email, owner_display_name)
+    sub = await to_thread.run_sync(cognito.admin_create_user, owner_email, owner_display_name)
     try:
         row = await fetch_one(
             conn,
@@ -291,7 +292,7 @@ async def invite_user(
     )
     if existing is not None:
         raise ConflictError("a user with this email already exists")
-    sub = cognito.admin_create_user(email, display_name)
+    sub = await to_thread.run_sync(cognito.admin_create_user, email, display_name)
     row = await fetch_one(
         conn,
         """
@@ -356,7 +357,7 @@ async def disable_user(
     if row is None:
         raise NotFoundError("user")
     if row["cognito_sub"]:
-        cognito.admin_disable_user(str(row["cognito_sub"]))
+        await to_thread.run_sync(cognito.admin_disable_user, str(row["cognito_sub"]))
 
 
 # ---- groups -----------------------------------------------------------------

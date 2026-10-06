@@ -41,6 +41,7 @@ import tempfile
 from typing import Any
 from uuid import UUID, uuid4
 
+from anyio import to_thread
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from ..lib.db import fetch_all, fetch_one
@@ -55,6 +56,11 @@ MAX_SYNC_BYTES = 200 * 1024 * 1024  # flag: worker/Athena path beyond this
 
 class SyncError(RuntimeError):
     """User-safe sync failure."""
+
+
+def _read_bytes(path: str) -> bytes:
+    with open(path, "rb") as handle:
+        return handle.read()
 
 
 async def _insert_version(conn: AsyncConnection, sql: str, params: dict[str, Any]) -> Any:
@@ -188,13 +194,12 @@ async def run_full_sync(
     with tempfile.TemporaryDirectory() as tmp:
         parquet_tmp = os.path.join(tmp, "data.parquet")
         try:
-            schema, row_count = engine.ingest_to_parquet(
-                snapshot_path, snapshot_extension, parquet_tmp
+            schema, row_count = await to_thread.run_sync(
+                engine.ingest_to_parquet, snapshot_path, snapshot_extension, parquet_tmp
             )
         except engine.DatasetEngineError as exc:
             raise SyncError(str(exc)) from exc
-        with open(parquet_tmp, "rb") as handle:
-            parquet_bytes = handle.read()
+        parquet_bytes = await to_thread.run_sync(_read_bytes, parquet_tmp)
 
     existing = await find_existing_sync_dataset(
         conn, project_id, UUID(str(connection_row["id"])), slug
@@ -208,7 +213,7 @@ async def run_full_sync(
     if existing is None:
         dataset_id = uuid4()
         parquet_key = f"{ds_service.storage_prefix(ws_prefix, dataset_id)}v1/data.parquet"
-        storage.put(parquet_key, parquet_bytes)
+        await to_thread.run_sync(storage.put, parquet_key, parquet_bytes)
         row = await fetch_one(
             conn,
             """
@@ -261,7 +266,7 @@ async def run_full_sync(
         parquet_key = (
             f"{ds_service.storage_prefix(ws_prefix, dataset_id)}v{version}/data.parquet"
         )
-        storage.put(parquet_key, parquet_bytes)
+        await to_thread.run_sync(storage.put, parquet_key, parquet_bytes)
         row = await fetch_one(
             conn,
             """
@@ -359,8 +364,8 @@ async def run_incremental_sync(
                         "cursor and run a full sync first"
                     )
             else:
-                _, new_row_count = engine.ingest_to_parquet(
-                    snapshot_path, snapshot_extension, new_parquet
+                _, new_row_count = await to_thread.run_sync(
+                    engine.ingest_to_parquet, snapshot_path, snapshot_extension, new_parquet
                 )
         except engine.DatasetEngineError as exc:
             raise SyncError(str(exc)) from exc
@@ -395,22 +400,24 @@ async def run_incremental_sync(
             )
             if existing_row is None:
                 raise SyncError("the synced dataset no longer exists")
-            existing_local_path = storage.local_path(existing_row["s3_location"])
+            existing_local_path = await to_thread.run_sync(
+                storage.local_path, existing_row["s3_location"]
+            )
             previous_schema = _stored_schema(existing_row["table_schema"])
 
         merged_parquet = os.path.join(tmp, "merged.parquet")
         try:
-            schema, row_count = engine.merge_incremental(
-                existing_local_path, new_parquet, primary_key_column, merged_parquet
+            schema, row_count = await to_thread.run_sync(
+                engine.merge_incremental,
+                existing_local_path, new_parquet, primary_key_column, merged_parquet,
             )
             # Before the bytes go anywhere: whether this run replaced a row
             # of the view it merged into (§747).
-            transaction = engine.merge_transaction(
-                existing_local_path, new_parquet, primary_key_column)
+            transaction = await to_thread.run_sync(
+                engine.merge_transaction, existing_local_path, new_parquet, primary_key_column)
         except engine.DatasetEngineError as exc:
             raise SyncError(str(exc)) from exc
-        with open(merged_parquet, "rb") as handle:
-            parquet_bytes = handle.read()
+        parquet_bytes = await to_thread.run_sync(_read_bytes, merged_parquet)
 
     ws_prefix = await ds_service.workspace_s3_prefix(conn, workspace_id)
     schema_json = json.dumps([c.as_dict() for c in schema])
@@ -419,7 +426,7 @@ async def run_incremental_sync(
     if existing_dataset_id is None:
         dataset_id = uuid4()
         parquet_key = f"{ds_service.storage_prefix(ws_prefix, dataset_id)}v1/data.parquet"
-        storage.put(parquet_key, parquet_bytes)
+        await to_thread.run_sync(storage.put, parquet_key, parquet_bytes)
         row = await fetch_one(
             conn,
             """
@@ -458,7 +465,7 @@ async def run_incremental_sync(
             raise SyncError("the synced dataset no longer exists")
         version = int(existing["current_version"]) + 1
         parquet_key = f"{ds_service.storage_prefix(ws_prefix, dataset_id)}v{version}/data.parquet"
-        storage.put(parquet_key, parquet_bytes)
+        await to_thread.run_sync(storage.put, parquet_key, parquet_bytes)
         row = await fetch_one(
             conn,
             """
