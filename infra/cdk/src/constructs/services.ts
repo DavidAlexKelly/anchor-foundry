@@ -1,4 +1,4 @@
-import { Duration, Stack } from "aws-cdk-lib";
+import { ArnFormat, Duration, Stack } from "aws-cdk-lib";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as ecs from "aws-cdk-lib/aws-ecs";
 import * as efs from "aws-cdk-lib/aws-efs";
@@ -57,7 +57,7 @@ export interface ServicesProps {
  * IAM roles per ECS service - the API task role cannot do what the worker
  * task role can do." Concretely:
  *   - api:    read/write S3 data, read app-db secret, manage data-source
- *             secrets under platform/connections/*, Cognito admin on the
+ *             secrets under anchor/connections/*, Cognito admin on the
  *             org's pool (invitations).
  *   - worker: read/write S3 data, read app-db secret, read connection
  *             secrets (to establish syncs). NO Cognito access.
@@ -103,6 +103,17 @@ export class ServicesConstruct extends Construct {
     props.appDbSecret.grantRead(apiTaskRole);
     // Data source credentials live under a dedicated prefix; the API may
     // create/read/rotate them but nothing else in Secrets Manager (§5, §10).
+    // **The prefix the code writes** (apps/api/src/services/secrets.py's
+    // SECRET_PREFIX): this named `platform/connections/*` while every secret
+    // was created as `anchor/connections/<id>`, so a deployed stack refused
+    // every connection's credentials (§846). And this stack's own region and
+    // account, not any.
+    const connectionSecrets = Stack.of(this).formatArn({
+      service: "secretsmanager",
+      resource: "secret",
+      resourceName: "anchor/connections/*",
+      arnFormat: ArnFormat.COLON_RESOURCE_NAME,
+    });
     apiTaskRole.addToPolicy(
       new iam.PolicyStatement({
         actions: [
@@ -112,9 +123,7 @@ export class ServicesConstruct extends Construct {
           "secretsmanager:DeleteSecret",
           "secretsmanager:TagResource",
         ],
-        resources: [
-          `arn:aws:secretsmanager:*:*:secret:platform/connections/*`,
-        ],
+        resources: [connectionSecrets],
       })
     );
     apiTaskRole.addToPolicy(
@@ -139,21 +148,12 @@ export class ServicesConstruct extends Construct {
     workerTaskRole.addToPolicy(
       new iam.PolicyStatement({
         actions: ["secretsmanager:GetSecretValue"],
-        resources: [`arn:aws:secretsmanager:*:*:secret:platform/connections/*`],
+        resources: [connectionSecrets],
       })
     );
-    // Athena for large-dataset transforms (spec §7); scoped to the platform workgroup.
-    workerTaskRole.addToPolicy(
-      new iam.PolicyStatement({
-        actions: [
-          "athena:StartQueryExecution",
-          "athena:GetQueryExecution",
-          "athena:GetQueryResults",
-          "athena:StopQueryExecution",
-        ],
-        resources: [`arn:aws:athena:*:*:workgroup/platform`],
-      })
-    );
+    // No Athena (§846). Spec §7's large-dataset path is not built: nothing
+    // calls Athena and no `platform` workgroup exists, so the grant named
+    // a resource that was never there. Add it back with the code that uses it.
 
     // ---- Transform scratch: how anything reaches a task with no credentials --
     // The transport decision 0004 left open (STATUS.md §65). With an empty task

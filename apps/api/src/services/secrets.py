@@ -28,6 +28,13 @@ class SecretsGateway(Protocol):
     def delete_secret(self, secret_arn: str) -> None: ...
 
 
+#: Every connection's secret is named under this; the API and worker task roles
+#: may touch exactly these (`infra/cdk/src/constructs/services.ts`, and
+#: `tests/test_secret_names.py` holds the two together - §846 found them
+#: disagreeing, the roles naming `platform/connections/*`).
+SECRET_PREFIX = "anchor/connections/"
+
+
 class Boto3SecretsGateway:
     """Production gateway. The ECS task role carries a policy scoped to the
     anchor/connections/* name prefix (CDK services construct) - the API can
@@ -39,7 +46,7 @@ class Boto3SecretsGateway:
         self._client = boto3.client("secretsmanager", region_name=region)
 
     def put_secret(self, connection_id: str, values: dict[str, str]) -> str:
-        name = f"anchor/connections/{connection_id}"
+        name = f"{SECRET_PREFIX}{connection_id}"
         payload = json.dumps(values)
         try:
             resp = self._client.create_secret(Name=name, SecretString=payload)
