@@ -21,9 +21,11 @@ import json
 import secrets as token_source
 import time
 from datetime import datetime, timezone
+from time import monotonic
 from typing import Any, AsyncIterator, Mapping
 from uuid import UUID, uuid4
 
+import anyio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
@@ -505,6 +507,37 @@ async def admit(conn: AsyncConnection, token: str, *, sender: str | None = None)
     return {**found, "taken": int(taken["taken"])}
 
 
+#: How long a task reuses a listener's verification secret (§867).
+SECRET_TTL_SECONDS = 30.0
+_secrets: dict[str, tuple[float, str]] = {}
+
+
+async def _verification_secret(gateway: SecretsGateway, arn: str) -> str:
+    """A listener's secret, from Secrets Manager at most every thirty seconds.
+
+    **Every push asked for it, synchronously** (§867). `accept` runs for each
+    request a sender makes, up to RATE_PER_SECOND a second per listener, and
+    each one called GetSecretValue on the event loop: a network round trip
+    during which this task answered nothing else, and a charge per call, for
+    a value that changes when somebody reconfigures the listener. Now it is
+    fetched off the loop and kept briefly. This task forgets it when it
+    changes the secret (`configure`); another task may verify against the old
+    one for up to the TTL, which is the cost of not asking every time.
+    """
+    now = monotonic()  # not `time.monotonic`: tests stand a clock in for `time`
+    cached = _secrets.get(arn)
+    if cached is not None and now - cached[0] < SECRET_TTL_SECONDS:
+        return cached[1]
+    value = (await anyio.to_thread.run_sync(gateway.get_secret, arn))["secret"]
+    _secrets[arn] = (now, value)
+    return value
+
+
+def forget_secret(arn: str | None) -> None:
+    if arn:
+        _secrets.pop(arn, None)
+
+
 async def accept(conn: AsyncConnection, gateway: SecretsGateway, found: Mapping[str, Any],
                  headers: Mapping[str, str], body: bytes, *,
                  query: Mapping[str, str] | None = None, now: float | None = None,
@@ -520,7 +553,7 @@ async def accept(conn: AsyncConnection, gateway: SecretsGateway, found: Mapping[
                       headers={"Retry-After": "1"})
     if len(body) > MAX_BODY:
         raise Refusal(413, f"a request is at most {MAX_BODY} bytes")
-    secret = (gateway.get_secret(found["secret_arn"])["secret"]
+    secret = (await _verification_secret(gateway, found["secret_arn"])
               if found["secret_arn"] else None)
     if not verify(found["verification"], found["verification_header"], secret, headers, body,
                   query=query, now=time.time() if now is None else now, url=url):
@@ -635,6 +668,9 @@ async def configure(conn: AsyncConnection, gateway: SecretsGateway, project_id: 
     verification, header = resolve(current["listener_type"], verification, header, secret)
     arn = (gateway.put_secret(f"listener-{listener_id}", {"secret": secret})
            if secret else None)
+    # Its old value is no longer the one to verify against (§867).
+    forget_secret(current.get("secret_arn"))
+    forget_secret(arn)
     await conn.execute(text("""
         UPDATE listeners SET verification = :v, verification_header = :h, secret_arn = :arn
          WHERE id = :id
