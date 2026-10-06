@@ -729,6 +729,38 @@ def test_bad_filter_clauses_blame_the_request_not_the_saved_app(
     assert "does not declare" in bad.json()["detail"]
 
 
+def test_a_save_checks_a_sets_filters_against_its_types_declarations(
+    client: TestClient, fx: Fixture
+) -> None:
+    """§221's rule on the way in, for a type that exists: an ordered
+    comparison on a property declared as a number saves, and a box on one
+    declared as a string is refused for being a string. §830 loads only the
+    types a document names, so this is what says it still loads those."""
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        type_id = conn.execute(
+            "INSERT INTO object_types (workspace_id, api_name, display_name, created_by) "
+            "VALUES (%s,%s,'Room',%s) RETURNING id",
+            (fx.workspace, f"room_{uuid.uuid4().hex[:8]}", fx.owner)).fetchone()[0]
+        conn.execute(
+            "INSERT INTO object_type_properties (object_type_id, api_name, display_name, data_type) "
+            "VALUES (%s,'capacity','Capacity','integer'), (%s,'where','Where','string')",
+            (type_id, type_id))
+
+    def saved(filters: list[dict]):
+        return client.put(
+            f"{base(fx)}/{_new_app(client, fx)}/definition", headers=hdr(fx.editor_sub),
+            json={"definition": _module({"v_rooms": {
+                "id": "v_rooms", "kind": "object_set", "label": "Rooms",
+                "object_set": {"object_type_id": str(type_id), "filters": filters}}})})
+
+    good = saved([{"property": "capacity", "op": "gt", "value": 40}])
+    assert good.status_code == 200, good.text
+    bad = saved([{"property": "where", "op": "within_box",
+                  "value": {"north": 55.0, "south": 50.0, "east": 1.0, "west": -1.0}}])
+    assert bad.status_code == 422, bad.text
+    assert "is a string property" in bad.json()["detail"]
+
+
 # ---- publishing pins a version (roadmap 1.7) ---------------------------------
 def _publish(client: TestClient, fx: Fixture, app_id: str, scope: str = "workspace") -> dict:
     r = client.put(f"{base(fx)}/{app_id}/publish", headers=hdr(fx.admin_sub),

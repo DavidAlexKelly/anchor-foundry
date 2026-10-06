@@ -1588,10 +1588,16 @@ async def _with_definition(
 
 # ---- action types (workspace-scoped) ----------------------------------------
 async def list_action_types(
-    conn: AsyncConnection, workspace_id: UUID, *, object_type_id: UUID | None = None
+    conn: AsyncConnection, workspace_id: UUID, *, object_type_id: UUID | None = None,
+    ids: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     params: dict[str, Any] = {"wid": str(workspace_id)}
     where = "at.workspace_id = :wid"
+    if ids is not None:
+        # Only these (§830): a module's save asks about the actions it names,
+        # and the workspace may have a thousand it does not.
+        where += " AND at.id = ANY(CAST(:ids AS uuid[]))"
+        params["ids"] = ids
     if object_type_id is not None:
         # **p.64's merge, and it happens here rather than in a caller**: "for a
         # given object, all object-type-specific and interface-based actions

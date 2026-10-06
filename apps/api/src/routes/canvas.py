@@ -15,6 +15,7 @@ and viewing apps that have actually been published. It never accepts writes.
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 from typing import Any
 from uuid import UUID
@@ -278,7 +279,18 @@ def _summary(row: dict[str, Any]) -> CanvasAppOut:
 
 
 # ---- project-scoped CRUD ------------------------------------------------------
-async def _workspace_property_types(conn, workspace_id) -> dict[str, dict[str, str]]:
+_UUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+
+
+def _uuids_in(document: Any) -> list[str]:
+    """Every id-shaped string anywhere in a document, embedded or not - a
+    superset of the ids it refers to, which is all a lookup by id needs."""
+    return sorted({m.lower() for m in _UUID.findall(json.dumps(document))})
+
+
+async def _workspace_property_types(
+    conn, workspace_id, *, type_ids: list[str] | None = None,
+) -> dict[str, dict[str, str]]:
     """`{object_type_id: {api_name: data_type}}` for a whole workspace (§221).
 
     **One query, not one per object type**, which is why
@@ -301,7 +313,8 @@ async def _workspace_property_types(conn, workspace_id) -> dict[str, dict[str, s
             if row.get("api_name") and row.get("data_type")
         }
         for type_id, rows in (
-            await ontology_service.list_properties_for_workspace(conn, workspace_id)
+            await ontology_service.list_properties_for_workspace(
+                conn, workspace_id, type_ids=type_ids)
         ).items()
     }
 
@@ -613,15 +626,24 @@ async def _validate_definition(
     # by the person who wrote it rather than by whoever clicks it later.
     # Only on the way in: see `validate_module` for why reading a document
     # does not re-check it against live state.
+    #
+    # **Only the ids the document mentions (§830).** Validation looks an
+    # action up by the id a `run_action` names, and a property type by the
+    # `object_type_id` a set names - both strings in the document - so the
+    # workspace's other action types and object types are never consulted.
+    # Loading them all was most of every save: 70 ms of an empty module's
+    # 116 on a workspace with 362 action types and 815 object types.
+    mentioned = _uuids_in(definition)
     known = {
         str(a["id"]): actions_service.editable_properties_of(a["rules"])
-        for a in await actions_service.list_action_types(conn, access.workspace_id)
+        for a in await actions_service.list_action_types(
+            conn, access.workspace_id, ids=mentioned)
     }
     try:
         variables_service.validate_module(
             definition, actions=known,
             property_types=await _workspace_property_types(
-                conn, access.workspace_id
+                conn, access.workspace_id, type_ids=mentioned
             ),
         )
     except variables_service.VariableError as exc:
