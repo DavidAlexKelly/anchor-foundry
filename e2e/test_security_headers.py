@@ -26,6 +26,20 @@ def test_a_page_carries_them() -> None:
     assert {k: got.get(k) for k in EXPECTED} == {k: [v] for k, v in EXPECTED.items()}
 
 
+def test_a_page_says_what_it_may_not_load(page) -> None:
+    """§860: a Content-Security-Policy, for the parts nothing here needs -
+    and a page that still works under it, framing its own pages included."""
+    got = headers_of(f"{WEB_BASE}/")
+    assert got.get("content-security-policy") == [
+        "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'"]
+    violations: list[str] = []
+    page.on("console", lambda m: violations.append(m.text)
+            if "Content Security Policy" in m.text else None)
+    page.goto(f"{WEB_BASE}/home")
+    page.get_by_role("heading", name="Choose a workspace").wait_for()
+    assert violations == []
+
+
 def test_an_api_answer_through_the_web_origin_carries_each_once() -> None:
     """The API's own, passed through the dev proxy - once each, not once from
     the API and again from the web app."""
