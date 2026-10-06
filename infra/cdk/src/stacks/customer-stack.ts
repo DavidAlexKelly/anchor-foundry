@@ -210,15 +210,21 @@ export class CustomerStack extends Stack {
     // it hears plain HTTP from the load balancer (decision 0025).
     const servedAt = `https://${distribution.distributionDomainName}`;
     auth.allowAddresses(props.platformUrl ? [servedAt, props.platformUrl] : [servedAt]);
-    services.apiService.taskDefinition.defaultContainer!.addEnvironment("PLATFORM_PUBLIC_URL", servedAt);
+    const api = services.apiService.taskDefinition.defaultContainer!;
+    api.addEnvironment("PLATFORM_PUBLIC_URL", servedAt);
+    // And where the sign-in page sends a person (§851). The web image is the
+    // same for every stack, so it cannot carry this pool's hosted UI; it asks
+    // the API (`GET /api/auth/config`), which reads it here.
+    api.addEnvironment("COGNITO_DOMAIN", auth.userPoolDomain.baseUrl());
 
     // ---- Outputs consumed by the control plane registry ---------------------
     new CfnOutput(this, "PlatformUrl", { value: servedAt });
     new CfnOutput(this, "PlatformDomain", { value: distribution.distributionDomainName });
     new CfnOutput(this, "UserPoolId", { value: auth.userPool.userPoolId });
     new CfnOutput(this, "UserPoolClientId", { value: auth.userPoolClient.userPoolClientId });
-    // The web image's NEXT_PUBLIC_COGNITO_DOMAIN. STATUS.md §20 found it had
-    // to be looked up with the AWS CLI after every fresh deploy (§816).
+    // The hosted UI, for an operator. STATUS.md §20 found it had to be looked
+    // up with the AWS CLI after every fresh deploy (§816), to rebuild the web
+    // image with it; since §851 the API hands it to the page instead.
     new CfnOutput(this, "HostedUiDomain", { value: auth.userPoolDomain.baseUrl() });
     new CfnOutput(this, "DataBucketName", { value: data.dataBucket.bucketName });
     new CfnOutput(this, "AccessLogBucketName", { value: data.accessLogBucket.bucketName });

@@ -87,7 +87,7 @@ console.log("where the platform is served (§849):");
 check("the web app asks to come back to its own origin", () => {
   const auth = fs.readFileSync(
     path.join(__dirname, "..", "..", "..", "..", "apps", "web", "src", "lib", "auth.ts"), "utf8");
-  if (!auth.includes("redirectUri: `${window.location.origin}/callback`")) {
+  if (!auth.includes("`${window.location.origin}/callback`")) {
     throw new Error("apps/web/src/lib/auth.ts no longer builds its redirect from its origin: re-derive this check");
   }
 });
@@ -126,6 +126,20 @@ check("the API is told the same address", () => {
     .find((e) => e.Name === "PLATFORM_PUBLIC_URL");
   if (!env) throw new Error("the api has no PLATFORM_PUBLIC_URL");
   if (JSON.stringify(env.Value) !== servedAt(plain, "")) throw new Error(`it is ${JSON.stringify(env.Value)}`);
+});
+
+check("the API can tell the sign-in page this pool's hosted UI (§851)", () => {
+  const api = Object.values(plain.findResources("AWS::ECS::TaskDefinition"))
+    .map((r) => r.Properties.ContainerDefinitions[0])
+    .find((c) => c.Name === "api");
+  const env = Object.fromEntries((api.Environment as { Name: string; Value: unknown }[])
+    .map((e) => [e.Name, JSON.stringify(e.Value)]));
+  const domain = Object.keys(plain.findResources("AWS::Cognito::UserPoolDomain"))[0];
+  if (!env.COGNITO_DOMAIN?.includes(`{"Ref":"${domain}"}`)) {
+    throw new Error(`COGNITO_DOMAIN is ${env.COGNITO_DOMAIN}`);
+  }
+  const appClient = Object.keys(plain.findResources("AWS::Cognito::UserPoolClient"))[0];
+  if (env.COGNITO_CLIENT_ID !== `{"Ref":"${appClient}"}`) throw new Error(`COGNITO_CLIENT_ID is ${env.COGNITO_CLIENT_ID}`);
 });
 
 check("the control plane can read the address, scheme and all", () => {
