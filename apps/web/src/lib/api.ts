@@ -3,7 +3,7 @@
  * the user back to sign-in - the token is either absent or expired. */
 
 import { viewerZone } from "./viewer-zone";
-import { clearSignedIn, loginHrefFor } from "./auth";
+import { clearSignedIn, loginHrefFor, renewSession } from "./auth";
 import type {
   BootstrapFirstOwnerInput, BootstrapFirstOwnerResult, BootstrapStatus,
   Me, Org, OrgUser, ProjectDetail, ProjectSummary, ResourceKindCounts, ResourceList, ResolvedResource,
@@ -40,7 +40,7 @@ function credentialHeaders(): Record<string, string> {
   return kioskToken ? { ...SESSION_HEADERS, Authorization: `Bearer ${kioskToken}` } : SESSION_HEADERS;
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function request<T>(path: string, init?: RequestInit, renewed = false): Promise<T> {
   const res = await fetch(`/api${path}`, {
     ...init,
     credentials: "same-origin",
@@ -54,6 +54,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     // A kiosk that has been ended says so where it stands; it is not the
     // person at the screen who signed out, so it does not send them to log in.
     throw new ApiError(401, "This kiosk session has ended.");
+  }
+  // **Renewed once before giving up** (§859). The access token lasts fifteen
+  // minutes and the session as long as Cognito's refresh token; a 401 on an
+  // expired one is answered by renewing and asking again, not by sending the
+  // person through sign-in and losing what they had open. `renewed` stops a
+  // second lap: a request refused straight after a renewal is refused for a
+  // reason a new token does not change.
+  if (res.status === 401 && !renewed && path !== "/auth/refresh" && (await renewSession())) {
+    return request<T>(path, init, true);
   }
   if (res.status === 401) {
     clearSignedIn();

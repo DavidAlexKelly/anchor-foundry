@@ -27,7 +27,9 @@ def test_a_project_is_found_by_searching_the_grid(page, mod) -> None:
     expect(grid).to_contain_text(f"Gridded {mod.tag}")
     expect(page.get_by_test_id("project-count")).to_have_text("1 project")
     grid.get_by_role("link", name=f"Gridded {mod.tag}").click()
-    expect(page).to_have_url(f"{WEB_BASE}/{mod.workspace_slug}/{mod.project_slug}")
+    # The project page compiles on its first visit in development; under a
+    # full run's load that took longer than the default five seconds.
+    expect(page).to_have_url(f"{WEB_BASE}/{mod.workspace_slug}/{mod.project_slug}", timeout=30000)
 
 
 def test_the_grid_offers_the_rest_exactly_when_there_is_more(page, mod) -> None:
