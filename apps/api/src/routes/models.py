@@ -21,7 +21,7 @@ from uuid import UUID
 import anyio
 from fastapi import APIRouter, Depends, Query, Request, status
 from fastapi.responses import PlainTextResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..lib.db import user_connection
 from ..lib.errors import ForbiddenError
@@ -118,6 +118,9 @@ class ModelUpdate(BaseModel):
 
 
 class RunOut(BaseModel):
+    # `model_*` fields name this platform's models, not pydantic's (§834).
+    model_config = ConfigDict(protected_namespaces=())
+
     id: UUID
     status: str
     trigger_kind: str
@@ -142,6 +145,9 @@ class RunOut(BaseModel):
 
 
 class ModelVersionOut(BaseModel):
+    # `model_*` fields name this platform's models, not pydantic's (§834).
+    model_config = ConfigDict(protected_namespaces=())
+
     id: UUID
     model_id: UUID
     version_number: int
@@ -966,6 +972,9 @@ class AdoptIn(BaseModel):
 
 
 class AdoptOut(BaseModel):
+    # `model_*` fields name this platform's models, not pydantic's (§834).
+    model_config = ConfigDict(protected_namespaces=())
+
     model_id: UUID
     repository_id: UUID
     branch: str
@@ -1031,6 +1040,10 @@ class AdoptManyIn(BaseModel):
     slugify the same way need somewhere to differ, and the batch is where that
     collision becomes visible at all.
     """
+
+    # `model_*` fields name this platform's models, not pydantic's (§834).
+    model_config = ConfigDict(protected_namespaces=())
+
     #: No `min_length`: the service refuses an empty list, and a second rule
     #: here would be a second message (§213).
     model_ids: list[UUID] = Field(max_length=200)

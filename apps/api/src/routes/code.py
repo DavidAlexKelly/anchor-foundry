@@ -25,7 +25,7 @@ from uuid import UUID
 
 import anyio
 from fastapi import APIRouter, Depends, Query, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..lib.db import user_connection
 from ..lib.errors import ConflictError, NotFoundError
@@ -73,6 +73,9 @@ class FileDetail(FileEntry):
 
 
 class DiffOut(BaseModel):
+    # `model_*` fields name this platform's models, not pydantic's (§834).
+    model_config = ConfigDict(protected_namespaces=())
+
     path: str
     model_id: UUID
     from_version: int | None
@@ -83,6 +86,9 @@ class DiffOut(BaseModel):
 
 
 class HistoryEntry(BaseModel):
+    # `model_*` fields name this platform's models, not pydantic's (§834).
+    model_config = ConfigDict(protected_namespaces=())
+
     kind: str
     id: UUID
     summary: str
@@ -96,6 +102,9 @@ class HistoryEntry(BaseModel):
 
 
 class ChangeSetMember(BaseModel):
+    # `model_*` fields name this platform's models, not pydantic's (§834).
+    model_config = ConfigDict(protected_namespaces=())
+
     model_id: UUID
     model_name: str
     language: str
@@ -115,6 +124,9 @@ class ChangeSetOut(BaseModel):
 
 
 class FileChange(BaseModel):
+    # `model_*` fields name this platform's models, not pydantic's (§834).
+    model_config = ConfigDict(protected_namespaces=())
+
     model_id: UUID
     code: str | None = None
     inputs: list[dict[str, Any]] | None = None
@@ -242,6 +254,9 @@ class DiffRowOut(BaseModel):
 
 
 class ProposalCommentOut(BaseModel):
+    # `model_*` fields name this platform's models, not pydantic's (§834).
+    model_config = ConfigDict(protected_namespaces=())
+
     id: UUID
     model_id: UUID | None
     source_path: str | None = None
@@ -264,6 +279,9 @@ class ProposalCommentOut(BaseModel):
 
 
 class CheckOut(BaseModel):
+    # `model_*` fields name this platform's models, not pydantic's (§834).
+    model_config = ConfigDict(protected_namespaces=())
+
     id: UUID
     # None on both is a check about the proposal as a whole. `source_path`
     # carries the file when it has no model yet (db 0039).
@@ -288,6 +306,10 @@ class FileMarkOut(BaseModel):
     """"I have read this file", per reviewer. Only marks made against the
     *current* files are returned - a mark from before the last edit says
     somebody read a file that no longer exists in that form."""
+
+    # `model_*` fields name this platform's models, not pydantic's (§834).
+    model_config = ConfigDict(protected_namespaces=())
+
     model_id: UUID | None
     source_path: str | None = None
     reviewer_id: UUID
@@ -299,6 +321,9 @@ class FileMarkOut(BaseModel):
 
 
 class ProposalFileOut(BaseModel):
+    # `model_*` fields name this platform's models, not pydantic's (§834).
+    model_config = ConfigDict(protected_namespaces=())
+
     # None for a file that would *create* a transform: a commit-backed proposal
     # publishes files that may have no model until it is applied.
     model_id: UUID | None
@@ -387,6 +412,9 @@ class ReviewPolicyIn(BaseModel):
 
 
 class CommentIn(BaseModel):
+    # `model_*` fields name this platform's models, not pydantic's (§834).
+    model_config = ConfigDict(protected_namespaces=())
+
     # One of the two, never both: a commit-backed proposal (db 0039) may create
     # transforms that do not exist yet, and a remark about one of those has
     # only its repository path to hang on.
@@ -402,6 +430,9 @@ class ResolveIn(BaseModel):
 
 
 class FileMarkIn(BaseModel):
+    # `model_*` fields name this platform's models, not pydantic's (§834).
+    model_config = ConfigDict(protected_namespaces=())
+
     model_id: UUID | None = None
     source_path: str | None = Field(default=None, max_length=1000)
     read: bool
@@ -447,6 +478,9 @@ async def get_proposal(
 class AffectedDatasetOut(BaseModel):
     """One file of a proposal, and the dataset it changes if there is one."""
 
+    # `model_*` fields name this platform's models, not pydantic's (§834).
+    model_config = ConfigDict(protected_namespaces=())
+
     state: str
     model_id: UUID | None = None
     model_name: str | None = None
@@ -462,6 +496,9 @@ class DerivedImpactOut(BaseModel):
     >  impact on derived datasets. All intermediate datasets between the
     >  selected dataset and the affected datasets will be added as well."
     """
+
+    # `model_*` fields name this platform's models, not pydantic's (§834).
+    model_config = ConfigDict(protected_namespaces=())
 
     dataset_id: UUID
     dataset_name: str
@@ -491,6 +528,9 @@ class DerivedImpactOut(BaseModel):
 
 class UnanalysedTransformOut(BaseModel):
     """A transform the change reaches that cannot be analysed (§372)."""
+
+    # `model_*` fields name this platform's models, not pydantic's (§834).
+    model_config = ConfigDict(protected_namespaces=())
 
     model_id: UUID
     model_name: str
@@ -523,6 +563,9 @@ class SchemaChangeOut(BaseModel):
     is what p.52's "build on head branch to validate that the code builds
     properly" exists to produce, at the cost of a preview rather than a build.
     """
+
+    # `model_*` fields name this platform's models, not pydantic's (§834).
+    model_config = ConfigDict(protected_namespaces=())
 
     model_id: UUID
     dataset_id: UUID

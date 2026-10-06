@@ -25,7 +25,7 @@ from uuid import UUID
 
 import anyio
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..lib.db import user_connection
 from ..lib.errors import ConflictError, NotFoundError
@@ -162,6 +162,9 @@ class MergeIn(BaseModel):
 
 
 class PublishStepOut(BaseModel):
+    # `model_*` fields name this platform's models, not pydantic's (§834).
+    model_config = ConfigDict(protected_namespaces=())
+
     path: str
     output: str
     language: str
@@ -448,6 +451,10 @@ class BranchCheckOut(BaseModel):
     proposal travels with it - the Checks tab is a list of *what ran*, and what
     ran is always "these checks, on this proposal, over this commit".
     """
+
+    # `model_*` fields name this platform's models, not pydantic's (§834).
+    model_config = ConfigDict(protected_namespaces=())
+
     id: UUID
     name: str
     # pass / warn / fail / error. `error` is not a pass: it means nobody has
