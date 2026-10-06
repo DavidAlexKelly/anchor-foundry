@@ -12,8 +12,13 @@ storage root.
 """
 from __future__ import annotations
 
+import contextlib
+import hashlib
+import os
 import re
 import shutil
+import tempfile
+import time
 from pathlib import Path
 from typing import Protocol
 
@@ -112,6 +117,69 @@ class LocalStorageGateway:
             shutil.rmtree(target)
 
 
+# ---- S3 objects on local disk (§869) -----------------------------------------
+# `local_path` hands DuckDB a file. On S3 it downloaded the whole object to a
+# new temporary file on every call and nothing ever removed one: every query,
+# preview, object-set read and export left a full copy behind, and a task that
+# ran long enough filled its disk and failed every read after. A copy is now
+# kept by the object's key and ETag - so a repeat read costs a HEAD rather than
+# a download, and an object that changed is fetched again - and the least
+# recently used are deleted once the copies pass a size. Kept in step with the
+# other app's copy by `test_storage_cache_parity.py`.
+CACHE_DIR = os.path.join(tempfile.gettempdir(), "anchor-s3-cache")
+CACHE_MAX_BYTES = int(os.environ.get("STORAGE_CACHE_MAX_BYTES", str(4 * 1024**3)))
+#: Only a copy nobody has asked for this long is deleted: a caller handed a
+#: path opens it within moments, and must not find it gone. So the size is a
+#: target rather than a ceiling - copies all in use are kept.
+CACHE_IDLE_SECONDS = 15 * 60
+
+
+def cached_copy(client, bucket: str, key: str, *, cache_dir: str | None = None,
+                max_bytes: int | None = None, idle_seconds: float | None = None) -> str:
+    """A local file holding the object's current bytes. The settings are read
+    when called, not when defined, so a test or an operator can move them."""
+    cache_dir = cache_dir or CACHE_DIR
+    max_bytes = CACHE_MAX_BYTES if max_bytes is None else max_bytes
+    idle_seconds = CACHE_IDLE_SECONDS if idle_seconds is None else idle_seconds
+    tag = str(client.head_object(Bucket=bucket, Key=key).get("ETag", "")).strip('"')
+    name = hashlib.sha256(f"{key}\0{tag}".encode()).hexdigest() + Path(key).suffix
+    os.makedirs(cache_dir, exist_ok=True)
+    path = os.path.join(cache_dir, name)
+    if os.path.exists(path):
+        os.utime(path)  # used now: last in line to be deleted
+        return path
+    fd, partial = tempfile.mkstemp(dir=cache_dir, suffix=".partial")
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            client.download_fileobj(bucket, key, handle)
+        os.replace(partial, path)  # whole or not at all: no reader sees half a file
+    except BaseException:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(partial)
+        raise
+    _evict(cache_dir, max_bytes, idle_seconds, keep=path)
+    return path
+
+
+def _evict(cache_dir: str, max_bytes: int, idle_seconds: float, *, keep: str) -> None:
+    """Delete idle copies, least recently used first, until under max_bytes."""
+    entries = []
+    for entry in os.scandir(cache_dir):
+        with contextlib.suppress(FileNotFoundError):
+            stat = entry.stat()
+            entries.append((stat.st_mtime, stat.st_size, entry.path))
+    total = sum(size for _, size, _ in entries)
+    now = time.time()
+    for mtime, size, path in sorted(entries):
+        if total <= max_bytes:
+            break
+        if path == keep or now - mtime < idle_seconds:
+            continue
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(path)
+            total -= size
+
+
 class S3StorageGateway:
     """Production gateway. The API/worker task roles are scoped to the data
     bucket's workspaces/* prefix (CDK services construct)."""
@@ -132,13 +200,8 @@ class S3StorageGateway:
         return resp["Body"].read()
 
     def local_path(self, key: str) -> str:
-        import tempfile
-
         validate_key(key)
-        handle = tempfile.NamedTemporaryFile(delete=False, suffix=Path(key).suffix)
-        self._client.download_fileobj(self._bucket, key, handle)
-        handle.close()
-        return handle.name
+        return cached_copy(self._client, self._bucket, key)
 
     def size(self, key: str) -> int | None:
         validate_key(key)
