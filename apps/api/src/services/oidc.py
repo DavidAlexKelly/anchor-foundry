@@ -62,7 +62,7 @@ def _private_key():
     from cryptography.hazmat.primitives.asymmetric import rsa
     from cryptography.hazmat.primitives.serialization import load_pem_private_key
 
-    pem = os.environ.get("OIDC_SIGNING_KEY", "").strip()
+    pem = os.environ.get("OIDC_SIGNING_KEY", "").strip() or _stored_pem()
     if not pem:
         return None
     try:
@@ -70,6 +70,58 @@ def _private_key():
     except (ValueError, TypeError):
         return None
     return key if isinstance(key, rsa.RSAPrivateKey) else None
+
+
+#: Where a stack keeps the key the platform made for itself (§871): a secret
+#: under the prefix its task roles may manage. Set by the stack; with
+#: OIDC_SIGNING_KEY set instead, that is used and this is not read.
+_stored: str | None = None
+
+
+def _stored_pem() -> str:
+    """The signing key from OIDC_SIGNING_KEY_SECRET, made on first use.
+
+    **Generated rather than handed over**, because the stack cannot hand one
+    over: CloudFormation can generate a password but not an RSA key, so every
+    deployed stack had neither setting and refused every source configured for
+    OIDC (§599). The first API task to need one generates it and stores it;
+    one that loses the race to create it reads the winner's, so every task and
+    the worker sign with the same key, as the key set has to say. Kept in
+    memory once read. A failure to reach Secrets Manager is not kept: the next
+    call asks again.
+    """
+    global _stored
+    name = os.environ.get("OIDC_SIGNING_KEY_SECRET", "").strip()
+    if not name:
+        return ""
+    if _stored is None:
+        try:
+            _stored = _load_or_create(name)
+        except Exception:  # noqa: BLE001 - unreachable is "not available yet"
+            return ""
+    return _stored
+
+
+def _load_or_create(name: str) -> str:
+    import boto3
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    client = boto3.client("secretsmanager")
+    try:
+        return json.loads(client.get_secret_value(SecretId=name)["SecretString"])["pem"]
+    except client.exceptions.ResourceNotFoundException:
+        pass
+    pem = rsa.generate_private_key(public_exponent=65537, key_size=2048).private_bytes(
+        serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption()).decode()
+    try:
+        client.create_secret(Name=name, SecretString=json.dumps({"pem": pem}),
+                             Description="The platform's OpenID Connect signing key (§871)")
+        return pem
+    except client.exceptions.ResourceExistsException:
+        # Another task made it first: sign with that one.
+        return json.loads(client.get_secret_value(SecretId=name)["SecretString"])["pem"]
 
 
 def available() -> bool:

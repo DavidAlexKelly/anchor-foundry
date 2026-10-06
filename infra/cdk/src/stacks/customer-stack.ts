@@ -13,6 +13,10 @@ import { MonitoringConstruct } from "../constructs/monitoring";
 import { ServicesConstruct } from "../constructs/services";
 import { webAclRules } from "../constructs/waf";
 
+/** The secret the platform's OIDC signing key is kept in (§871): under the
+ * prefix the task roles may manage (`anchor/connections/*`, §846). */
+export const OIDC_SIGNING_KEY_SECRET = "anchor/connections/_platform/oidc-signing-key";
+
 /** Where Next serves its content-hashed build output (§865). */
 export const STATIC_ASSETS = "/_next/static/*";
 
@@ -241,6 +245,16 @@ export class CustomerStack extends Stack {
     // same for every stack, so it cannot carry this pool's hosted UI; it asks
     // the API (`GET /api/auth/config`), which reads it here.
     api.addEnvironment("COGNITO_DOMAIN", auth.userPoolDomain.baseUrl());
+    // The platform as an OpenID Connect provider (§599, §871), so a source can
+    // trust the platform instead of holding its credentials. The issuer is
+    // where a source fetches the key set, so it is the address a source can
+    // reach; the key is one the first API task makes and stores under the
+    // prefix both roles may read, since CloudFormation cannot generate one.
+    const worker = services.workerService.taskDefinition.defaultContainer!;
+    for (const container of [api, worker]) {
+      container.addEnvironment("OIDC_ISSUER", `${servedAt}/api/oidc`);
+      container.addEnvironment("OIDC_SIGNING_KEY_SECRET", OIDC_SIGNING_KEY_SECRET);
+    }
 
     // ---- Outputs consumed by the control plane registry ---------------------
     new CfnOutput(this, "PlatformUrl", { value: servedAt });
