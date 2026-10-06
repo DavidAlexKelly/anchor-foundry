@@ -20,7 +20,8 @@
  *   5. a listener trusts only the X-Forwarded-For entries nobody else can
  *      write, which depends on whether the load balancer is public (§850);
  *   6. a deleted file outlives the database backups that may name it (§852);
- *   7. the edge caches the web app's build output and nothing else (§865).
+ *   7. the edge caches the web app's build output and nothing else (§865);
+ *   8. invitations go through SES when the stack is given an address (§866).
  *
  * Run: `npx ts-node src/checks/stack-check.ts`
  */
@@ -39,11 +40,12 @@ const context = JSON.parse(
   fs.readFileSync(path.join(__dirname, "..", "..", "cdk.json"), "utf8")
 ).context;
 
-function synth(platformUrl?: string): Template {
+function synth(platformUrl?: string, inviteFromEmail?: string): Template {
   const app = new App({ context: { ...context, "aws:cdk:bundling-stacks": [] } });
   const stack = new CustomerStack(app, "PlatformStack", {
     orgSlug: "check",
     platformUrl,
+    inviteFromEmail,
     vendorEcrRegistry: "111111111111.dkr.ecr.eu-west-2.amazonaws.com",
     imageTag: "check",
     objectStore: "postgres",
@@ -197,6 +199,18 @@ check("the web app's build output is cached, and nothing else is", () => {
     path.join(__dirname, "..", "..", "..", "..", "apps", "web", "Dockerfile"), "utf8");
   if (!nextServe.includes(".next/static ./apps/web/.next/static")) {
     throw new Error("the web image no longer serves .next/static: re-derive this path");
+  }
+});
+
+console.log("where invitations come from (§866):");
+
+check("Cognito sends them unless an SES address is given, and then SES does", () => {
+  const pool = (t: Template) => only(t, "AWS::Cognito::UserPool").Properties.EmailConfiguration;
+  const own = pool(plain);
+  if (own && own.EmailSendingAccount !== "COGNITO_DEFAULT") throw new Error(JSON.stringify(own));
+  const ses = pool(synth(undefined, "platform@data.example.com"));
+  if (ses?.EmailSendingAccount !== "DEVELOPER" || !JSON.stringify(ses).includes("platform@data.example.com")) {
+    throw new Error(`with an address: ${JSON.stringify(ses)}`);
   }
 });
 

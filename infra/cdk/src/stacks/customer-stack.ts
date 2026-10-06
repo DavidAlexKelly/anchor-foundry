@@ -24,6 +24,8 @@ export interface CustomerStackProps extends StackProps {
    * distribution yet (decision 0025, option C), so this is for a domain set
    * up outside it. */
   readonly platformUrl?: string;
+  /** Sends invitations through SES from this verified address (§866). */
+  readonly inviteFromEmail?: string;
   readonly vendorEcrRegistry: string; // e.g. 123456789012.dkr.ecr.eu-west-2.amazonaws.com
   readonly imageTag: string;
   /** See DataStoresConstruct - defaults to true, only ever overridden for
@@ -118,7 +120,10 @@ export class CustomerStack extends Stack {
 
     // ---- Auth ---------------------------------------------------------------
     // Its sign-in addresses are set below, once the distribution exists.
-    const auth = new AuthConstruct(this, "Auth", { orgSlug: props.orgSlug });
+    const auth = new AuthConstruct(this, "Auth", {
+      orgSlug: props.orgSlug,
+      inviteFromEmail: props.inviteFromEmail,
+    });
 
     // ---- Schema migrations: run once per deploy, after the database exists
     // and before any service that depends on its schema starts (§17) --------

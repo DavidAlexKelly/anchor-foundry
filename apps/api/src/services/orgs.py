@@ -14,6 +14,7 @@ from collections.abc import Sequence
 from typing import Any, Protocol
 from uuid import UUID
 
+from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection
 
@@ -41,6 +42,37 @@ class NullCognitoGateway:
         return None
 
 
+def invite_refusal(exc: Exception) -> Exception:
+    """What to tell the inviter when Cognito refuses an invitation.
+
+    Every refusal used to reach the 500 handler. The one a growing
+    organisation meets first is Cognito's own email: a pool that sends through
+    it, as a stack does unless given an SES address, is limited by AWS to 50
+    messages a day, and the 51st invitation of the day failed as a server
+    fault with no hint that waiting, or configuring SES, would fix it. Codes
+    that say nothing to the inviter are returned unchanged, and stay faults.
+    """
+    error = getattr(exc, "response", {}).get("Error", {})
+    code, message = error.get("Code", ""), error.get("Message", "")
+    if code == "LimitExceededException":
+        return InviteRefused(
+            503,
+            "the invitation email could not be sent: this deployment has reached the "
+            "daily limit of Cognito's own email - try again tomorrow, or have the "
+            "deployment send through SES (docs/deploying.md, inviteFromEmail)",
+        )
+    if code == "UsernameExistsException":
+        return ConflictError("this email already has a sign-in on this platform")
+    if code in ("InvalidParameterException", "CodeDeliveryFailureException"):
+        return InviteRefused(422, f"the invitation could not be sent: {message}")
+    return exc
+
+
+class InviteRefused(HTTPException):
+    def __init__(self, status_code: int, detail: str) -> None:
+        super().__init__(status_code=status_code, detail=detail)
+
+
 class Boto3CognitoGateway:
     """Production gateway. AdminCreateUser sends the invite email with a
     Cognito-generated temporary password; the invited user sets a real one
@@ -58,16 +90,21 @@ class Boto3CognitoGateway:
         self._user_pool_id = user_pool_id
 
     def admin_create_user(self, email: str, display_name: str) -> str:
-        resp = self._client.admin_create_user(
-            UserPoolId=self._user_pool_id,
-            Username=email,
-            UserAttributes=[
-                {"Name": "email", "Value": email},
-                {"Name": "email_verified", "Value": "true"},
-                {"Name": "name", "Value": display_name},
-            ],
-            DesiredDeliveryMediums=["EMAIL"],
-        )
+        from botocore.exceptions import ClientError
+
+        try:
+            resp = self._client.admin_create_user(
+                UserPoolId=self._user_pool_id,
+                Username=email,
+                UserAttributes=[
+                    {"Name": "email", "Value": email},
+                    {"Name": "email_verified", "Value": "true"},
+                    {"Name": "name", "Value": display_name},
+                ],
+                DesiredDeliveryMediums=["EMAIL"],
+            )
+        except ClientError as exc:
+            raise invite_refusal(exc) from exc
         attrs = {a["Name"]: a["Value"] for a in resp["User"]["Attributes"]}
         return attrs["sub"]
 

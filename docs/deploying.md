@@ -125,6 +125,15 @@ With the default (`true`), a failed CREATE cannot roll back past the RDS
 instance and you are into the manual teardown runbook — CloudFormation checks
 the template's declared property, not the live value.
 
+**Invitations, past the first fifty a day.** A stack's user pool sends
+invitation and password-reset emails through Cognito's own email unless told
+otherwise, and AWS limits that to 50 messages a day per account. The 51st
+invitation of a day is refused, and the platform says so and why (§866).
+`-c inviteFromEmail=platform@<your domain>` sends them through SES instead.
+The address must be verified in SES in the stack's region first, and an SES
+account still in the sandbox can only send to verified recipients, so
+request production access for a real organisation.
+
 `-c platformUrl=https://<host>` is optional: a further address, beside the
 distribution's own, that sign-in may send a viewer back to. Pass it only for a
 domain you have pointed at the distribution yourself; the stack does not set

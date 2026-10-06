@@ -1,10 +1,15 @@
-import { Duration, RemovalPolicy } from "aws-cdk-lib";
+import { Duration, RemovalPolicy, Stack } from "aws-cdk-lib";
 import * as cognito from "aws-cdk-lib/aws-cognito";
 import { Construct } from "constructs";
 
 export interface AuthConstructProps {
   /** Customer org slug, used for the hosted UI domain prefix. */
   readonly orgSlug: string;
+  /** An address verified in SES, in the stack's region, to send invitations
+   * and password resets from (§866). Unset, Cognito sends them itself, which
+   * AWS limits to 50 messages a day per account: the 51st invitation of a
+   * day is refused. */
+  readonly inviteFromEmail?: string;
 }
 
 /**
@@ -40,6 +45,12 @@ export class AuthConstruct extends Construct {
         tempPasswordValidity: Duration.days(7),
       },
       accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
+      ...(props.inviteFromEmail
+        ? { email: cognito.UserPoolEmail.withSES({
+              fromEmail: props.inviteFromEmail,
+              sesRegion: Stack.of(scope).region,
+            }) }
+        : {}),
       // Deleting the stack must not silently destroy the customer's user
       // directory; destroy is an explicit control-plane operation.
       removalPolicy: RemovalPolicy.RETAIN,
