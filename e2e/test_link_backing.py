@@ -58,7 +58,7 @@ def test_the_dialog_backs_a_link_with_an_object_type(page, api, world) -> None:
     open_objects(page, world)
     page.get_by_role("button", name="New link type").click()
     dialog = page.get_by_role("dialog")
-    dialog.get_by_label("Name").fill(f"Flew {world.tag}")
+    page.get_by_test_id("link-name").fill(f"Flew {world.tag}")
     pick_type(page, "link-from-type", {"id": world.aircraft, "api_name": f"aircraft_{world.tag}"})
     pick_type(page, "link-to-type", {"id": world.flights, "api_name": f"flight_{world.tag}"})
     page.get_by_test_id("link-joined-by").select_option("backing")

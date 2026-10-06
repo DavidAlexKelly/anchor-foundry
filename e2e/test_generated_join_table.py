@@ -22,7 +22,7 @@ def test_generating_a_join_table_fills_the_link_in(page, api, world) -> None:
     open_objects(page, world)
     page.get_by_role("button", name="New link type").click()
     dialog = page.get_by_role("dialog")
-    dialog.get_by_label("Name").fill(f"Serviced {tag}")
+    page.get_by_test_id("link-name").fill(f"Serviced {tag}")
     dialog.get_by_label("Cardinality").select_option("many_to_many")
     page.get_by_test_id("link-joined-by").select_option("join_table")
     generate = page.get_by_test_id("link-generate-join-table")
