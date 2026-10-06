@@ -1009,6 +1009,8 @@ export interface AuditEntry {
 // ---- first-owner bootstrap (unauthenticated, one-time only) ----------------
 export interface BootstrapStatus {
   needs_setup: boolean;
+  /** Its first owner is created by whoever provisioned it, not here (§886). */
+  by_provisioner?: boolean;
 }
 
 export interface BootstrapFirstOwnerInput {
