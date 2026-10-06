@@ -19,6 +19,7 @@ from playwright.sync_api import expect
 
 from api import Module, layout, object_set
 from conftest import WEB_BASE, _signed_in, open_builder, open_module, save, settled
+from ontology_page import pick_type
 from test_series_column import module  # noqa: F401
 
 
@@ -718,7 +719,9 @@ def test_a_reader_adds_any_object_s_series(page, api, module) -> None:
     rows = page.locator("[data-testid='series-plots'] tbody tr")
     expect(rows).to_have_count(1)
     page.get_by_role("button", name="Add data").click()
-    page.get_by_label("Data source").select_option(module.sensor_type)
+    # Through the picker's search when the workspace outgrew a page (§893).
+    pick_type(page, "series-data-source", {"id": module.sensor_type,
+                                            "api_name": f"sensor_{module.tag}"})
     page.get_by_label("Find an object").fill("sou")
     expect(page.get_by_label("Data object").locator("option")).to_have_text(["Object…", "South sensor"])
     page.get_by_label("Data object").select_option(label="South sensor")
