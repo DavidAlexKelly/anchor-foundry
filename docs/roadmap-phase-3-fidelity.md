@@ -356,6 +356,8 @@ The sync pays for it: the trigger, one more index and the `ANALYZE` add about 17
 
 **E.16 — A deployed sign-in page had no hosted UI to send anyone to. Done (§851), S.** The web app read the hosted UI's address and the app client from `NEXT_PUBLIC_COGNITO_*`, which Next writes into the bundle at build time. One web image serves every customer's stack, each with its own pool, and the documented builds pass neither. So a deployed page said sign-in was not configured, unless someone rebuilt the image for that one stack after deploying it (STATUS.md §20 did). The stack now gives the API `COGNITO_DOMAIN`, and the API answers `GET /api/auth/config` with the domain and client to anyone, since neither is a secret. The page asks it first and keeps the build's values for development. `stack-check.ts` holds the API's variables to this stack's pool, and `e2e/test_sign_in_config.py` follows the page from the API's answer to the hosted UI's authorize request. **Not verified:** a sign-in on a deployed stack.
 
+**E.17 — Nothing deleted from the data bucket was ever gone. Done (§852), S.** The data bucket is versioned (§10) and had no lifecycle rule. So every previous version of every file was kept for the life of the stack: a deleted dataset, every replaced file, and every upload abandoned part-way. All of it was billed, and "delete" never removed customer data. A previous version now lasts 30 days and an abandoned upload a week. Thirty is the database's 14 days of backups plus two weeks, because the restore runbook repairs a file deleted since the restore point from its previous version. `stack-check.ts` holds the bucket's window past the backups', and refuses any rule that expires current files.
+
 ## Suggested order
 
 **First, out of band:** E.1.
