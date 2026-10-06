@@ -136,6 +136,15 @@ async def bootstrap_first_owner(
     owner_email: str,
     owner_display_name: str,
 ) -> UUID:
+    # **Refused before Cognito is asked anything (§882).** The route is
+    # unauthenticated, and it asked Cognito to create the user first and let
+    # the database refuse after. So on every platform already set up, anyone
+    # could create users in its pool, and have Cognito email each one an
+    # invitation with a temporary password, from the stack's own sender, to
+    # any address they chose, as fast as they could post. The database's
+    # check below still decides a race between two first owners.
+    if not await platform_needs_setup(conn):
+        raise ConflictError("this platform has already been set up")
     # Cognito identity created before the DB call: if the DB call then finds
     # the platform already bootstrapped, this leaves one orphaned unused
     # Cognito user rather than a DB row with no matching identity - the

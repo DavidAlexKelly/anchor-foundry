@@ -44,7 +44,20 @@ def test_status_is_false_once_any_organisation_exists(client: TestClient, fx: Fi
     assert r.json() == {"needs_setup": False}
 
 
-def test_first_owner_conflicts_once_platform_is_set_up(client: TestClient, fx: Fixture) -> None:
+def test_first_owner_conflicts_once_platform_is_set_up(
+    client: TestClient, fx: Fixture, monkeypatch
+) -> None:
+    """Refused before Cognito is asked (§882): this route needs no sign-in,
+    and each user Cognito creates is an invitation email to an address of
+    the caller's choosing."""
+    asked: list[str] = []
+
+    class Recording(NullCognitoGateway):
+        def admin_create_user(self, email: str, display_name: str) -> str:
+            asked.append(email)
+            return super().admin_create_user(email, display_name)
+
+    monkeypatch.setattr(bootstrap_routes, "_cognito", Recording())
     r = client.post(
         "/api/bootstrap/first-owner",
         json={
@@ -56,6 +69,7 @@ def test_first_owner_conflicts_once_platform_is_set_up(client: TestClient, fx: F
     )
     assert r.status_code == 409
     assert r.json() == {"detail": "this platform has already been set up"}
+    assert asked == []
 
 
 def test_bad_slug_is_422(client: TestClient) -> None:
