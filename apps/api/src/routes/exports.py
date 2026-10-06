@@ -333,7 +333,7 @@ async def run_export(
     # since its last run, and the version before each APPEND. The bytes are
     # resolved only for the versions a run sends, inside the export's thread.
     async with user_connection(access.auth.user_id) as conn:
-        history = await ds_service.list_versions(
+        history = await ds_service.version_history(
             conn, access.project_id, UUID(str(export["dataset_id"])))
     keys = {int(v["version_number"]): v["s3_manifest_key"] for v in history}
 
