@@ -14846,11 +14846,18 @@ export function CanvasSeriesAnalysis({
   const defaultLocation = typeof namedProject === "string" && namedProject ? namedProject : projectId;
   const [saveDraft, setSaveDraft] = useState<{ name: string; visibility: string; location: string } | null>(null);
   const [openFrom, setOpenFrom] = useState<string | null>(null);
+  // Searched, a page at a time (§828): every project in the workspace was an
+  // <option>, and a workspace can hold ten thousand. A project once offered
+  // keeps its name when a later search no longer lists it.
+  const [locationSearch, setLocationSearch] = useState("");
   const locations = useQuery({
-    queryKey: ["canvas-series-analysis-locations", workspaceId],
-    queryFn: () => api.projects(workspaceId),
+    queryKey: ["canvas-series-analysis-locations", workspaceId, locationSearch],
+    queryFn: () => api.projectPage(workspaceId, locationSearch, 0),
     enabled: !!saveDraft && !fixedSaveLocation,
+    placeholderData: (previous) => previous,
   });
+  const locationNames = React.useRef(new Map<string, string>());
+  for (const p of locations.data?.items ?? []) locationNames.current.set(p.id, p.name);
   const openable = useQuery({
     queryKey: ["canvas-series-analyses", workspaceId, openFrom],
     queryFn: () => seriesAnalysisApi.list(workspaceId, openFrom!),
@@ -15350,12 +15357,18 @@ export function CanvasSeriesAnalysis({
                 <option value="public">Public</option>
               </select>
               {!fixedSaveLocation && (
+                <input type="search" aria-label="Find a project to save in" placeholder="Find a project"
+                       value={locationSearch} onChange={(e) => setLocationSearch(e.target.value)} />
+              )}
+              {!fixedSaveLocation && (
                 <select aria-label="Save location" value={saveDraft.location}
                         onChange={(e) => setSaveDraft({ ...saveDraft, location: e.target.value })}>
-                  {!(locations.data ?? []).some((p) => p.id === saveDraft.location) && (
-                    <option value={saveDraft.location}>This project</option>
+                  {!(locations.data?.items ?? []).some((p) => p.id === saveDraft.location) && (
+                    <option value={saveDraft.location}>
+                      {locationNames.current.get(saveDraft.location) ?? "This project"}
+                    </option>
                   )}
-                  {(locations.data ?? []).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  {(locations.data?.items ?? []).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>
               )}
               <button type="button" className="btn" disabled={!saveDraft.name.trim()}

@@ -176,8 +176,6 @@ export const api = {
     request<import("./types").NotificationRecipient[]>(
       `/workspaces/${wid}/notification-recipients`,
     ),
-  projects: (workspaceId: string) =>
-    request<ProjectSummary[]>(`/workspaces/${workspaceId}/projects`),
   /** A page of the workspace grid, searched by name or slug (§823). */
   projectPage: (workspaceId: string, q: string, offset: number) =>
     request<{ items: ProjectSummary[]; total: number }>(
