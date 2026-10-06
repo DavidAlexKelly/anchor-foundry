@@ -21,6 +21,7 @@ of the registry, without the product's web build anywhere near it.
 """
 from __future__ import annotations
 
+import hmac
 import os
 from typing import Any
 
@@ -83,7 +84,9 @@ def _require_admin(authorization: str = Header(default="")) -> None:
     them would be scaffolding nobody asked for - but it is a token, not an
     open endpoint, because this route mints credentials."""
     token = authorization.removeprefix("Bearer ").strip()
-    if not _admin_token or token != _admin_token:
+    # Compared in constant time (§887): `!=` returns at the first byte that
+    # differs, which is how a token is guessed one byte at a time.
+    if not _admin_token or not hmac.compare_digest(token.encode(), _admin_token.encode()):
         raise HTTPException(status_code=401, detail="operator token required")
 
 
@@ -118,7 +121,7 @@ def create_app(
     )
     public_url = base_url or os.environ.get("CONTROL_PLANE_PUBLIC_URL", "")
 
-    app = FastAPI(title="Anchor onboarding", docs_url=None, redoc_url=None)
+    app = FastAPI(title="Anchor onboarding", docs_url=None, redoc_url=None, openapi_url=None)
 
     @app.get("/health")
     def health() -> dict[str, str]:
