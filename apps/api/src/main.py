@@ -18,6 +18,7 @@ from fastapi.responses import JSONResponse
 from starlette.requests import Request as StarletteRequest
 
 from .lib.body_limit import BodyLimit
+from .lib.security_headers import SecurityHeaders
 from .lib.config import get_settings
 from .lib.db import dispose_engine, get_engine
 from .lib.errors import BreakingChangeError
@@ -139,6 +140,10 @@ def create_app() -> FastAPI:
     # observability middleware below, so a refusal still has a request id and
     # an access line.
     app.add_middleware(BodyLimit)
+    # And every response, a refusal from the one above included, says not to
+    # sniff it, not to frame it elsewhere, and how much of a referrer to send
+    # (§836).
+    app.add_middleware(SecurityHeaders)
 
     # Request ids, access lines, metrics and the unhandled-error record (§802).
     # After CORS, so it is the outer of the two and times the whole request.
