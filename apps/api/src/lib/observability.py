@@ -260,6 +260,13 @@ def install(app: Any) -> Metrics:
     @app.get(METRICS_PATH, include_in_schema=False)
     async def metrics_endpoint(request: Request) -> Response:
         wanted = os.environ.get("METRICS_TOKEN", "")
+        if not wanted and os.environ.get("ECS_CONTAINER_METADATA_URI_V4"):
+            # **Closed on a stack unless a token opens it (§884).** Through
+            # CloudFront this was public: every route, its traffic and its
+            # error rate, for anyone to read. Nothing on a stack scrapes it -
+            # its alarms count log lines (§815) - so a deployment that wants
+            # it sets METRICS_TOKEN and its scraper sends it.
+            return PlainTextResponse("not found\n", status_code=404)
         if wanted:
             given = request.headers.get("authorization", "")
             if not hmac.compare_digest(given.encode(), f"Bearer {wanted}".encode()):
