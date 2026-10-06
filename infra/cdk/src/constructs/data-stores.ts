@@ -137,7 +137,7 @@ export class DataStoresConstruct extends Construct {
       cacheSubnetGroupName: redisSubnets.ref,
       securityGroupIds: [this.redisSecurityGroup.securityGroupId],
     });
-    this.redis.addDependency(redisSubnets);
+    this.redis.addResourceDependency(redisSubnets);
 
     // OpenSearch - object instance search and aggregation (spec §7, §8).
     this.search = new opensearch.Domain(this, "Search", {

@@ -69,7 +69,12 @@ export class ServicesConstruct extends Construct {
     super(scope, id);
     const { vpc } = props;
 
-    this.cluster = new ecs.Cluster(this, "Cluster", { vpc, containerInsights: true });
+    this.cluster = new ecs.Cluster(this, "Cluster", {
+      vpc,
+      // `containerInsights: true` before aws-cdk-lib 2.272 (§838); the same
+      // cluster setting, by the property that is not deprecated.
+      containerInsightsV2: ecs.ContainerInsights.ENABLED,
+    });
     const logGroup = new logs.LogGroup(this, "Logs", { retention: logs.RetentionDays.ONE_MONTH });
     this.logGroup = logGroup;
 
