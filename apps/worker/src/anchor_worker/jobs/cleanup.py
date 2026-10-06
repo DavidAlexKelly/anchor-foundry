@@ -13,6 +13,7 @@ import re
 
 from dagster import OpExecutionContext, job, op
 
+from .. import instance_index
 from ..resources import PlatformDatabase
 from ..storage import gateway_from_env
 
@@ -23,6 +24,12 @@ TOMBSTONE_PREFIX = re.compile(r"^workspaces/[a-z0-9-]+/(datasets/[0-9a-f-]{36}/)
 #: Tombstones handled per night. A workspace's prefix can hold many objects,
 #: and the rest wait for tomorrow rather than holding the run open.
 TOMBSTONES_PER_RUN = 500
+#: A workspace's object index (§876): one per object type since decision 0006,
+#: or the single index each workspace had before it. The prefix is
+#: `isolation_anchors`' search prefix; any other name on the domain is left.
+WORKSPACE_INDEX = re.compile(
+    r"^(ws-[0-9a-f]{12}-)(objects-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|object-instances)$"
+)
 
 
 @op
@@ -71,7 +78,40 @@ def purge_deleted_storage(context: OpExecutionContext, platform_db: PlatformData
     return purged
 
 
+@op
+def drop_orphaned_indices(context: OpExecutionContext, platform_db: PlatformDatabase) -> list[str]:
+    """Delete the object indices of workspaces that no longer exist (§876; db
+    0166).
+
+    Deleting a workspace deletes its object types by cascade, which no route
+    sees, so their indices stayed on the domain for the life of the stack.
+    Nothing to do where objects live in Postgres: there they were in the
+    workspace's schema, which `drop_orphaned_schemas` drops.
+    """
+    index = instance_index.from_env()
+    if index is None:
+        return []
+    dropped: list[str] = []
+    try:
+        names = [n for n in index.workspace_indices() if WORKSPACE_INDEX.match(n)]
+        prefixes = sorted({WORKSPACE_INDEX.match(n).group(1) for n in names})
+        if not prefixes:
+            return []
+        with platform_db.connect() as conn:
+            orphaned = {row[0] for row in conn.execute(
+                "SELECT orphaned_search_prefixes(%s)", (prefixes,)).fetchall()}
+        for name in names:
+            if WORKSPACE_INDEX.match(name).group(1) in orphaned:
+                index.drop_index(name)
+                dropped.append(name)
+                context.log.info("deleted index %s", name)
+    finally:
+        index.close()
+    return dropped
+
+
 @job
 def workspace_cleanup():
     drop_orphaned_schemas()
     purge_deleted_storage()
+    drop_orphaned_indices()
