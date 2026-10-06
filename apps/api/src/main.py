@@ -57,6 +57,8 @@ from .routes import workspaces as workspace_routes
 
 #: Postgres's `query_canceled`, which `statement_timeout` raises (§833).
 QUERY_CANCELED_SQLSTATE = "57014"
+#: unique_violation, serialization_failure, deadlock_detected (§862).
+CONCURRENT_CHANGE_SQLSTATES = frozenset({"23505", "40001", "40P01"})
 
 
 #: Set by the ECS agent in every task (it names the task metadata endpoint), and
@@ -192,6 +194,24 @@ def create_app() -> FastAPI:
                 content={"detail": f"the database stopped this request after {seconds:g} "
                                    "seconds - narrow what it asks for and try again"},
             )
+        if getattr(original, "sqlstate", None) in CONCURRENT_CHANGE_SQLSTATES:
+            # **Two requests changing one thing at once** (§862). A version
+            # number both took, a name both chose, two writers locking in
+            # opposite orders: the loser's statement fails, and the person
+            # behind it was answered with an anonymous 500. Nothing is wrong
+            # with the code or the input - the same request a moment later
+            # succeeds - so it is a conflict, said as one.
+            # A unique violation can also be a plain duplicate a service did
+            # not check for, so its sentence covers both; the constraint name
+            # says which.
+            diag = getattr(original, "diag", None)
+            constraint = getattr(diag, "constraint_name", None)
+            what = ("this would duplicate something that already exists, possibly made "
+                    "by another request at the same time"
+                    if original.sqlstate == "23505"
+                    else "this was changed by another request at the same time")
+            return JSONResponse(status_code=409, content={"detail": (
+                what + (f" ({constraint})" if constraint else "") + " - reload and try again")})
         if getattr(original, "sqlstate", None) != SCHEMA_POLICY_SQLSTATE:
             raise exc
         diag = getattr(original, "diag", None)
