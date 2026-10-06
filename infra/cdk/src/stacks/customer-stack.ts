@@ -11,6 +11,7 @@ import { DataStoresConstruct } from "../constructs/data-stores";
 import { MigrationTriggerConstruct } from "../constructs/migration";
 import { MonitoringConstruct } from "../constructs/monitoring";
 import { ServicesConstruct } from "../constructs/services";
+import { webAclRules } from "../constructs/waf";
 
 export interface CustomerStackProps extends StackProps {
   readonly orgSlug: string;
@@ -175,37 +176,9 @@ export class CustomerStack extends Stack {
         metricName: "platform-waf",
         sampledRequestsEnabled: true,
       },
-      rules: [
-        {
-          name: "AWSManagedCommonRules",
-          priority: 0,
-          overrideAction: { none: {} },
-          statement: {
-            managedRuleGroupStatement: { vendorName: "AWS", name: "AWSManagedRulesCommonRuleSet" },
-          },
-          visibilityConfig: {
-            cloudWatchMetricsEnabled: true,
-            metricName: "common-rules",
-            sampledRequestsEnabled: true,
-          },
-        },
-        {
-          name: "AWSManagedKnownBadInputs",
-          priority: 1,
-          overrideAction: { none: {} },
-          statement: {
-            managedRuleGroupStatement: {
-              vendorName: "AWS",
-              name: "AWSManagedRulesKnownBadInputsRuleSet",
-            },
-          },
-          visibilityConfig: {
-            cloudWatchMetricsEnabled: true,
-            metricName: "bad-inputs",
-            sampledRequestsEnabled: true,
-          },
-        },
-      ],
+      // What the two managed sets block, and the six rules that only count
+      // here because they refuse the platform's own data: constructs/waf.ts.
+      rules: webAclRules(),
     });
     new wafv2.CfnWebACLAssociation(this, "WafAssoc", {
       resourceArn: services.alb.loadBalancerArn,
