@@ -30,6 +30,8 @@ export interface CustomerStackProps extends StackProps {
   readonly platformUrl?: string;
   /** Sends invitations through SES from this verified address (§866). */
   readonly inviteFromEmail?: string;
+  /** SHA-256 of the provisioner's first-owner token (§886; ServicesProps). */
+  readonly bootstrapTokenHash?: string;
   readonly vendorEcrRegistry: string; // e.g. 123456789012.dkr.ecr.eu-west-2.amazonaws.com
   readonly imageTag: string;
   /** See DataStoresConstruct - defaults to true, only ever overridden for
@@ -155,6 +157,7 @@ export class CustomerStack extends Stack {
       webImage: `${props.vendorEcrRegistry}/platform-web`,
       imageTag: props.imageTag,
       objectIndexSecret: props.objectStore === "opensearch" ? data.searchMasterSecret : undefined,
+      bootstrapTokenHash: props.bootstrapTokenHash,
     });
     Tags.of(services.apiService).add("platform:component", "app-server");
     Tags.of(services.workerService).add("platform:component", "pipeline-runs");

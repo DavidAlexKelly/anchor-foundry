@@ -146,7 +146,7 @@ def _follow(service, registry: StackRegistry, org_slug: str) -> int:
         status = state["stack_status"]
         if status == StackStatus.READY.value:
             print(f"\nready: {state['platform_url']}")
-            print(f"first account: {state['platform_url']}/setup")
+            print(f"first account: {'invited ' + str(state.get('contact_email')) if state.get('owner_invited') else 'not yet created - run invite-owner'}")
             return 0
         if status == StackStatus.FAILED.value:
             print(f"\nfailed: {state['error'] or 'see the events above'}")
@@ -167,6 +167,17 @@ def _cmd_status(args: argparse.Namespace) -> int:
     for event in state["events"][:10]:
         print(f"  {event['timestamp'][11:19]}  {event['status']:<22}{event['logical_id']}")
     return 0
+
+
+def _cmd_invite_owner(args: argparse.Namespace) -> int:
+    """Create a ready stack's first owner, when the provisioner could not
+    (§886): the stack refuses one from anyone else."""
+    from .onboarding.wiring import service_from_env
+
+    _, service = service_from_env()
+    ok = service.provisioner.invite_owner(args.org_slug)
+    print(f"{args.org_slug}: {'first owner exists' if ok else 'could not create it - see the log'}")
+    return 0 if ok else 1
 
 
 def _cmd_serve(args: argparse.Namespace) -> int:
@@ -275,6 +286,11 @@ def main(argv: list[str] | None = None) -> int:
     status = subparsers.add_parser("status", help="Registry state and recent stack events.")
     status.add_argument("--org-slug", required=True)
     status.set_defaults(func=_cmd_status)
+
+    invite = subparsers.add_parser(
+        "invite-owner", help="Create a ready stack's first owner, if the provisioner could not.")
+    invite.add_argument("--org-slug", required=True)
+    invite.set_defaults(func=_cmd_invite_owner)
 
     serve = subparsers.add_parser("serve", help="Run the customer-facing onboarding app.")
     serve.add_argument("--host", default="0.0.0.0")

@@ -41,6 +41,12 @@ const inviteFromEmail = app.node.tryGetContext("inviteFromEmail") as string | un
 if (inviteFromEmail !== undefined && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(inviteFromEmail)) {
   throw new Error(`Invalid inviteFromEmail: ${inviteFromEmail}`);
 }
+// Only the provisioner may create the first owner, with the token whose hash
+// this is (§886). The token itself never enters the template.
+const bootstrapTokenHash = app.node.tryGetContext("bootstrapTokenHash") as string | undefined;
+if (bootstrapTokenHash !== undefined && !/^[0-9a-f]{64}$/.test(bootstrapTokenHash)) {
+  throw new Error("Invalid bootstrapTokenHash: a SHA-256 in lowercase hex");
+}
 if (alarmEmail !== undefined && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(alarmEmail)) {
   throw new Error(`Invalid alarmEmail: ${alarmEmail}`);
 }
@@ -69,6 +75,7 @@ new CustomerStack(app, "PlatformStack", {
   objectStore,
   alarmEmail,
   inviteFromEmail,
+  bootstrapTokenHash,
   env: region ? { region } : undefined,
   description: `Platform stack for ${orgSlug} - provisioned by the platform control plane`,
 });

@@ -100,6 +100,8 @@ class CustomerRecord:
     outputs: dict[str, str]
     created_at: datetime
     updated_at: datetime
+    #: When the provisioner created the platform's first owner (§886).
+    owner_invited_at: datetime | None = None
 
 
 _SCHEMA = """
@@ -130,6 +132,10 @@ ALTER TABLE customer_stacks ADD COLUMN IF NOT EXISTS contact_email text;
 ALTER TABLE customer_stacks ADD COLUMN IF NOT EXISTS onboarding_token_hash text;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_customer_stacks_onboarding_token
     ON customer_stacks (onboarding_token_hash) WHERE onboarding_token_hash IS NOT NULL;
+-- The token the provisioner creates the stack's first owner with (§886),
+-- encrypted like the external ID: the stack holds only its SHA-256.
+ALTER TABLE customer_stacks ADD COLUMN IF NOT EXISTS bootstrap_token_cipher bytea;
+ALTER TABLE customer_stacks ADD COLUMN IF NOT EXISTS owner_invited_at timestamptz;
 """
 
 _SLUG_RE = r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
@@ -259,6 +265,33 @@ class StackRegistry:
             raise KeyError(f"unknown customer {org_slug!r}")
         return self._codec.decrypt(bytes(row["external_id_cipher"]))
 
+    def bootstrap_token_for(self, org_slug: str) -> str:
+        """The token this customer's stack creates its first owner with
+        (§886), made on first asking and the same on every deploy after, so
+        each deploy hands the stack the same hash."""
+        fresh = self._codec.encrypt(secrets.token_urlsafe(32))
+        with self._conn() as conn:
+            row = conn.execute(
+                """UPDATE customer_stacks
+                      SET bootstrap_token_cipher = COALESCE(bootstrap_token_cipher, %s)
+                    WHERE org_slug=%s RETURNING bootstrap_token_cipher""",
+                (fresh, org_slug),
+            ).fetchone()
+            conn.commit()
+        if row is None:
+            raise KeyError(f"unknown customer {org_slug!r}")
+        return self._codec.decrypt(bytes(row["bootstrap_token_cipher"]))
+
+    def mark_owner_invited(self, org_slug: str) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                """UPDATE customer_stacks
+                      SET owner_invited_at = COALESCE(owner_invited_at, now()), updated_at=now()
+                    WHERE org_slug=%s""",
+                (org_slug,),
+            )
+            conn.commit()
+
     # ---- onboarding (ROADMAP section 7 item 2) -------------------------------
     def set_onboarding(
         self, org_slug: str, *, org_name: str, contact_email: str, token_hash: str
@@ -307,4 +340,5 @@ class StackRegistry:
             outputs=dict(row["outputs"] or {}),  # type: ignore[arg-type]
             created_at=row["created_at"] if isinstance(row["created_at"], datetime) else datetime.now(timezone.utc),
             updated_at=row["updated_at"] if isinstance(row["updated_at"], datetime) else datetime.now(timezone.utc),
+            owner_invited_at=row.get("owner_invited_at"),  # type: ignore[arg-type]
         )

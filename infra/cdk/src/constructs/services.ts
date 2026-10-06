@@ -74,6 +74,9 @@ export interface ServicesProps {
    * Unset, both use Postgres - the two read the same pair of variables, so
    * they cannot disagree about where objects are. */
   readonly objectIndexSecret?: secretsmanager.ISecret;
+  /** SHA-256, in hex, of the token the provisioner creates the first owner
+   * with (§886). Set, the API's first-owner route refuses anyone else. */
+  readonly bootstrapTokenHash?: string;
 }
 
 /**
@@ -464,7 +467,12 @@ export class ServicesConstruct extends Construct {
       // one hop is the only entry nobody can forge, and an allowlist refuses
       // senders that come through CloudFront. stack-check.ts holds the two
       // together.
-      extraEnv: { LISTENER_PROXY_HOPS: "1", ...objectIndexEnv, ...duckdbEnv },
+      extraEnv: {
+        LISTENER_PROXY_HOPS: "1",
+        ...objectIndexEnv,
+        ...duckdbEnv,
+        ...(props.bootstrapTokenHash ? { BOOTSTRAP_TOKEN_SHA256: props.bootstrapTokenHash } : {}),
+      },
     });
     // Everything anchor_worker/transform_dispatch.py needs to find the runner.
     // Passed as configuration rather than discovered at run time: a worker that

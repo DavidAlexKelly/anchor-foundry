@@ -41,12 +41,13 @@ const context = JSON.parse(
   fs.readFileSync(path.join(__dirname, "..", "..", "cdk.json"), "utf8")
 ).context;
 
-function synth(platformUrl?: string, inviteFromEmail?: string): Template {
+function synth(platformUrl?: string, inviteFromEmail?: string, bootstrapTokenHash?: string): Template {
   const app = new App({ context: { ...context, "aws:cdk:bundling-stacks": [] } });
   const stack = new CustomerStack(app, "PlatformStack", {
     orgSlug: "check",
     platformUrl,
     inviteFromEmail,
+    bootstrapTokenHash,
     vendorEcrRegistry: "111111111111.dkr.ecr.eu-west-2.amazonaws.com",
     imageTag: "check",
     objectStore: "postgres",
@@ -250,6 +251,29 @@ check("the proxy hops match how the load balancer is reached", () => {
     .find((e) => e.Name === "LISTENER_PROXY_HOPS")?.Value;
   const want = scheme === "internal" ? "2" : "1";
   if (hops !== want) throw new Error(`a ${scheme} load balancer with LISTENER_PROXY_HOPS=${hops}; expected ${want}`);
+});
+
+console.log("who creates the first owner (§886):");
+
+function envOf(template: Template, service: string): Record<string, string> {
+  const found = Object.entries(template.findResources("AWS::ECS::TaskDefinition"))
+    .filter(([id]) => id.startsWith(`Services${service}TaskDef`));
+  if (found.length !== 1) throw new Error(`expected one ${service} task definition`);
+  const env: { Name: string; Value: string }[] = found[0][1].Properties.ContainerDefinitions[0].Environment ?? [];
+  return Object.fromEntries(env.map((e) => [e.Name, e.Value]));
+}
+
+const HASH = "a".repeat(64);
+const provisioned = synth(undefined, undefined, HASH);
+
+check("the API refuses all but the provisioner's token when given its hash", () => {
+  const api = envOf(provisioned, "api");
+  if (api.BOOTSTRAP_TOKEN_SHA256 !== HASH) throw new Error(`BOOTSTRAP_TOKEN_SHA256 is ${api.BOOTSTRAP_TOKEN_SHA256}`);
+  if ("BOOTSTRAP_TOKEN_SHA256" in envOf(provisioned, "worker")) throw new Error("the worker was given it");
+});
+
+check("without it, the setup page works as before", () => {
+  if ("BOOTSTRAP_TOKEN_SHA256" in envOf(plain, "api")) throw new Error("set with no hash given");
 });
 
 if (failures.length) {

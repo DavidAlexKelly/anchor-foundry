@@ -103,7 +103,14 @@ class DemoProvisioner:
             org_slug, StackStatus.READY,
             platform_url="https://demo-stack.anchor.invalid", outputs=outputs,
         )
+        # As the real provisioner does once a stack is up (§886): the page
+        # then says where the first owner's invitation went.
+        self._registry.mark_owner_invited(org_slug)
         return outputs
+
+    def invite_owner(self, org_slug: str) -> bool:
+        self._registry.mark_owner_invited(org_slug)
+        return True
 
 
 def demo_service(registry: StackRegistry, **kwargs: Any):
