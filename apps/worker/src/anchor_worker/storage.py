@@ -169,10 +169,27 @@ def slugify(name: str) -> str:
     return slug
 
 
+#: The data bucket's variable: the name the stack sets (`commonEnv` in
+#: infra/cdk/src/constructs/services.ts) and the API reads. This read
+#: `DATA_BUCKET`, which nothing set, so every deployed worker wrote to its own
+#: container's disk - syncs, model outputs and exports the API, reading S3,
+#: could never see (§844).
+BUCKET_ENV = "S3_DATA_BUCKET"
+#: Set by the ECS agent in every task, and by nothing in development or tests.
+ECS_MARKER = "ECS_CONTAINER_METADATA_URI_V4"
+
+
 def gateway_from_env() -> StorageGateway:
     import os
 
-    bucket = os.environ.get("DATA_BUCKET")
+    bucket = os.environ.get(BUCKET_ENV)
     if bucket:
         return S3StorageGateway(bucket, os.environ.get("AWS_REGION", "us-east-1"))
+    if os.environ.get(ECS_MARKER):
+        # Deployed and no bucket: the local fallback here is a disk nobody
+        # else can read, which is the failure this replaced. Refuse instead.
+        raise RuntimeError(
+            f"running on ECS without {BUCKET_ENV}: refusing to store data on "
+            "the worker's own disk"
+        )
     return LocalStorageGateway(os.environ.get("LOCAL_STORAGE_ROOT", "/tmp/anchor-worker-storage"))
