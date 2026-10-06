@@ -13,6 +13,9 @@ import { MonitoringConstruct } from "../constructs/monitoring";
 import { ServicesConstruct } from "../constructs/services";
 import { webAclRules } from "../constructs/waf";
 
+/** Where Next serves its content-hashed build output (§865). */
+export const STATIC_ASSETS = "/_next/static/*";
+
 export interface CustomerStackProps extends StackProps {
   readonly orgSlug: string;
   /** A further address the customer serves the platform at, as
@@ -189,16 +192,33 @@ export class CustomerStack extends Stack {
     });
 
     // ---- CloudFront in front of the ALB (§7) --------------------------------
+    const origin = new origins.LoadBalancerV2Origin(services.alb, {
+      // Plain HTTP to a public load balancer: decision 0025 (roadmap E.11).
+      protocolPolicy: cloudfront.OriginProtocolPolicy.HTTP_ONLY,
+    });
     const distribution = new cloudfront.Distribution(this, "Cdn", {
       defaultBehavior: {
-        origin: new origins.LoadBalancerV2Origin(services.alb, {
-          // Plain HTTP to a public load balancer: decision 0025 (roadmap E.11).
-          protocolPolicy: cloudfront.OriginProtocolPolicy.HTTP_ONLY,
-        }),
+        origin,
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
         allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
-        cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED, // app traffic; static assets get their own behaviour later
+        cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED, // app traffic: pages and the API
         originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER,
+      },
+      additionalBehaviors: {
+        // **The web app's build output, cached at the edge** (§865). Next
+        // names every file under /_next/static/ by a hash of its contents
+        // and serves it as immutable, so a cached copy can never be stale.
+        // Under the default behaviour every page load fetched its JavaScript
+        // and CSS through the load balancer from a web task, uncached, on
+        // every visit. Nothing a person sees differs, and nothing here is
+        // per-user: no cookie, header or query string is forwarded.
+        [STATIC_ASSETS]: {
+          origin,
+          viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+          allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD,
+          cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
+          compress: true,
+        },
       },
     });
 
