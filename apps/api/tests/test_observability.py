@@ -276,8 +276,10 @@ def deployed_filters() -> dict[str, tuple[str, str]]:
         for name, pattern, value in re.findall(
             r'counted\(\s*"(\w+)",\s*\'([^\']+)\'(?:,\s*"([^"]+)")?\s*\)', source)
     }
-    assert set(found) == {"ApiRequests", "ApiServerErrors", "ApiUnhandledErrors", "ApiLatency"}, found
-    return found
+    api = {"ApiRequests", "ApiServerErrors", "ApiUnhandledErrors", "ApiLatency"}
+    # The worker's is checked against the worker's lines (§889).
+    assert set(found) == api | {"WorkerRunFailures"}, found
+    return {name: found[name] for name in api}
 
 
 def matches(pattern: str, line: dict) -> bool:
