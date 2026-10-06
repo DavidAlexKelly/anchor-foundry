@@ -51,6 +51,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 from ..lib.db import fetch_all
 from . import instance_store
+from ..lib import duck
 
 
 async def check(
@@ -173,7 +174,7 @@ def distinct_keys(files: list[tuple[str, str]]) -> int:
         f'SELECT CAST("{column.replace(chr(34), chr(34) * 2)}" AS VARCHAR) AS k '
         f"FROM read_parquet('{quoted(path)}')"
         for path, column in files)
-    con = duckdb.connect()
+    con = duck.connect()
     try:
         return int(con.execute(
             # `count(DISTINCT ...)` leaves NULL out by itself.

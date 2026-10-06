@@ -27,6 +27,30 @@ export const API_TASKS = { min: 2, max: 6 };
 export const WEB_TASKS = { min: 2, max: 4 };
 export const SCALE_AT_CPU_PERCENT = 60;
 
+/**
+ * **How much memory a task has, and how much of it one DuckDB may hold**
+ * (§875; E.27). Every dataset operation opens its own DuckDB, which by default
+ * takes 80% of what it can see: on a 1 GB API task, two profiles at once were
+ * an out-of-memory kill of the task and every request on it.
+ *
+ * Now each connection is held to `DUCKDB_MEMORY_MIB` and spills past it to
+ * local disk (`apps/api/src/lib/duck.py`). The limit governs DuckDB's buffers,
+ * not the process, and §875 measured resident memory at up to one and a half
+ * times it; so a task is sized for two such operations at once beside the
+ * process itself, which scaling-check.ts holds. That took the API from 1 GB
+ * to 2 GB, which on Fargate is about $3 a month a task: memory is the cheap
+ * line of the bill. The worker was already 2 GB.
+ *
+ * Why 512 MiB rather than less: §875's three-million-row join refused to run
+ * under 384 MiB at two threads, and a user's query is held to 512 MB already
+ * (`QUERY_MEMORY_LIMIT`).
+ */
+export const TASK_MEMORY_MIB = { api: 2048, worker: 2048 };
+export const DUCKDB_MEMORY_MIB = 512;
+export const DUCKDB_THREADS = 2;
+/** What a task's process holds besides DuckDB, allowed for when sizing. */
+export const PROCESS_ALLOWANCE_MIB = 512;
+
 export interface ServicesProps {
   readonly vpc: ec2.IVpc;
   readonly dataBucket: s3.IBucket;
@@ -417,9 +441,13 @@ export class ServicesConstruct extends Construct {
       return service;
     };
 
+    const duckdbEnv = {
+      DUCKDB_MEMORY_LIMIT: `${DUCKDB_MEMORY_MIB}MiB`,
+      DUCKDB_THREADS: String(DUCKDB_THREADS),
+    };
     this.apiService = makeService("api", `${props.apiImage}:${props.imageTag}`, apiTaskRole, {
       cpu: 512,
-      memory: 1024,
+      memory: TASK_MEMORY_MIB.api,
       port: 8000,
       tasks: API_TASKS,
       // A listener's ingress allowlist (§520) checks the sender's address,
@@ -436,7 +464,7 @@ export class ServicesConstruct extends Construct {
       // one hop is the only entry nobody can forge, and an allowlist refuses
       // senders that come through CloudFront. stack-check.ts holds the two
       // together.
-      extraEnv: { LISTENER_PROXY_HOPS: "1", ...objectIndexEnv },
+      extraEnv: { LISTENER_PROXY_HOPS: "1", ...objectIndexEnv, ...duckdbEnv },
     });
     // Everything anchor_worker/transform_dispatch.py needs to find the runner.
     // Passed as configuration rather than discovered at run time: a worker that
@@ -456,9 +484,9 @@ export class ServicesConstruct extends Construct {
     // scheduled sync, export and model twice.
     this.workerService = makeService("worker", `${props.workerImage}:${props.imageTag}`, workerTaskRole, {
       cpu: 1024,
-      memory: 2048,
+      memory: TASK_MEMORY_MIB.worker,
       mountScratch: true,
-      extraEnv: { ...transformRunnerEnv, ...objectIndexEnv },
+      extraEnv: { ...transformRunnerEnv, ...objectIndexEnv, ...duckdbEnv },
     });
 
     // ---- Permission to dispatch, and nothing more ---------------------------

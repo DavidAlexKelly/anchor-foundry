@@ -38,6 +38,7 @@ from ..connectors import ConnectorError, get_connector
 from ..resources import PlatformDatabase
 from ..storage import StorageKeyError, gateway_from_env, slugify, storage_prefix
 from .claims import claim_due
+from .. import duck
 
 MAX_SYNC_BYTES = 200 * 1024 * 1024  # matches the API's day-one interactive cap
 
@@ -567,7 +568,7 @@ def _ingest_file(src_path: str, extension: str, dest_parquet: str) -> tuple[list
         raise engine.DatasetEngineError(
             f"unsupported file type {extension!r} (supported: {', '.join(_READERS)})"
         )
-    con = duckdb.connect()
+    con = duck.connect()
     try:
         con.execute(f"CREATE VIEW src AS SELECT * FROM {template.format(path=src_path)}")
         os.makedirs(os.path.dirname(dest_parquet), exist_ok=True)

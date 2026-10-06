@@ -29,6 +29,7 @@ from dagster import OpExecutionContext, job, op
 
 from ..resources import PlatformDatabase
 from ..storage import gateway_from_env, slugify, storage_prefix
+from .. import duck
 
 # ---- SHARED with apps/api/src/services/listener_archive.py ----
 #: The dataset's columns. The body is text: a stream row is a string, and a
@@ -71,7 +72,7 @@ def archive_file(previous: str | None, events: list[tuple], dest: str) -> tuple[
     the schema as (name, type) pairs and the row count."""
     import duckdb
 
-    con = duckdb.connect()
+    con = duck.connect()
     try:
         con.execute("CREATE TABLE archive (" + ", ".join(f"{n} {t}" for n, t in COLUMNS) + ")")
         if previous is not None:

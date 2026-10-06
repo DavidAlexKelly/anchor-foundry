@@ -15,6 +15,8 @@ from typing import Any
 
 import duckdb
 
+from . import duck
+
 QUERY_MEMORY_LIMIT = "512MB"
 MAX_TRANSFORM_OUTPUT_ROWS = 5_000_000  # matches the API's day-one cap
 
@@ -110,7 +112,7 @@ def extract_instance_rows(
     property_names = list(column_mappings.values())
     select_list = ", ".join(_quote(c) for c in source_columns)
 
-    con = duckdb.connect()
+    con = duck.connect()
     try:
         try:
             rows = con.execute(
@@ -179,8 +181,8 @@ def run_sql_transform(
     receives already-computed rows via parameterised INSERT and writes them
     out, so a malicious transform can't reach the filesystem or network
     through the write path either."""
-    sandbox = duckdb.connect()
-    writer = duckdb.connect()
+    sandbox = duck.connect()
+    writer = duck.connect()
     try:
         sandbox.execute(f"SET memory_limit='{QUERY_MEMORY_LIMIT}'")
         for alias, path in inputs.items():
@@ -228,7 +230,7 @@ def export_csv(parquet_path: str, dest_path: str) -> None:
     disagreed about column order would write every value into the wrong column
     and report success.
     """
-    con = duckdb.connect()
+    con = duck.connect()
     try:
         try:
             con.execute(
@@ -256,7 +258,7 @@ def combine_parquets(
     """
     if not parts:
         raise DatasetEngineError("there is no file to read")
-    con = duckdb.connect()
+    con = duck.connect()
     try:
         schemas = [
             (name, [(str(r[0]), str(r[1])) for r in con.execute(
@@ -292,7 +294,7 @@ def merge_incremental(
     """Upsert new_rows into existing (by primary key) and write the merged
     result as a new version. No existing_parquet means this is the first
     sync - the new rows are the whole dataset."""
-    con = duckdb.connect()
+    con = duck.connect()
     try:
         try:
             con.execute(f"CREATE TABLE new_rows AS SELECT * FROM read_parquet({new_rows_parquet!r})")
@@ -347,7 +349,7 @@ def merge_transaction(
     APPEND - and a run that replaces any existing row is an UPDATE."""
     if existing_parquet is None:
         return "SNAPSHOT"
-    con = duckdb.connect()
+    con = duck.connect()
     try:
         pk = f'"{primary_key_column}"'
         (replaced,) = con.execute(
@@ -368,7 +370,7 @@ def added_rows(pairs: list[tuple[int, str, str]], dest_path: str) -> int:
     needs no second file per version. A pair whose columns differ is refused
     rather than compared: rows of two shapes cannot be told apart.
     """
-    con = duckdb.connect()
+    con = duck.connect()
     try:
         selects = []
         for version, new, previous in pairs:
@@ -408,7 +410,7 @@ def evaluate_expectations(
     One rule failing never stops the others - a dataset's health is the whole
     picture, and the first broken rule is the least useful place to stop.
     """
-    con = duckdb.connect()
+    con = duck.connect()
     try:
         try:
             con.execute(
@@ -587,7 +589,7 @@ def sample_parquet(src: str, dest: str, limit: int = PREVIEW_SAMPLE_ROWS) -> tup
     against real data", not a representative sample, and pretending otherwise
     by sorting would cost the whole file's read to look more principled.
     """
-    con = duckdb.connect()
+    con = duck.connect()
     try:
         try:
             available = int(
@@ -626,7 +628,7 @@ def read_preview_rows(parquet_path: str, limit: int = PREVIEW_ROWS) -> dict[str,
     the direction nobody checks. `preview_transform` reports the same pair for
     SQL, which is the whole reason the number is here rather than `len(rows)`.
     """
-    con = duckdb.connect()
+    con = duck.connect()
     try:
         try:
             described = con.execute(

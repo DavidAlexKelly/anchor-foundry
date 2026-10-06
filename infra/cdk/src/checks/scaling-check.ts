@@ -18,7 +18,16 @@ import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as cognito from "aws-cdk-lib/aws-cognito";
 
 import { DataStoresConstruct } from "../constructs/data-stores";
-import { API_TASKS, SCALE_AT_CPU_PERCENT, ServicesConstruct, WEB_TASKS } from "../constructs/services";
+import {
+  API_TASKS,
+  DUCKDB_MEMORY_MIB,
+  DUCKDB_THREADS,
+  PROCESS_ALLOWANCE_MIB,
+  SCALE_AT_CPU_PERCENT,
+  ServicesConstruct,
+  TASK_MEMORY_MIB,
+  WEB_TASKS,
+} from "../constructs/services";
 
 const context = JSON.parse(
   fs.readFileSync(path.join(__dirname, "..", "..", "cdk.json"), "utf8")
@@ -118,6 +127,36 @@ check("the API at its ceiling fits the database's connections", () => {
     throw new Error(`${API_TASKS.max} tasks x ${perTask} = ${API_TASKS.max * perTask} of ${limit}`);
   }
 });
+
+const taskDefs = template.findResources("AWS::ECS::TaskDefinition");
+
+function taskDefOf(name: string): Record<string, any> {
+  const found = Object.entries(taskDefs).filter(([id]) => id.startsWith(`Services${name}TaskDef`));
+  if (found.length !== 1) throw new Error(`expected one ${name} task definition, found ${found.length}`);
+  return found[0][1];
+}
+
+console.log("memory (§875):");
+
+for (const name of ["api", "worker"] as const) {
+  check(`the ${name} holds each DuckDB to its share of the task`, () => {
+    const props = taskDefOf(name).Properties;
+    const memory = Number(props.Memory);
+    if (memory !== TASK_MEMORY_MIB[name]) throw new Error(`task memory ${memory}`);
+    const env: { Name: string; Value: string }[] = props.ContainerDefinitions[0].Environment ?? [];
+    const value = (key: string) => env.find((e) => e.Name === key)?.Value;
+    if (value("DUCKDB_MEMORY_LIMIT") !== `${DUCKDB_MEMORY_MIB}MiB`) {
+      throw new Error(`DUCKDB_MEMORY_LIMIT ${value("DUCKDB_MEMORY_LIMIT")}`);
+    }
+    if (value("DUCKDB_THREADS") !== String(DUCKDB_THREADS)) {
+      throw new Error(`DUCKDB_THREADS ${value("DUCKDB_THREADS")}`);
+    }
+    // Two operations at once, each resident at up to one and a half times
+    // its limit, beside the process itself.
+    const needed = 2 * 1.5 * DUCKDB_MEMORY_MIB + PROCESS_ALLOWANCE_MIB;
+    if (needed > memory) throw new Error(`needs ${needed} MiB of ${memory}`);
+  });
+}
 
 if (failures.length) {
   console.log(`\n${failures.length} failed:\n  ${failures.join("\n  ")}`);
