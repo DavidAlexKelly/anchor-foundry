@@ -181,6 +181,28 @@ def test_export_parquet_and_csv(client: TestClient, fx: Fixture) -> None:
     assert r.text.splitlines()[0] == "id,email,total_pence"
 
 
+def test_an_export_is_sent_from_disk_and_leaves_nothing_behind(
+    client: TestClient, fx: Fixture, monkeypatch, tmp_path
+) -> None:
+    """§868: both formats used to be read whole into the response body. The
+    stored file is sent where it lies, never read through `read` and never
+    removed; the CSV goes through a temporary file that is gone afterwards."""
+    import tempfile
+
+    from src.routes import datasets as ds_routes
+
+    did = _dataset_id(client, fx, f"Orders {fx.tag}")
+    monkeypatch.setattr(ds_routes._storage, "read", lambda key: pytest.fail("read whole"))
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    for _ in range(2):
+        r = client.get(f"{base(fx)}/{did}/export?format=parquet", headers=hdr(fx.viewer_sub))
+        assert r.status_code == 200 and r.content[:4] == b"PAR1"
+    r = client.get(f"{base(fx)}/{did}/export?format=csv", headers=hdr(fx.viewer_sub))
+    assert r.status_code == 200 and r.text.splitlines()[0] == "id,email,total_pence"
+    assert r.headers["content-disposition"].startswith("attachment")
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_versions_listed(client: TestClient, fx: Fixture) -> None:
     did = _dataset_id(client, fx, f"Orders {fx.tag}")
     r = client.get(f"{base(fx)}/{did}/versions", headers=hdr(fx.viewer_sub))
