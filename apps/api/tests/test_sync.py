@@ -134,8 +134,8 @@ def test_resync_creates_version_two(
 
     did = body["dataset"]["id"]
     r = client.get(f"{dbase(fx)}/{did}/versions", headers=hdr(fx.viewer_sub))
-    assert [v["version_number"] for v in r.json()] == [2, 1]
-    assert {v["produced_by_kind"] for v in r.json()} == {"sync"}
+    assert [v["version_number"] for v in r.json()["items"]] == [2, 1]
+    assert {v["produced_by_kind"] for v in r.json()["items"]} == {"sync"}
     # New version is what preview reads.
     r = client.get(f"{dbase(fx)}/{did}/preview", headers=hdr(fx.viewer_sub))
     assert r.json()["total_rows"] == 4

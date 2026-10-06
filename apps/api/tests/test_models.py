@@ -387,7 +387,7 @@ def test_rerun_versions_output(client: TestClient, fx: Fixture, model_id: str) -
     out = r.json()["output_dataset"]
     assert out["current_version"] == 2
     r = client.get(f"{dbase(fx)}/{out['id']}/versions", headers=hdr(fx.viewer_sub))
-    versions = r.json()
+    versions = r.json()["items"]
     assert [v["version_number"] for v in versions] == [2, 1]
     assert {v["produced_by_kind"] for v in versions} == {"model"}
 

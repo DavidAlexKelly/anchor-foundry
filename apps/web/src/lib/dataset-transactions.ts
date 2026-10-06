@@ -18,36 +18,32 @@ export const TRANSACTION_MEANING: Record<TransactionType, string> = {
   UPDATE: "The view before it with rows added, changed or removed.",
 };
 
-interface Versioned {
-  version_number: number;
-  transaction_type: TransactionType;
+/** What the server says of a dataset's whole history (§879). */
+interface HistorySummary {
+  views: number;
+  view_start: number | null;
+  newest: number | null;
 }
 
-/** The versions that begin a view, oldest first. p.26: "The view at a given
- *  time begins at the latest SNAPSHOT transaction before that point in time.
- *  If there is no SNAPSHOT transaction present, then take the earliest
- *  transaction for the dataset instead." */
-export function viewStarts(versions: readonly Versioned[]): number[] {
-  const ordered = [...versions].sort((a, b) => a.version_number - b.version_number);
-  const starts = ordered
-    .filter((v, i) => v.transaction_type === "SNAPSHOT" || i === 0)
-    .map((v) => v.version_number);
-  return starts;
-}
-
-/** Where the view a version belongs to begins. */
-export function viewOf(versions: readonly Versioned[], versionNumber: number): number | null {
-  const starts = viewStarts(versions).filter((s) => s <= versionNumber);
-  return starts.length ? starts[starts.length - 1]! : null;
-}
-
-/** One line on the History tab saying what the current view is. */
-export function currentViewText(versions: readonly Versioned[]): string {
-  const starts = viewStarts(versions);
-  const newest = Math.max(...versions.map((v) => v.version_number));
-  const from = starts[starts.length - 1];
-  if (from === undefined) return "";
-  const views = starts.length === 1 ? "one view" : `${starts.length} views`;
+/** One line on the History tab saying what the current view is. p.26: "The
+ *  view at a given time begins at the latest SNAPSHOT transaction before that
+ *  point in time. If there is no SNAPSHOT transaction present, then take the
+ *  earliest transaction for the dataset instead."
+ *
+ *  **From the server's summary, not the rows on screen (§879).** The history
+ *  is a page now, and the latest SNAPSHOT may be many pages back. */
+export function currentViewText(summary: HistorySummary): string {
+  const { views: count, view_start: from, newest } = summary;
+  if (from === null || newest === null || count < 1) return "";
+  const views = count === 1 ? "one view" : `${count} views`;
   const span = from === newest ? `is v${from} alone` : `runs from v${from} to v${newest}`;
   return `This dataset has ${views}. The current one ${span}.`;
+}
+
+/** Where the next, older page of the history starts, or undefined when this
+ *  one reached the first version (§879). The server's `before` is exclusive,
+ *  so the oldest number shown is the next page's bound. */
+export function olderPage(page: { items: readonly { version_number: number }[] }): number | undefined {
+  const oldest = page.items[page.items.length - 1];
+  return oldest !== undefined && oldest.version_number > 1 ? oldest.version_number : undefined;
 }

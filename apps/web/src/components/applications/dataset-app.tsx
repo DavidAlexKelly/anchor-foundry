@@ -15,7 +15,7 @@
  * third tab".
  */
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -30,7 +30,7 @@ import { nextSyncNote, rollbackSummary, whyNotRollbackable } from "@/lib/dataset
 import { madeByText, originHref } from "@/lib/dataset-origin";
 import { bytesText } from "@/lib/bytes";
 import { uploadIntent, uploadedText } from "@/lib/dataset-files";
-import { TRANSACTION_MEANING, currentViewText, viewStarts } from "@/lib/dataset-transactions";
+import { TRANSACTION_MEANING, currentViewText, olderPage } from "@/lib/dataset-transactions";
 import { NO_SCHEDULES, scheduleName, scheduleWhen } from "@/lib/dataset-schedules";
 import { currentBytes, sizeText } from "@/lib/dataset-size";
 import {
@@ -152,12 +152,14 @@ function TimeTravelBanner({
   version: number;
   onLeave: () => void;
 }) {
+  // The one version being viewed, and the newest number: a page of one,
+  // starting just above it (§879), rather than the whole history.
   const versions = useQuery({
-    queryKey: ["ds-versions", did],
-    queryFn: () => datasetApi.versions(wid, pid, did),
+    queryKey: ["ds-versions", did, "at", version],
+    queryFn: () => datasetApi.versions(wid, pid, did, { before: version + 1, limit: 1 }),
   });
-  const current = versions.data?.[0]?.version_number;
-  const row = versions.data?.find((v) => v.version_number === version);
+  const current = versions.data?.newest;
+  const row = versions.data?.items.find((v) => v.version_number === version);
   return (
     <p className="ds-timetravel">
       Viewing <strong>v{version}</strong>
@@ -873,9 +875,15 @@ function HistoryTab({
   // same reason (§361; `data-lineage` p.75: "Select the transaction to roll
   // back to. Select Rollback to transaction").
   const [rollingBack, setRollingBack] = useState<number | null>(null);
-  const versions = useQuery({
+  // **A page at a time, newest first (§879).** A dataset synced every five
+  // minutes has a hundred thousand versions a year, and this asked for every
+  // one of them, each with its schema and a storage lookup, on every visit.
+  // Each row arrives with what reading it needed the rest for.
+  const versions = useInfiniteQuery({
     queryKey: ["ds-versions", did],
-    queryFn: () => datasetApi.versions(wid, pid, did),
+    initialPageParam: null as number | null,
+    queryFn: ({ pageParam }) => datasetApi.versions(wid, pid, did, { before: pageParam }),
+    getNextPageParam: olderPage,
   });
   // Shares `ds-detail` with the Details tab, so reading the history does not
   // fetch the dataset a second time. Only one field is wanted: whether
@@ -896,10 +904,10 @@ function HistoryTab({
   // and a separate source for it could disagree with the rows being drawn.
   // Written as a check on the row rather than on the length so the compiler
   // knows it too — the two say the same thing.
-  const newest = versions.data[0];
+  const rows = versions.data.pages.flatMap((p) => p.items);
+  const summary = versions.data.pages[0]!;
+  const newest = rows[0];
   if (newest === undefined) return <p className="state">No versions recorded yet.</p>;
-  // p.26's views: where each begins, so a row can say it starts one.
-  const starts = viewStarts(versions.data);
 
   return (
     <>
@@ -908,7 +916,7 @@ function HistoryTab({
         written, which is what makes the row counts below comparable — and what
         makes any of them readable years later.
       </p>
-      <p className="soft ds-note" data-testid="current-view">{currentViewText(versions.data)}</p>
+      <p className="soft ds-note" data-testid="current-view">{currentViewText(summary)}</p>
       <div className="ds-scroll">
         <table className="ds-table">
           <thead>
@@ -924,10 +932,9 @@ function HistoryTab({
             </tr>
           </thead>
           <tbody>
-            {versions.data.map((v, i) => {
-              const previous = versions.data[i + 1];
+            {rows.map((v) => {
               const current = newest.version_number;
-              const delta = previous ? v.row_count - previous.row_count : null;
+              const delta = v.previous_row_count == null ? null : v.row_count - v.previous_row_count;
               return (
                 <tr key={v.id}>
                   <td>v{v.version_number}</td>
@@ -963,7 +970,7 @@ function HistoryTab({
                     title={TRANSACTION_MEANING[v.transaction_type]}
                   >
                     {v.transaction_type}
-                    {starts.includes(v.version_number) && (
+                    {v.starts_view && (
                       <span className="soft"> · new view</span>
                     )}
                   </td>
@@ -1034,6 +1041,19 @@ function HistoryTab({
           </tbody>
         </table>
       </div>
+      {/* What this page is of the whole, and the way to the rest (§879): a
+          history that stopped at a page and said nothing would read as a
+          dataset with fewer versions than it has. */}
+      {rows.length < summary.total && (
+        <p className="soft ds-note" data-testid="history-more">
+          Showing the newest {rows.length.toLocaleString()} of {summary.total.toLocaleString()} versions.{" "}
+          <button type="button" className="btn quiet" data-testid="history-older"
+                  disabled={versions.isFetchingNextPage || !versions.hasNextPage}
+                  onClick={() => void versions.fetchNextPage()}>
+            {versions.isFetchingNextPage ? "Loading…" : "Older versions"}
+          </button>
+        </p>
+      )}
       {rollingBack !== null && (
         <RollbackDialog
           wid={wid}
@@ -1392,9 +1412,10 @@ function DetailsTab({ wid, pid, did, rid }: { wid: string; pid: string; did: str
   });
   // Shares `ds-versions` with the History tab, which already measures every
   // version: p.3's "size of the table" is the current one's (§509).
+  // The newest page, which holds the current version (§879).
   const versions = useQuery({
-    queryKey: ["ds-versions", did],
-    queryFn: () => datasetApi.versions(wid, pid, did),
+    queryKey: ["ds-versions", did, "newest"],
+    queryFn: () => datasetApi.versions(wid, pid, did, { limit: 1 }),
   });
   const schedules = useQuery({
     queryKey: ["ds-schedules", did],
@@ -1472,7 +1493,7 @@ function DetailsTab({ wid, pid, did, rid }: { wid: string; pid: string; did: str
         <div>
           <dt>Size</dt>
           <dd data-testid="ds-size">
-            {sizeText(d.table_schema.length, currentBytes(versions.data, d.current_version))}
+            {sizeText(d.table_schema.length, currentBytes(versions.data?.items, d.current_version))}
           </dd>
         </div>
         <div>

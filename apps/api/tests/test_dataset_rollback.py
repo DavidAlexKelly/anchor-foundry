@@ -158,7 +158,7 @@ def test_the_history_keeps_the_version_that_was_rolled_away_from(
     assert roll_back(client, fx, two_versions, 1).status_code == 200
     versions = client.get(
         f"{base(fx)}/datasets/{two_versions}/versions", headers=hdr(fx.viewer_sub)
-    ).json()
+    ).json()["items"]
     assert [v["version_number"] for v in versions] == [3, 2, 1]
 
     v2 = next(v for v in versions if v["version_number"] == 2)
@@ -181,7 +181,7 @@ def test_the_new_version_says_which_one_it_came_from(
     assert roll_back(client, fx, two_versions, 1).status_code == 200
     versions = client.get(
         f"{base(fx)}/datasets/{two_versions}/versions", headers=hdr(fx.viewer_sub)
-    ).json()
+    ).json()["items"]
     newest = versions[0]
     assert newest["produced_by_kind"] == "rollback"
     assert newest["rolled_back_to"] == 1
@@ -216,7 +216,7 @@ def test_the_schema_goes_back_with_the_data(
     # And the version row says the same thing, since the Schema tab reads that.
     newest = client.get(
         f"{base(fx)}/datasets/{dataset_id}/versions", headers=hdr(fx.viewer_sub)
-    ).json()[0]
+    ).json()["items"][0]
     assert [c["name"] for c in newest["table_schema"]] == ["id", "val"]
 
 
@@ -245,13 +245,13 @@ def test_no_bytes_are_copied(
     """
     before = client.get(
         f"{base(fx)}/datasets/{two_versions}/versions", headers=hdr(fx.viewer_sub)
-    ).json()
+    ).json()["items"]
     v1_size = next(v for v in before if v["version_number"] == 1)["size_bytes"]
 
     assert roll_back(client, fx, two_versions, 1).status_code == 200
     after = client.get(
         f"{base(fx)}/datasets/{two_versions}/versions", headers=hdr(fx.viewer_sub)
-    ).json()
+    ).json()["items"]
     assert after[0]["size_bytes"] == v1_size
 
     async def keys() -> tuple[str, str]:
