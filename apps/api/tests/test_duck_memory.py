@@ -85,3 +85,53 @@ def test_a_profile_fits_in_a_connection_that_all_its_counts_at_once_would_not(
     profile = profile_columns(wide)
     assert [p["distinct_count"] for p in profile] == [1000000] * len(COLUMNS)
     assert [p["null_count"] for p in profile] == [0] * len(COLUMNS)
+
+
+# ---- a person's SQL cannot change the sandbox it runs in (§891) ---------------
+RAISE_LIMIT = "SET memory_limit='100GB'"
+
+
+@pytest.fixture(scope="module")
+def small(tmp_path_factory) -> str:
+    path = str(tmp_path_factory.mktemp("small") / "small.parquet")
+    con = duckdb.connect()
+    try:
+        con.execute(f"COPY (SELECT range AS id FROM range(10)) TO '{path}' (FORMAT parquet)")
+    finally:
+        con.close()
+    return path
+
+
+def test_a_query_cannot_raise_its_own_memory_limit(small: str) -> None:
+    """DuckDB runs every statement in what it is given, so a query could
+    carry a SET of its own past the sandbox's."""
+    from src.services.dataset_engine import DatasetEngineError, query
+
+    with pytest.raises(DatasetEngineError, match="locked"):
+        query(small, f"{RAISE_LIMIT}; SELECT * FROM dataset")
+    # And reading still works.
+    assert query(small, "SELECT count(*) AS n FROM dataset").rows == [[10]]
+
+
+def test_a_transform_cannot_break_out_of_its_statement_to_raise_it(small: str, tmp_path) -> None:
+    """The SQL is placed inside `CREATE TABLE ... AS (...)`: closing the
+    bracket ends that statement and starts the caller's own."""
+    from src.services.dataset_engine import DatasetEngineError, preview_transform, run_transform
+
+    escape = f"SELECT 1 AS x); {RAISE_LIMIT}; CREATE TABLE junk AS (SELECT 1"
+    with pytest.raises(DatasetEngineError, match="locked"):
+        run_transform({"t": small}, escape, str(tmp_path / "out.parquet"))
+    with pytest.raises(DatasetEngineError, match="locked"):
+        preview_transform({"t": small}, escape)
+
+
+def test_both_copies_seal_the_same_way() -> None:
+    con = duckdb.connect()
+    try:
+        duck.seal(con)
+        with pytest.raises(duckdb.Error, match="locked"):
+            con.execute(RAISE_LIMIT)
+        with pytest.raises(duckdb.Error):
+            con.execute("SELECT * FROM read_csv('/etc/passwd')")
+    finally:
+        con.close()

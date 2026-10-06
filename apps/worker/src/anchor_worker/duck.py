@@ -45,3 +45,19 @@ def connect() -> duckdb.DuckDBPyConnection:
         con.close()
         raise
     return con
+
+
+def seal(con: duckdb.DuckDBPyConnection) -> None:
+    """Close a connection to everything but its own tables, before it runs a
+    person's SQL, and lock its settings (§891).
+
+    `enable_external_access` has been how a sandbox shuts the filesystem and
+    the network since the first query route. But the SQL is placed inside a
+    statement of ours, and DuckDB runs every statement in what it is given:
+    `SELECT 1); SET memory_limit='100GB'; SELECT (1` raised the limit of
+    §875 and the query's own 512 MB, so one query could take the task.
+    Locking the configuration makes every later `SET` an error, the
+    sandbox's own included, so this is the last thing done before the SQL.
+    """
+    con.execute("SET enable_external_access=false")
+    con.execute("SET lock_configuration=true")

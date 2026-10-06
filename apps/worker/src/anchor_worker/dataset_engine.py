@@ -187,7 +187,7 @@ def run_sql_transform(
         sandbox.execute(f"SET memory_limit='{QUERY_MEMORY_LIMIT}'")
         for alias, path in inputs.items():
             sandbox.execute(f'CREATE TABLE "{alias}" AS SELECT * FROM read_parquet({path!r})')
-        sandbox.execute("SET enable_external_access=false")
+        duck.seal(sandbox)
         try:
             sandbox.execute(f"CREATE TABLE __output AS ({sql})")
         except duckdb.Error as exc:

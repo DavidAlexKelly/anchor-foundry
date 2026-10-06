@@ -171,7 +171,7 @@ def run(
                     # the table, rather than a fault.
                     raise FunctionError(f"{table.name}: {_clean(exc)}") from exc
         # Sandbox boundary: from here the SQL sees only the tables above.
-        sandbox.execute("SET enable_external_access=false")
+        duck.seal(sandbox)
         timer.start()
         try:
             sandbox.execute(f"CREATE TABLE __function_output AS ({sql})", params)

@@ -1087,7 +1087,7 @@ def query(
         for name, path in extra.items():
             con.execute(f"CREATE TABLE {name} AS SELECT * FROM read_parquet('{path}')")
         # Sandbox boundary: from here on, no filesystem or network access.
-        con.execute("SET enable_external_access=false")
+        duck.seal(con)
         try:
             cursor = con.execute(sql)
         except duckdb.Error as exc:
@@ -1616,7 +1616,7 @@ def run_transform(
                 f'CREATE TABLE "{alias}" AS SELECT * FROM read_parquet({path!r})'
             )
         # Sandbox boundary: user SQL sees only the input tables.
-        sandbox.execute("SET enable_external_access=false")
+        duck.seal(sandbox)
         try:
             sandbox.execute(f"CREATE TABLE __model_output AS ({sql})")
         except duckdb.Error as exc:
@@ -1733,7 +1733,7 @@ def preview_transform(
 
         # Sandbox boundary: user SQL sees only the sampled input tables, and
         # unlike run_transform nothing after this point needs it reopened.
-        sandbox.execute("SET enable_external_access=false")
+        duck.seal(sandbox)
         try:
             sandbox.execute(f"CREATE TABLE __model_output AS ({sql})")
         except duckdb.Error as exc:
