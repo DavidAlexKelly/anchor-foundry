@@ -10,6 +10,23 @@ import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
 import * as cognito from "aws-cdk-lib/aws-cognito";
 import { Construct } from "constructs";
 
+
+/**
+ * **Two of each request-serving task, and more under load** (§841). One task
+ * was the whole API: a crash, an out-of-memory kill or a lost host was an
+ * outage until ECS replaced it, and a busy hour had nowhere to go. Two keep
+ * serving while one is replaced, spread across the VPC's zones; CPU scales
+ * them out from there.
+ *
+ * The ceiling is the database's to set. Each API task holds up to 30
+ * connections (a pool of 10 and 20 overflow, `apps/api/src/lib/db.py`), so six
+ * is 180 of the roughly 450 a t4g.medium allows - room for the worker, the
+ * migration Lambda and an operator besides.
+ */
+export const API_TASKS = { min: 2, max: 6 };
+export const WEB_TASKS = { min: 2, max: 4 };
+export const SCALE_AT_CPU_PERCENT = 60;
+
 export interface ServicesProps {
   readonly vpc: ec2.IVpc;
   readonly dataBucket: s3.IBucket;
@@ -329,6 +346,9 @@ export class ServicesConstruct extends Construct {
         mountScratch?: boolean;
         /** Env this service needs and the others do not. */
         extraEnv?: Record<string, string>;
+        /** How many tasks, scaled on CPU between the two (§841). Omitted, one
+         * task and no scaling - which only the worker should be. */
+        tasks?: { min: number; max: number };
       }
     ): ecs.FargateService => {
       const taskDef = new ecs.FargateTaskDefinition(this, `${name}TaskDef`, {
@@ -378,21 +398,32 @@ export class ServicesConstruct extends Construct {
           readOnly: false,
         });
       }
-      return new ecs.FargateService(this, `${name}Service`, {
+      const service = new ecs.FargateService(this, `${name}Service`, {
         cluster: this.cluster,
         taskDefinition: taskDef,
-        desiredCount: 1,
+        desiredCount: opts.tasks?.min ?? 1,
         vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS }, // §10
         circuitBreaker: { rollback: true },
         minHealthyPercent: 100, // zero-downtime rolling updates (spec §6)
         maxHealthyPercent: 200,
       });
+      if (opts.tasks) {
+        const scaling = service.autoScaleTaskCount({
+          minCapacity: opts.tasks.min,
+          maxCapacity: opts.tasks.max,
+        });
+        scaling.scaleOnCpuUtilization(`${name}Cpu`, {
+          targetUtilizationPercent: SCALE_AT_CPU_PERCENT,
+        });
+      }
+      return service;
     };
 
     this.apiService = makeService("api", `${props.apiImage}:${props.imageTag}`, apiTaskRole, {
       cpu: 512,
       memory: 1024,
       port: 8000,
+      tasks: API_TASKS,
       // A listener's ingress allowlist (§520) checks the sender's address,
       // which the ALB appends as the last X-Forwarded-For entry. One hop: the
       // ALB is the only thing that can reach this service. uvicorn's own
@@ -413,6 +444,9 @@ export class ServicesConstruct extends Construct {
         .subnetIds.join(","),
       ANCHOR_TRANSFORM_SECURITY_GROUPS: this.transformRunnerSecurityGroup.securityGroupId,
     };
+    // **One worker, always, and not scaled** (§841): it runs the Dagster
+    // daemon, which fires every schedule - a second task would run each
+    // scheduled sync, export and model twice.
     this.workerService = makeService("worker", `${props.workerImage}:${props.imageTag}`, workerTaskRole, {
       cpu: 1024,
       memory: 2048,
@@ -465,6 +499,7 @@ export class ServicesConstruct extends Construct {
       cpu: 256,
       memory: 512,
       port: 3000,
+      tasks: WEB_TASKS,
     });
 
     // ---- ALB: the only public-facing component (§10) ------------------------
