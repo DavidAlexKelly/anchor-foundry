@@ -227,7 +227,8 @@ export class CustomerStack extends Stack {
     const distribution = new cloudfront.Distribution(this, "Cdn", {
       defaultBehavior: {
         origin: new origins.LoadBalancerV2Origin(services.alb, {
-          protocolPolicy: cloudfront.OriginProtocolPolicy.HTTP_ONLY, // ALB TLS added post-cert issuance
+          // Plain HTTP to a public load balancer: decision 0025 (roadmap E.11).
+          protocolPolicy: cloudfront.OriginProtocolPolicy.HTTP_ONLY,
         }),
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
         allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
