@@ -14,6 +14,10 @@
 
 The comments say this was meant to be temporary. `services.ts` says *"the control plane attaches the ACM certificate + HTTPS listener once the customer subdomain is issued (Route 53 + ACM, spec §7). HTTP-to-HTTPS redirect is added at that point."* `customer-stack.ts` says *"ALB TLS added post-cert issuance."* **Nothing does that.** `apps/control-plane` issues no certificate, creates no listener and changes no origin policy. Every stack ever deployed has the arrangement above.
 
+### A consequence found later: listener allowlists (§850)
+
+A listener's ingress allowlist (§520) reads the sender's address from `X-Forwarded-For`, `LISTENER_PROXY_HOPS` entries from the right. The stack sets one hop, which is the entry the load balancer appends. Through CloudFront that entry is the CloudFront edge's address. CloudFront writes the sender's own address one further left, but two hops cannot be trusted while the load balancer is public: a request sent to it directly writes that entry itself. So today an allowlist refuses every sender that comes through the distribution's address, the one the platform hands out (§849). That fails closed rather than open, but it means allowlists do not work on a deployed stack. **Whichever option is built has to set two hops in the same change**, once nothing but CloudFront can reach the load balancer. `infra/cdk/src/checks/stack-check.ts` fails if the hop count and the load balancer's scheme disagree.
+
 ## Options
 
 ### A. Keep the load balancer public; let only CloudFront reach it

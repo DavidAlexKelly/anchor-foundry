@@ -423,10 +423,19 @@ export class ServicesConstruct extends Construct {
       port: 8000,
       tasks: API_TASKS,
       // A listener's ingress allowlist (§520) checks the sender's address,
-      // which the ALB appends as the last X-Forwarded-For entry. One hop: the
-      // ALB is the only thing that can reach this service. uvicorn's own
-      // forwarded-allow-ips is left alone, because trusting "*" there takes
-      // the *first* entry, which the sender writes.
+      // read from X-Forwarded-For this many entries from the right. uvicorn's
+      // own forwarded-allow-ips is left alone, because trusting "*" there
+      // takes the *first* entry, which the sender writes.
+      //
+      // **One hop is the load balancer's entry, and through CloudFront that
+      // is CloudFront's address, not the sender's (§850).** CloudFront writes
+      // the sender's, one further left, so two would be right for traffic
+      // that came through it. But the load balancer is public (decision
+      // 0025), and a request sent to it directly would supply that entry
+      // itself. Until the load balancer is reachable only through CloudFront,
+      // one hop is the only entry nobody can forge, and an allowlist refuses
+      // senders that come through CloudFront. stack-check.ts holds the two
+      // together.
       extraEnv: { LISTENER_PROXY_HOPS: "1", ...objectIndexEnv },
     });
     // Everything anchor_worker/transform_dispatch.py needs to find the runner.
