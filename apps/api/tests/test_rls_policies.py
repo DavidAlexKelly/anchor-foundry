@@ -18,6 +18,7 @@ ADMIN_DSN = os.environ["TEST_ADMIN_DSN"]
 
 #: A call not directly inside a `SELECT`, as Postgres deparses a policy.
 BARE = re.compile(r"(?<!SELECT )rls_workspace_ids\(\)")
+ORG_BARE = re.compile(r"(?<!SELECT )rls_user_org_id\(\)")
 
 
 def policies() -> list[tuple[str, str, str]]:
@@ -72,8 +73,24 @@ def test_no_policy_asks_whether_a_workspace_is_reachable_once_per_row() -> None:
             ("object_edits", "object_edits_write")} <= wrapped
 
 
+def test_no_policy_asks_for_the_callers_organisation_once_per_row() -> None:
+    """Migration 0163: `users_same_org` called `rls_user_org_id()` - SECURITY
+    DEFINER, never inlined - for each of every tenant's users."""
+    bare = [(table, name) for table, name, text in policies()
+            if ORG_BARE.search(text)]
+    assert bare == [], (
+        f"{bare} look up the caller's organisation per row; write it as "
+        "(SELECT rls_user_org_id()) (migration 0163)")
+    wrapped = {(table, name) for table, name, text in policies()
+               if "SELECT rls_user_org_id()" in text}
+    assert {("users", "users_same_org"), ("groups", "groups_same_org")} <= wrapped
+
+
 def test_the_pattern_tells_the_two_spellings_apart() -> None:
     assert BARE.search("(workspace_id = ANY (rls_workspace_ids()))")
+    assert ORG_BARE.search("(organisation_id = rls_user_org_id())")
+    assert not ORG_BARE.search(
+        "(organisation_id = ( SELECT rls_user_org_id() AS rls_user_org_id))")
     assert not BARE.search(
         "(workspace_id = ANY (( SELECT rls_workspace_ids() AS rls_workspace_ids)::uuid[]))")
     assert KIOSK_BARE.search("rls_kiosk_allows('apps'::text, id)")

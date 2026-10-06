@@ -61,7 +61,11 @@ async def viewers(conn: AsyncConnection, *, workspace_id: UUID) -> list[dict[str
         """
         SELECT u.id, u.email, u.display_name
           FROM users u
-         WHERE effective_workspace_role(u.id, CAST(:wid AS uuid)) IS NOT NULL
+         -- The caller's organisation, as the row policy already has it: said
+         -- here as well so an index finds those people before the policy
+         -- runs on every tenant's (§829).
+         WHERE u.organisation_id = (SELECT rls_user_org_id())
+           AND effective_workspace_role(u.id, CAST(:wid AS uuid)) IS NOT NULL
          ORDER BY u.display_name, u.email
         """,
         {"wid": str(workspace_id)},
