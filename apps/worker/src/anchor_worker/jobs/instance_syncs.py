@@ -34,6 +34,7 @@ from .. import dataset_engine as engine
 from .. import instance_index, property_values
 from ..resources import PlatformDatabase
 from ..storage import StorageKeyError, gateway_from_env
+from .claims import claim_due
 
 
 #: Rows per statement (§805), the API's `instances.UPSERT_BATCH`.
@@ -93,6 +94,10 @@ def run_due_object_source_syncs(context: OpExecutionContext, platform_db: Platfo
     for source_id, workspace_id in candidates:
         with platform_db.connect_scoped_to(workspace_id) as conn:
             with conn.cursor() as cur:
+                # This pass's, or another's (§854): see claims.py.
+                if not claim_due(cur, "object_type_sources", source_id, schedule="sync_schedule",
+                                 next_run="sync_next_run_at", warn=context.log.warning):
+                    continue
                 cur.execute(
                     """
                     SELECT s.object_type_id, s.dataset_id, s.primary_key_column,

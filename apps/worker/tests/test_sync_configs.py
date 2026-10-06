@@ -369,3 +369,72 @@ def test_failing_sync_is_recorded_and_schedule_still_advances(workspace: dict, s
             "SELECT status FROM sync_runs WHERE connection_id=%s", (cid,)
         ).fetchall()
     assert any(r[0] == "failed" for r in runs)
+
+
+# ---- one pass per due run (§854) ---------------------------------------------
+def test_a_pass_that_starts_while_a_sync_runs_leaves_it_alone(
+    workspace: dict, source_database: dict, monkeypatch
+) -> None:
+    """The next tick arrives while this one is still syncing. It used to find
+    the connection still due - nothing moved its next run until the sync
+    ended - and sync it again alongside."""
+    cid = _create_connection(workspace, source_database, mode="full", dataset_name="claimed_items")
+    second: list[None] = []
+
+    def secret_with_a_second_pass(arn):
+        if not second:
+            second.append(None)
+            run_due_scheduled_syncs(_ctx())
+        return {"password": SOURCE_PASSWORD}
+
+    monkeypatch.setattr(sync_configs, "_read_secret", secret_with_a_second_pass)
+    run_due_scheduled_syncs(_ctx())
+
+    assert second == [None]
+    version, _ = _dataset_rows(_connection_row(cid)["sync_dataset_id"])
+    assert version == 1, "the second pass synced it again"
+
+
+def test_a_connection_another_pass_is_claiming_is_left_to_it(
+    workspace: dict, source_database: dict
+) -> None:
+    import threading
+
+    cid = _create_connection(workspace, source_database, mode="full", dataset_name="held_items")
+    held = psycopg.connect(ADMIN_DSN)
+    held.execute("SELECT 1 FROM connections WHERE id=%s FOR UPDATE", (cid,))
+    try:
+        thread = threading.Thread(target=lambda: run_due_scheduled_syncs(_ctx()), daemon=True)
+        thread.start()
+        thread.join(60)
+        assert not thread.is_alive(), "the pass waited on a connection another pass holds"
+        assert _connection_row(cid)["sync_dataset_id"] is None
+    finally:
+        held.rollback()
+        held.close()
+    run_due_scheduled_syncs(_ctx())
+    assert _connection_row(cid)["sync_dataset_id"] is not None
+
+
+def test_a_claim_moves_the_next_run_on_and_only_once(workspace: dict, source_database: dict) -> None:
+    from anchor_worker.jobs.claims import claim_due
+
+    cid = _create_connection(workspace, source_database, mode="full", dataset_name="claim_unit",
+                             cron_schedule="*/10 * * * *")
+    warned: list[str] = []
+
+    def claim() -> bool:
+        with psycopg.connect(ADMIN_DSN) as conn:
+            with conn.cursor() as cur:
+                got = claim_due(cur, "connections", cid, schedule="sync_schedule",
+                                next_run="sync_next_run_at", warn=warned.append)
+            conn.commit()
+        return got
+
+    assert claim() is True
+    assert _connection_row(cid)["sync_next_run_at"] is not None
+    assert claim() is False  # no longer due
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        conn.execute("UPDATE connections SET sync_next_run_at=NULL, sync_schedule='not cron' "
+                     "WHERE id=%s", (cid,))
+    assert claim() is False and warned and "invalid schedule" in warned[0]
