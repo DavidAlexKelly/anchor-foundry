@@ -1648,6 +1648,41 @@ async def list_action_types(
     return await _with_definition(conn, [dict(r) for r in rows])
 
 
+async def list_action_type_summaries(
+    conn: AsyncConnection, workspace_id: UUID
+) -> list[dict[str, Any]]:
+    """Each action's name, subject and the properties it writes (§835).
+
+    What a picker needs to offer an action, and nothing it does not: the
+    Workshop builder's event panel and an object type's related links each
+    loaded `list_action_types` - every parameter, rule, criterion and
+    override of every action - to draw a label. On a copy of the development
+    database that was 700 KB for 362 actions. The rules are read only for
+    `editable_properties`, which a `run_action` effect is checked against.
+
+    Same rows, in the same order, as `list_action_types` without a filter.
+    """
+    rows = await fetch_all(
+        conn,
+        """
+        SELECT at.id, at.object_type_id, at.interface_id,
+               COALESCE(ot.display_name, i.display_name) AS subject_name,
+               at.api_name, at.display_name, at.status
+          FROM action_types at
+          LEFT JOIN object_types ot ON ot.id = at.object_type_id
+          LEFT JOIN interfaces i ON i.id = at.interface_id
+         WHERE at.workspace_id = :wid
+         ORDER BY at.display_name
+        """,
+        {"wid": str(workspace_id)},
+    )
+    rules = await _rules_for(conn, [str(r["id"]) for r in rows])
+    return [
+        {**r, "editable_properties": editable_properties_of(rules.get(str(r["id"]), []))}
+        for r in rows
+    ]
+
+
 async def get_action_type(
     conn: AsyncConnection, workspace_id: UUID, action_type_id: UUID
 ) -> dict[str, Any]:

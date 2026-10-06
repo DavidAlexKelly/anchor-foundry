@@ -561,6 +561,32 @@ async def list_action_types(
     ]
 
 
+class ActionTypeSummaryOut(BaseModel):
+    """An action as a picker offers it (§835): `ActionTypeOut`'s identity and
+    subject, and the properties it writes, without its definition."""
+
+    id: UUID
+    object_type_id: UUID | None
+    interface_id: UUID | None
+    subject_name: str
+    api_name: str
+    display_name: str
+    status: str
+    editable_properties: list[str]
+
+
+@router.get("/action-type-summaries", response_model=list[ActionTypeSummaryOut])
+async def list_action_type_summaries(
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> list[ActionTypeSummaryOut]:
+    """Every action in the workspace, as a picker needs it (§835). A path of
+    its own rather than a flag on `/action-types`, so each answers in one
+    shape."""
+    async with user_connection(access.auth.user_id) as conn:
+        rows = await actions_service.list_action_type_summaries(conn, access.workspace_id)
+    return [ActionTypeSummaryOut(**r) for r in rows]
+
+
 @router.post(
     "/action-types", response_model=ActionTypeOut, status_code=status.HTTP_201_CREATED
 )
