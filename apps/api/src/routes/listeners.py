@@ -101,8 +101,22 @@ class EventOut(BaseModel):
     headers: dict[str, str]
 
 
+def public_base(request: Request) -> str:
+    """Where a sender reaches this platform: `PLATFORM_PUBLIC_URL` when the
+    deployment says, which a stack does with its distribution's address
+    (§849), and the request's own address otherwise, as in development.
+
+    Not the request's address in a stack. Behind CloudFront and the load
+    balancer this process hears plain HTTP, so that was an `http://` endpoint:
+    the token in its path crossed the network in clear before CloudFront
+    redirected it, and a sender that does not follow a redirected POST - most
+    of them - never arrived at all."""
+    configured = os.environ.get("PLATFORM_PUBLIC_URL", "").strip().rstrip("/")
+    return configured or str(request.base_url).rstrip("/")
+
+
 def _out(request: Request, row: dict[str, Any]) -> ListenerOut:
-    base = str(request.base_url).rstrip("/")
+    base = public_base(request)
     endpoints = [EndpointOut(url=f"{base}/api/listen/{e['token']}", **{
         k: v for k, v in e.items() if k != "token"}) for e in row["endpoints"]]
     return ListenerOut(**{**{k: v for k, v in row.items() if k in ListenerOut.model_fields
@@ -338,10 +352,19 @@ async def receive(token: str, request: Request) -> JSONResponse:
                     request.headers.get("x-forwarded-for"), _proxy_hops()))
         # A second transaction, so the count above stands whatever is
         # decided here (db 0110).
+        # **The address the card shows, not the one this process heard
+        # (§892).** A sender that signs its address - Twilio - signs the one
+        # it was given, and since §849 that is `public_base`: on a stack the
+        # distribution's https address, where this process hears the load
+        # balancer's plain http one. Checked against `request.url`, every
+        # signed push to a stack was refused.
+        query_string = request.url.query
+        signed_address = public_base(request) + request.url.path + (
+            f"?{query_string}" if query_string else "")
         async with get_engine().begin() as conn:
             taken = await listener_service.accept(
                 conn, secrets_gateway(), found, headers, body, query=dict(request.query_params),
-                url=str(request.url))
+                url=signed_address)
     except listener_service.Refusal as refusal:
         return JSONResponse({"detail": refusal.detail}, status_code=refusal.status,
                             headers=refusal.headers)

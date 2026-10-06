@@ -97,6 +97,17 @@ def test_a_new_listener_is_stopped_with_one_endpoint(client, fx) -> None:
     assert events(client, fx, made) == []
 
 
+def test_an_endpoint_is_named_at_the_platforms_public_address(client, fx, monkeypatch) -> None:
+    """A stack sets PLATFORM_PUBLIC_URL to the address viewers reach (§849):
+    behind the load balancer the request's own address is plain HTTP."""
+    monkeypatch.setenv("PLATFORM_PUBLIC_URL", "https://d123.cloudfront.net/")
+    [endpoint] = make(client, fx)["endpoints"]
+    assert endpoint["url"].startswith("https://d123.cloudfront.net/api/listen/")
+    # And the address it names is one this API answers on.
+    r = client.post(endpoint["url"].replace("https://d123.cloudfront.net", ""), json={"a": 1})
+    assert r.status_code == 503, r.text
+
+
 def test_a_running_listener_keeps_what_it_is_sent(client, fx) -> None:
     listener = started(client, fx)
     r = client.post(path_of(listener), content=b'{"ticket": 7}',
@@ -812,6 +823,29 @@ def test_a_twilio_listener_checks_the_signed_address_and_form(client, fx) -> Non
     # A form that is not text cannot have been signed.
     assert client.post(path_of(listener), content=b"\xff=1", headers={
         **form, "X-Twilio-Signature": twilio_signature("auth-token", url)}).status_code == 401
+
+
+def test_twilio_signs_the_address_the_card_shows_not_the_one_the_api_hears(
+    client, fx, monkeypatch
+) -> None:
+    """§892: behind CloudFront and the load balancer, the card shows the
+    platform's public address (§849) and this process hears another. Twilio
+    signs the first."""
+    from urllib.parse import urlencode
+    monkeypatch.setenv("PLATFORM_PUBLIC_URL", "https://platform.example.com")
+    listener = started(client, fx, listener_type="twilio", secret="auth-token")
+    [endpoint] = listener["endpoints"]
+    assert endpoint["url"].startswith("https://platform.example.com/api/listen/")
+    params = [("From", "+15550100"), ("Body", "hello")]
+    form = {"Content-Type": "application/x-www-form-urlencoded"}
+    good = twilio_signature("auth-token", endpoint["url"], params)
+    assert client.post(path_of(listener), content=urlencode(params),
+                       headers={**form, "X-Twilio-Signature": good}).status_code == 200
+    # Signed for the address the process hears instead, it is someone else's.
+    heard = "http://testserver" + path_of(listener)
+    assert client.post(path_of(listener), content=urlencode(params), headers={
+        **form, "X-Twilio-Signature": twilio_signature("auth-token", heard, params)
+    }).status_code == 401
 
 
 def sendgrid_key():
