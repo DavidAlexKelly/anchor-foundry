@@ -17,6 +17,7 @@ from sqlalchemy.exc import DBAPIError
 from fastapi.responses import JSONResponse
 from starlette.requests import Request as StarletteRequest
 
+from .lib.body_limit import BodyLimit
 from .lib.config import get_settings
 from .lib.db import dispose_engine, get_engine
 from .lib.errors import BreakingChangeError
@@ -114,6 +115,11 @@ def create_app() -> FastAPI:
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
         allow_headers=["Authorization", "Content-Type"],
     )
+
+    # Every request body bounded before anything reads it (§832). Inside the
+    # observability middleware below, so a refusal still has a request id and
+    # an access line.
+    app.add_middleware(BodyLimit)
 
     # Request ids, access lines, metrics and the unhandled-error record (§802).
     # After CORS, so it is the outer of the two and times the whole request.
