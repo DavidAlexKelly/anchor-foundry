@@ -587,7 +587,8 @@ function LinkTypeDialog({
     <Dialog open title="New link type" onClose={onClose}>
       <form onSubmit={(e) => { e.preventDefault(); create.mutate(); }}>
         <Field label="Name" hint="e.g. Placed, Owns, Reports to">
-          <input type="text" value={displayName} onChange={(e) => setDisplayName(e.target.value)} required maxLength={200} autoFocus />
+          <input type="text" value={displayName} onChange={(e) => setDisplayName(e.target.value)} required maxLength={200} autoFocus
+            data-testid="link-name" />
         </Field>
         {/* §256: each end reads the ontology for itself now. The page's own
             list is a page, so passing it down would have made these two

@@ -46,7 +46,7 @@ def test_the_dialog_backs_a_many_to_many_link_with_a_join_table(page, api, world
     open_objects(page, world)
     page.get_by_role("button", name="New link type").click()
     dialog = page.get_by_role("dialog")
-    dialog.get_by_label("Name").fill(f"Flown by {world.tag}")
+    page.get_by_test_id("link-name").fill(f"Flown by {world.tag}")
     pick_type(page, "link-from-type", {"id": world.flights, "api_name": f"flight_{world.tag}"})
     pick_type(page, "link-to-type", {"id": world.aircraft, "api_name": f"aircraft_{world.tag}"})
     # p.197: a join table is a many-to-many link's, so it is offered for no other.
