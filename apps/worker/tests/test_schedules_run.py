@@ -183,3 +183,17 @@ def test_the_failure_alarm_counts_what_a_failed_run_writes(instance: DagsterInst
     succeeded = capfd.readouterr()
     assert term in failed.out + failed.err
     assert term not in succeeded.out + succeeded.err
+
+
+def test_the_jobs_that_work_datasets_here_are_limited_together(monkeypatch) -> None:
+    """§894: two at once, of the four runs the worker allows. Each holds a
+    DuckDB in the worker's own process; test and preview runs send their
+    code to the transform runner."""
+    monkeypatch.setenv("WORKER_DATABASE_URL", "postgresql://unused@localhost/unused")
+    from anchor_worker.definitions import HEAVY, WEIGHT_TAG, defs
+
+    heavy = {s.job_name for s in defs.schedules if s.tags.get(WEIGHT_TAG) == "heavy"}
+    assert heavy == {"scheduled_model_runs", "scheduled_connection_syncs",
+                     "scheduled_instance_syncs", "scheduled_exports"}
+    limits = yaml.safe_load(open(DAGSTER_YAML))["run_coordinator"]["config"]["tag_concurrency_limits"]
+    assert limits == [{"key": WEIGHT_TAG, "value": HEAVY[WEIGHT_TAG], "limit": 2}]
