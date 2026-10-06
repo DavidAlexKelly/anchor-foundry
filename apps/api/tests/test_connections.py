@@ -370,7 +370,6 @@ def test_no_read_endpoint_returns_the_credential_at_any_role(
     cannot be about this connection without naming something else first.
     """
     import re as _re
-    from fastapi.routing import APIRoute
 
     r = client.post(
         base(fx), headers=hdr(fx.editor_sub),
@@ -384,18 +383,20 @@ def test_no_read_endpoint_returns_the_credential_at_any_role(
     # code that holds the password.
     client.post(f"{base(fx)}/{known['connection_id']}/test", headers=hdr(fx.editor_sub))
 
+    from route_table import api_routes
+
     checked: list[str] = []
-    for route in client.app.routes:
-        if not isinstance(route, APIRoute) or "GET" not in route.methods:
+    for template, methods, _route in api_routes(client.app):
+        if "GET" not in methods:
             continue
-        params = _re.findall(r"{(\w+)}", route.path)
+        params = _re.findall(r"{(\w+)}", template)
         if any(p not in known for p in params):
             continue
-        path = route.path.format(**{p: known[p] for p in params})
+        path = template.format(**{p: known[p] for p in params})
         for sub in (fx.viewer_sub, fx.editor_sub, fx.admin_sub, fx.owner_sub):
             response = client.get(path, headers=hdr(sub))
-            assert SOURCE_PASSWORD not in response.text, (route.path, sub, response.status_code)
-        checked.append(route.path)
+            assert SOURCE_PASSWORD not in response.text, (template, sub, response.status_code)
+        checked.append(template)
     # The connection's own reads are among the routes walked, and the walk is
     # the app's breadth rather than a handful.
     assert any(p.endswith("/connections") for p in checked), checked

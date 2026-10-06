@@ -13,10 +13,10 @@ import os
 import re
 import sys
 
-from fastapi.routing import APIRoute
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from route_table import api_routes  # noqa: E402
 from src.main import create_app  # noqa: E402
 
 DOC = os.path.join(os.path.dirname(__file__), "..", "..", "..", "docs",
@@ -46,11 +46,11 @@ def declared_role(dependant) -> str | None:
 
 def actual() -> dict[str, str]:
     routes: dict[str, str] = {}
-    for route in create_app().routes:
-        if not isinstance(route, APIRoute) or not any(k in route.path for k in COVERED):
+    for template, methods, route in api_routes(create_app()):
+        if not any(k in template for k in COVERED):
             continue
-        path = route.path.removeprefix(WORKSPACE)
-        for method in route.methods:
+        path = template.removeprefix(WORKSPACE)
+        for method in methods:
             routes[f"{method} {path}"] = declared_role(route.dependant) or "none"
     return routes
 

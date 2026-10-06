@@ -21,7 +21,7 @@
 # created a minute ago, and it is the one to run before merging.
 #
 # `apps/control-plane/tests` is deliberately not here: it needs a second
-# database nothing in this repo provisions, and pins httpx against apps/api's.
+# database nothing in this repo provisions (its pins match apps/api's since §837).
 # `apps/api/tests/test_dependency_pins.py` holds that reason and goes red if a
 # new suite is added without one - because until §263 the worker's 78 tests
 # were absent from this file with no reason at all, and an absence explains
