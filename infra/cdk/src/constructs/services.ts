@@ -34,7 +34,6 @@ export interface ServicesProps {
   readonly appDbSecret: secretsmanager.ISecret;
   readonly databaseHost: string;
   readonly databasePort: string;
-  readonly redisEndpoint: string;
   readonly searchEndpoint: string;
   readonly userPool: cognito.IUserPool;
   readonly userPoolClientId: string;
@@ -299,7 +298,6 @@ export class ServicesConstruct extends Construct {
 
     // ---- Shared env ---------------------------------------------------------
     const commonEnv = {
-      REDIS_URL: `rediss://${props.redisEndpoint}:6379/0`,
       OPENSEARCH_ENDPOINT: `https://${props.searchEndpoint}`,
       S3_DATA_BUCKET: props.dataBucket.bucketName,
       COGNITO_USER_POOL_ID: props.userPool.userPoolId,

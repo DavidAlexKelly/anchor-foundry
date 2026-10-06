@@ -1,6 +1,5 @@
 import { Duration, RemovalPolicy } from "aws-cdk-lib";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
-import * as elasticache from "aws-cdk-lib/aws-elasticache";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as kms from "aws-cdk-lib/aws-kms";
 import * as opensearch from "aws-cdk-lib/aws-opensearchservice";
@@ -43,8 +42,6 @@ export class DataStoresConstruct extends Construct {
   public readonly dbSecret: secretsmanager.ISecret;
   /** Separate credential for the RLS-subject application role (db 0006). */
   public readonly appDbSecret: secretsmanager.Secret;
-  public readonly redis: elasticache.CfnReplicationGroup;
-  public readonly redisSecurityGroup: ec2.SecurityGroup;
   public readonly search: opensearch.Domain;
   /** The domain's master user, `{"username", "password"}`, which is what the
    * API's and the worker's `OPENSEARCH_SECRET_ARN` names (§814). */
@@ -117,27 +114,10 @@ export class DataStoresConstruct extends Construct {
       },
     });
 
-    // ElastiCache Redis - Celery queues + API caching (spec §7).
-    this.redisSecurityGroup = new ec2.SecurityGroup(this, "RedisSg", {
-      vpc,
-      allowAllOutbound: false,
-    });
-    const redisSubnets = new elasticache.CfnSubnetGroup(this, "RedisSubnets", {
-      description: "Platform redis subnets",
-      subnetIds: vpc.selectSubnets({ subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS }).subnetIds,
-    });
-    this.redis = new elasticache.CfnReplicationGroup(this, "Redis", {
-      replicationGroupDescription: "Platform cache and job queue",
-      engine: "redis",
-      cacheNodeType: "cache.t4g.small",
-      numCacheClusters: 1,
-      atRestEncryptionEnabled: true,
-      transitEncryptionEnabled: true,
-      automaticFailoverEnabled: false,
-      cacheSubnetGroupName: redisSubnets.ref,
-      securityGroupIds: [this.redisSecurityGroup.securityGroupId],
-    });
-    this.redis.addResourceDependency(redisSubnets);
+    // No Redis (§845, decision 0026). Spec §7 put an ElastiCache node here
+    // for Celery queues and API caching; the worker runs on Dagster and the
+    // API caches nothing in Redis, so the node was billed in every stack and
+    // read by nothing. Re-add it with the first thing that uses it.
 
     // OpenSearch - object instance search and aggregation (spec §7, §8).
     this.search = new opensearch.Domain(this, "Search", {
