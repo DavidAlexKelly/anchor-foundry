@@ -195,3 +195,64 @@ def test_a_runs_output_waits_for_another_writer_of_its_dataset(
     assert not run.is_alive()
     assert os.path.exists(second_file)
     assert _outputs(mid) == 2
+
+
+def test_runs_a_stopped_worker_left_running_are_failed_and_say_why(workspace: dict) -> None:
+    """§870 (db 0165): a run is marked 'running' before its work starts, so a
+    worker stopped part-way left it 'running' for good - and an upstream model
+    with a run "in flight" was never enqueued again. Past any run's limits, it
+    is failed with the reason; a recent one is left alone."""
+    import json as _json
+
+    stale = _create_model(workspace, language="sql", code="SELECT * FROM t", trigger_mode="upstream")
+    fresh = _create_model(workspace, language="sql", code="SELECT * FROM t")
+    _add_version(workspace["input_dataset_id"], 1)
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        old_run = conn.execute(
+            "INSERT INTO model_runs (model_id, trigger_kind, status, started_at)"
+            " VALUES (%s,'upstream','running', now() - interval '2 hours') RETURNING id",
+            (stale,)).fetchone()[0]
+        live_run = conn.execute(
+            "INSERT INTO model_runs (model_id, trigger_kind, status, started_at)"
+            " VALUES (%s,'manual','running', now() - interval '5 minutes') RETURNING id",
+            (fresh,)).fetchone()[0]
+        repo = conn.execute(
+            "INSERT INTO code_repos (project_id, name, slug, s3_prefix, created_by)"
+            " VALUES (%s,%s,%s,%s,%s) RETURNING id",
+            (workspace["project_id"], f"R {workspace['tag']}", f"r-{workspace['tag']}",
+             f"workspaces/w-{workspace['tag']}/repos/r/", workspace["user_id"])).fetchone()[0]
+        old_test = conn.execute(
+            "INSERT INTO code_test_runs (repo_id, branch, files, requested_by, status, started_at)"
+            " VALUES (%s,'main',%s,%s,'running', now() - interval '1 hour') RETURNING id",
+            (repo, _json.dumps({}), workspace["user_id"])).fetchone()[0]
+        # And an action run the API opened and never closed.
+        interface = conn.execute(
+            "INSERT INTO interfaces (workspace_id, api_name, display_name) VALUES (%s,%s,'I')"
+            " RETURNING id", (workspace["workspace_id"], f"i{workspace['tag']}")).fetchone()[0]
+        action = conn.execute(
+            "INSERT INTO action_types (workspace_id, interface_id, api_name, display_name)"
+            " VALUES (%s,%s,%s,'A') RETURNING id",
+            (workspace["workspace_id"], interface, f"a{workspace['tag']}")).fetchone()[0]
+        old_action = conn.execute(
+            "INSERT INTO action_runs (action_type_id, started_at)"
+            " VALUES (%s, now() - interval '1 hour') RETURNING id", (action,)).fetchone()[0]
+
+    model_runs.run_model_runs(_ctx())
+
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        def run(run_id):
+            return conn.execute("SELECT status, error_message, finished_at IS NOT NULL"
+                                " FROM model_runs WHERE id=%s", (run_id,)).fetchone()
+        assert run(old_run) == ("failed", "the worker stopped while this ran; run it again", True)
+        assert run(live_run)[0] == "running"
+        assert conn.execute("SELECT status, error FROM code_test_runs WHERE id=%s",
+                            (old_test,)).fetchone() == (
+            "errored", "the worker stopped while this ran; run it again")
+        assert conn.execute("SELECT status, failure_category, error FROM action_runs WHERE id=%s",
+                            (old_action,)).fetchone() == (
+            "failed", "unclassified", "the platform stopped while this ran; submit it again")
+    # Nothing in flight any more: the upstream model reacted in the same pass.
+    assert ("upstream", "succeeded") in _runs(stale)
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        conn.execute("UPDATE model_runs SET status='failed', error_message='test' WHERE id=%s",
+                     (live_run,))
