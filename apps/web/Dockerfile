@@ -11,14 +11,14 @@
 # `docker build` flags used.
 # The tag says what it is; the digest says which one (§818). Bump both together
 # with scripts/pin-images.sh.
-FROM --platform=linux/amd64 node:20-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 AS deps
+FROM --platform=linux/amd64 node:22-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS deps
 WORKDIR /repo
 COPY package.json package-lock.json ./
 COPY apps/web/package.json apps/web/
 COPY packages/types/package.json packages/types/
 RUN npm ci --no-audit --no-fund
 
-FROM --platform=linux/amd64 node:20-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 AS build
+FROM --platform=linux/amd64 node:22-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS build
 WORKDIR /repo
 # Copy the whole deps-stage tree, not just /repo/node_modules: npm workspaces
 # can nest a package's deps under its own workspace directory (e.g. this
@@ -35,7 +35,7 @@ ENV NEXT_PUBLIC_COGNITO_DOMAIN=$NEXT_PUBLIC_COGNITO_DOMAIN \
     NEXT_TELEMETRY_DISABLED=1
 RUN npm run build -w @platform/web
 
-FROM --platform=linux/amd64 node:20-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 AS run
+FROM --platform=linux/amd64 node:22-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS run
 WORKDIR /app
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1
 RUN useradd --create-home --uid 10001 apprunner

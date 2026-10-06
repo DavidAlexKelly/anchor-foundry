@@ -9,7 +9,7 @@
 # correct regardless of the machine or `docker build` flags used.
 # The tag says what it is; the digest says which one (§818). Bump both together
 # with scripts/pin-images.sh.
-FROM --platform=linux/amd64 python:3.12-slim@sha256:dddfd7e07f9d15aeeca61529320492139d21cac7f0070c00609243e51e4e0016 AS base
+FROM --platform=linux/amd64 python:3.12-slim@sha256:02108f5d322dd89f1c9e552442c25acb0543dfdbc455693a5599624f20d9155d AS base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

@@ -23,7 +23,7 @@ and guessing wrong is worse than saying which is missing.
 |---|---|
 | **Postgres 14+**, running | every surface in the product is backed by it |
 | **Python 3.12 or 3.13** | the API and worker — what the pins in `apps/api/requirements.txt` target |
-| **Node 20+** | the web app |
+| **Node 22+** | the web app (Node 20 reached end of life in April 2026; the image and CI run 22, §843) |
 | `psql` and `pg_isready` on `PATH` | the script creates the role and database through them |
 
 **On a Mac, `python3` is Apple's 3.9 and that is not a problem.** Homebrew
