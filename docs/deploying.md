@@ -278,7 +278,8 @@ only when they agree again.
 own key (`.../v{n}/data.parquet`) and never over another, so a database
 restored to an earlier point names files the bucket still holds. The exception
 is a file deleted since; the bucket's previous version of that key is the
-repair. Previous versions last 30 days, so a restore to the oldest backup (14
+repair. Deleting a workspace or a dataset, a project's included, removes its
+files at the next nightly cleanup (§864). Previous versions last 30 days, so a restore to the oldest backup (14
 days) leaves two weeks to repair from them. Past that, a deleted file is gone:
 that is what deleting it means.
 
