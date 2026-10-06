@@ -832,8 +832,17 @@ async def stage_version(
         raise ValueError(f"unknown transaction type {transaction_type!r}")
 
     ws_prefix = await workspace_s3_prefix(conn, workspace_id)
+    # **Locked until this transaction ends** (§861). The bytes go to a key
+    # named by the number - `v{n}/data.parquet` - before anything commits, so
+    # two writers that both read v7 both wrote v8's file, and the one writing
+    # second overwrote what the first had committed: v8's row described one
+    # write and its file held the other's. `commit_versions` refusing the
+    # second came after the damage. Locked, the second waits here, reads v8,
+    # and writes v9. Readers are not blocked, only other writers of this
+    # dataset.
     current = await fetch_one(
-        conn, "SELECT current_version FROM datasets WHERE id = :id", {"id": str(dataset_id)}
+        conn, "SELECT current_version FROM datasets WHERE id = :id FOR UPDATE",
+        {"id": str(dataset_id)},
     )
     if current is None:
         raise NotFoundError("dataset")
@@ -851,6 +860,26 @@ async def stage_version(
         created_by=created_by,
         transaction_type=transaction_type,
     )
+
+
+async def lock_for_writing(conn: AsyncConnection, dataset_ids) -> None:
+    """Take every dataset a write will version, in one order (§861).
+
+    `stage_version` locks its dataset, and a write that versions several -
+    an action's rows over two object types, its log, its join tables - takes
+    them one after another in whatever order it planned them. Two such writes
+    meeting in opposite orders would each hold what the other wants, and
+    Postgres would end one with a deadlock error. Taken here first, sorted,
+    the second simply waits its turn; the locks `stage_version` then asks for
+    are already held.
+    """
+    ids = sorted({str(d) for d in dataset_ids})
+    if ids:
+        await conn.execute(
+            _text("SELECT id FROM datasets WHERE id = ANY(CAST(:ids AS uuid[]))"
+                 " ORDER BY id FOR UPDATE"),
+            {"ids": ids},
+        )
 
 
 async def commit_versions(
