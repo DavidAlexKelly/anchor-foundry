@@ -355,6 +355,10 @@ for (const [name, template] of [["public", plain], ["vpc", viaVpc]] as const) {
   });
 }
 
+check("the API does not name its server (§923)", () => {
+  if (envOf(plain, "api").UVICORN_SERVER_HEADER !== "false") throw new Error("uvicorn sends server: uvicorn");
+});
+
 console.log("HTTPS from the first request on (§920):");
 
 check("every behaviour tells the browser to keep to HTTPS for a year", () => {

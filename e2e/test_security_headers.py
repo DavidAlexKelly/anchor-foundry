@@ -26,6 +26,11 @@ def test_a_page_carries_them() -> None:
     assert {k: got.get(k) for k in EXPECTED} == {k: [v] for k, v in EXPECTED.items()}
 
 
+def test_a_page_does_not_name_its_server() -> None:
+    """§923: nothing to match against a list of advisories."""
+    assert "x-powered-by" not in headers_of(f"{WEB_BASE}/")
+
+
 def test_a_page_says_what_it_may_not_load(page) -> None:
     """§860: a Content-Security-Policy, for the parts nothing here needs -
     and a page that still works under it, framing its own pages included."""

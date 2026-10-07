@@ -515,6 +515,9 @@ export class ServicesConstruct extends Construct {
         DUCKDB_SLOTS: String(API_DUCKDB_SLOTS),
         // uvicorn reads its options from UVICORN_*; seconds.
         UVICORN_TIMEOUT_KEEP_ALIVE: String(TARGET_KEEP_ALIVE_S),
+        // §923: no `server: uvicorn` on every answer, naming the software
+        // to anyone matching it against advisories.
+        UVICORN_SERVER_HEADER: "false",
         ...(props.bootstrapTokenHash ? { BOOTSTRAP_TOKEN_SHA256: props.bootstrapTokenHash } : {}),
       },
     });
