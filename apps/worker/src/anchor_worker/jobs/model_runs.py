@@ -68,7 +68,7 @@ def _record_output(
     output_dataset_id: UUID | None,
     project_id: UUID,
     workspace_id: UUID,
-    parquet_bytes: bytes,
+    parquet_path: str,
     schema: list[engine.ColumnSchema],
     row_count: int,
 ) -> tuple[UUID, UUID]:
@@ -92,7 +92,7 @@ def _record_output(
             )
         version = 1
         parquet_key = f"{storage_prefix(ws_prefix, dataset_id)}v1/data.parquet"
-        storage.put(parquet_key, parquet_bytes)
+        storage.put_file(parquet_key, parquet_path)
         cur.execute(
             """
             INSERT INTO datasets (id, project_id, workspace_id, name, slug, description,
@@ -118,7 +118,7 @@ def _record_output(
             raise engine.DatasetEngineError("output dataset no longer exists")
         version = int(row[0]) + 1
         parquet_key = f"{storage_prefix(ws_prefix, dataset_id)}v{version}/data.parquet"
-        storage.put(parquet_key, parquet_bytes)
+        storage.put_file(parquet_key, parquet_path)
         cur.execute(
             """
             UPDATE datasets
@@ -448,9 +448,6 @@ def _execute_queued_model_runs(context: OpExecutionContext, platform_db: Platfor
                     schema, rows_produced = run_python_transform(
                         input_paths, code, dest, log_path=log_file
                     )
-                with open(dest, "rb") as handle:
-                    parquet_bytes = handle.read()
-
                 with platform_db.connect_scoped_to(workspace_id) as conn:
                     with conn.cursor() as cur:
                         _, output_version_id = _record_output(
@@ -461,7 +458,7 @@ def _execute_queued_model_runs(context: OpExecutionContext, platform_db: Platfor
                             ),
                             project_id=UUID(str(project_id)),
                             workspace_id=UUID(str(workspace_id)),
-                            parquet_bytes=parquet_bytes, schema=schema,
+                            parquet_path=dest, schema=schema,
                             row_count=rows_produced,
                         )
                     conn.commit()

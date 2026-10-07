@@ -41,6 +41,8 @@ def validate_key(key: str) -> str:
 class StorageGateway(Protocol):
     def put(self, key: str, data: bytes) -> None: ...
 
+    def put_file(self, key: str, path: str) -> None: ...
+
     def read(self, key: str) -> bytes: ...
 
     def local_path(self, key: str) -> str: ...
@@ -68,6 +70,12 @@ class LocalStorageGateway:
         path = self._path(key)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
+
+    def put_file(self, key: str, path: str) -> None:
+        """Copy a file into place without holding it in memory (§907)."""
+        target = self._path(key)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(path, target)
 
     def read(self, key: str) -> bytes:
         path = self._path(key)
@@ -169,6 +177,20 @@ class S3StorageGateway:
     def put(self, key: str, data: bytes) -> None:
         validate_key(key)
         self._client.put_object(Bucket=self._bucket, Key=key, Body=data)
+
+    def put_file(self, key: str, path: str) -> None:
+        """Upload a file from disk in parts (§907). A dataset's output used to
+        be read whole into memory and sent in one request, so a run held its
+        output's size on top of DuckDB's, and a file past 5 GB, the limit
+        of a single PUT, could not be stored at all. Four 8 MiB parts in flight
+        bound what this holds."""
+        from boto3.s3.transfer import TransferConfig  # deferred, as boto3 is
+
+        validate_key(key)
+        self._client.upload_file(
+            path, self._bucket, key,
+            Config=TransferConfig(multipart_chunksize=8 * 1024 * 1024, max_concurrency=4),
+        )
 
     def read(self, key: str) -> bytes:
         validate_key(key)

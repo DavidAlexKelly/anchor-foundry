@@ -73,7 +73,7 @@ def _record_synced_dataset(
     dataset_id: UUID | None,
     project_id: UUID,
     workspace_id: UUID,
-    parquet_bytes: bytes,
+    parquet_path: str,
     schema: list[engine.ColumnSchema],
     row_count: int,
     transaction_type: str,
@@ -108,7 +108,7 @@ def _record_synced_dataset(
             )
         version = 1
         parquet_key = f"{storage_prefix(ws_prefix, new_id)}v1/data.parquet"
-        storage.put(parquet_key, parquet_bytes)
+        storage.put_file(parquet_key, parquet_path)
         cur.execute(
             """
             INSERT INTO datasets (id, project_id, workspace_id, name, slug, description,
@@ -138,7 +138,7 @@ def _record_synced_dataset(
         schema_changes = engine.diff_schemas(_stored_schema(row[1]), schema)
         version = int(row[0]) + 1
         parquet_key = f"{storage_prefix(ws_prefix, dataset_id)}v{version}/data.parquet"
-        storage.put(parquet_key, parquet_bytes)
+        storage.put_file(parquet_key, parquet_path)
         cur.execute(
             """
             UPDATE datasets
@@ -236,38 +236,34 @@ def _run_file_sync(
         out = os.path.join(tmp, "data.parquet")
         schema, view_rows = engine.combine_parquets([(p, parts[p]) for p in view], out)
         for key, local in written.items():
-            with open(local, "rb") as handle:
-                storage.put(key, handle.read())
-        with open(out, "rb") as handle:
-            parquet = handle.read()
-
-    with platform_db.connect_scoped_to(workspace_id) as conn:
-        with conn.cursor() as cur:
-            dataset, _changes = _record_synced_dataset(
-                cur, storage, connection_id=connection_id, dataset_name=dataset_name,
-                dataset_id=dataset_id, project_id=project_id, workspace_id=workspace_id,
-                parquet_bytes=parquet, schema=schema, row_count=view_rows,
-                transaction_type=transaction, new_id=target,
-            )
-            cur.execute("SELECT current_version FROM datasets WHERE id = %s", (str(dataset),))
-            version = int(cur.fetchone()[0])
-            if transaction == "SNAPSHOT":
-                cur.execute("DELETE FROM dataset_files WHERE dataset_id = %s", (str(dataset),))
-            for f in taken:
-                cur.execute("""
-                    INSERT INTO dataset_files (dataset_id, filename, uploaded_by, version_number)
-                    VALUES (%s, %s, NULL, %s)
-                    ON CONFLICT (dataset_id, filename) DO UPDATE
-                        SET uploaded_by = NULL, uploaded_at = now(),
-                            version_number = EXCLUDED.version_number
-                """, (str(dataset), f["path"], version))
-                cur.execute("""
-                    INSERT INTO sync_files (connection_id, path, size, modified)
-                    VALUES (%s, %s, %s, %s)
-                    ON CONFLICT (connection_id, path) DO UPDATE
-                        SET size = EXCLUDED.size, modified = EXCLUDED.modified, synced_at = now()
-                """, (str(connection_id), f["path"], int(f["size"]), f.get("modified")))
-        conn.commit()
+            storage.put_file(key, local)
+        with platform_db.connect_scoped_to(workspace_id) as conn:
+            with conn.cursor() as cur:
+                dataset, _changes = _record_synced_dataset(
+                    cur, storage, connection_id=connection_id, dataset_name=dataset_name,
+                    dataset_id=dataset_id, project_id=project_id, workspace_id=workspace_id,
+                    parquet_path=out, schema=schema, row_count=view_rows,
+                    transaction_type=transaction, new_id=target,
+                )
+                cur.execute("SELECT current_version FROM datasets WHERE id = %s", (str(dataset),))
+                version = int(cur.fetchone()[0])
+                if transaction == "SNAPSHOT":
+                    cur.execute("DELETE FROM dataset_files WHERE dataset_id = %s", (str(dataset),))
+                for f in taken:
+                    cur.execute("""
+                        INSERT INTO dataset_files (dataset_id, filename, uploaded_by, version_number)
+                        VALUES (%s, %s, NULL, %s)
+                        ON CONFLICT (dataset_id, filename) DO UPDATE
+                            SET uploaded_by = NULL, uploaded_at = now(),
+                                version_number = EXCLUDED.version_number
+                    """, (str(dataset), f["path"], version))
+                    cur.execute("""
+                        INSERT INTO sync_files (connection_id, path, size, modified)
+                        VALUES (%s, %s, %s, %s)
+                        ON CONFLICT (connection_id, path) DO UPDATE
+                            SET size = EXCLUDED.size, modified = EXCLUDED.modified, synced_at = now()
+                    """, (str(connection_id), f["path"], int(f["size"]), f.get("modified")))
+            conn.commit()
     return dataset, rows_taken
 
 
@@ -370,103 +366,103 @@ def run_due_scheduled_syncs(context: OpExecutionContext, platform_db: PlatformDa
         else:
             try:
                 connector = get_connector(source_type)
-                with egress.restricted_to(policies), tempfile.TemporaryDirectory() as tmp:
-                    cursor_for_query = cursor_column if mode == "incremental" else None
-                    extract = connector.snapshot(
-                        config, secret,
-                        source_schema=source_schema, source_table=source_table,
-                        dest_dir=tmp, max_bytes=MAX_SYNC_BYTES,
-                        cursor_column=cursor_for_query, cursor_value=last_cursor,
-                    )
-                    if mode == "incremental":
-                        new_cursor_value = connector.max_cursor_value(
+                with tempfile.TemporaryDirectory() as tmp:
+                    # The directory outlives the egress block: the output is uploaded
+                    # from its file (§907), and storage is not a destination the
+                    # source's policies name.
+                    with egress.restricted_to(policies):
+                        cursor_for_query = cursor_column if mode == "incremental" else None
+                        extract = connector.snapshot(
                             config, secret,
                             source_schema=source_schema, source_table=source_table,
-                            cursor_column=cursor_column,
-                        ) or last_cursor
-
-                    new_parquet = os.path.join(tmp, "new.parquet")
-                    if extract.empty:
-                        # The connector already knows nothing changed (an object
-                        # store with no rewritten object writes no file at all),
-                        # so there is nothing to ingest.
-                        schema, new_row_count = [], 0
-                    else:
-                        schema, new_row_count = _ingest_file(
-                            extract.path, extract.extension, new_parquet
+                            dest_dir=tmp, max_bytes=MAX_SYNC_BYTES,
+                            cursor_column=cursor_for_query, cursor_value=last_cursor,
                         )
+                        if mode == "incremental":
+                            new_cursor_value = connector.max_cursor_value(
+                                config, secret,
+                                source_schema=source_schema, source_table=source_table,
+                                cursor_column=cursor_column,
+                            ) or last_cursor
 
-                    # An empty extract means the source had nothing at all (a REST
-                    # collection that is simply empty, an object that has not been
-                    # rewritten). With a dataset already in place there is nothing
-                    # to do in either mode; without one, full mode has no schema to
-                    # infer and says so rather than failing inside DuckDB.
-                    if extract.empty and dataset_id is None:
-                        raise engine.DatasetEngineError(
-                            "the source returned no records, so there is nothing to "
-                            "create a dataset from yet"
-                        )
-                    nothing_new = dataset_id is not None and (
-                        extract.empty or (mode == "incremental" and new_row_count == 0)
-                    )
-                    if nothing_new:
-                        # Steady state for a cron-scheduled sync between source
-                        # writes. An empty CSV (header only) gives DuckDB nothing
-                        # to infer column types from - it falls back to VARCHAR
-                        # for every column, which then fails to compare against
-                        # the existing (correctly-typed) dataset in the primary
-                        # key anti-join. Skip the merge/write entirely instead.
-                        with platform_db.connect_scoped_to(workspace_id) as conn:
-                            with conn.cursor() as cur:
-                                cur.execute("SELECT row_count FROM datasets WHERE id = %s", (str(dataset_id),))
-                                rows_synced = cur.fetchone()[0]
-                            conn.commit()
-                    elif mode == "incremental" and dataset_id is not None:
-                        storage_local = _local_path_of_current_version(
-                            platform_db, workspace_id, connection_id, dataset_id
-                        )
-                        merged_parquet = os.path.join(tmp, "merged.parquet")
-                        schema, rows_synced = engine.merge_incremental(
-                            storage_local, new_parquet, primary_key_column, merged_parquet
-                        )
-                        final_parquet = merged_parquet
-                        # Whether this run replaced a row of the view (§747).
-                        transaction_type = engine.merge_transaction(
-                            storage_local, new_parquet, primary_key_column)
-                    else:
-                        final_parquet = new_parquet
-                        rows_synced = new_row_count
-                        transaction_type = "SNAPSHOT"
-
-                    if not nothing_new:
-                        with open(final_parquet, "rb") as handle:
-                            parquet_bytes = handle.read()
-
-                with platform_db.connect_scoped_to(workspace_id) as conn:
-                    with conn.cursor() as cur:
-                        if nothing_new:
-                            new_dataset_id = dataset_id
-                            schema_changes = None
+                        new_parquet = os.path.join(tmp, "new.parquet")
+                        if extract.empty:
+                            # The connector already knows nothing changed (an object
+                            # store with no rewritten object writes no file at all),
+                            # so there is nothing to ingest.
+                            schema, new_row_count = [], 0
                         else:
-                            new_dataset_id, schema_changes = _record_synced_dataset(
-                                cur, storage,
-                                connection_id=UUID(str(connection_id)),
-                                dataset_name=dataset_name or source_table,
-                                dataset_id=UUID(str(dataset_id)) if dataset_id else None,
-                                project_id=UUID(str(project_id)), workspace_id=UUID(str(workspace_id)),
-                                parquet_bytes=parquet_bytes, schema=schema, row_count=rows_synced,
-                                cursor_value=new_cursor_value if mode == "incremental" else None,
-                                transaction_type=transaction_type,
+                            schema, new_row_count = _ingest_file(
+                                extract.path, extract.extension, new_parquet
                             )
-                        cur.execute(
-                            "INSERT INTO sync_runs (connection_id, dataset_id, mode, source_table, "
-                            "status, rows_synced, finished_at, schema_changes) "
-                            "VALUES (%s, %s, %s, %s, 'succeeded', %s, now(), %s)",
-                            (str(connection_id), str(new_dataset_id), mode,
-                             f"{source_schema}.{source_table}", rows_synced,
-                             json.dumps(schema_changes) if schema_changes else None),
+
+                        # An empty extract means the source had nothing at all (a REST
+                        # collection that is simply empty, an object that has not been
+                        # rewritten). With a dataset already in place there is nothing
+                        # to do in either mode; without one, full mode has no schema to
+                        # infer and says so rather than failing inside DuckDB.
+                        if extract.empty and dataset_id is None:
+                            raise engine.DatasetEngineError(
+                                "the source returned no records, so there is nothing to "
+                                "create a dataset from yet"
+                            )
+                        nothing_new = dataset_id is not None and (
+                            extract.empty or (mode == "incremental" and new_row_count == 0)
                         )
-                    conn.commit()
+                        if nothing_new:
+                            # Steady state for a cron-scheduled sync between source
+                            # writes. An empty CSV (header only) gives DuckDB nothing
+                            # to infer column types from - it falls back to VARCHAR
+                            # for every column, which then fails to compare against
+                            # the existing (correctly-typed) dataset in the primary
+                            # key anti-join. Skip the merge/write entirely instead.
+                            with platform_db.connect_scoped_to(workspace_id) as conn:
+                                with conn.cursor() as cur:
+                                    cur.execute("SELECT row_count FROM datasets WHERE id = %s", (str(dataset_id),))
+                                    rows_synced = cur.fetchone()[0]
+                                conn.commit()
+                        elif mode == "incremental" and dataset_id is not None:
+                            storage_local = _local_path_of_current_version(
+                                platform_db, workspace_id, connection_id, dataset_id
+                            )
+                            merged_parquet = os.path.join(tmp, "merged.parquet")
+                            schema, rows_synced = engine.merge_incremental(
+                                storage_local, new_parquet, primary_key_column, merged_parquet
+                            )
+                            final_parquet = merged_parquet
+                            # Whether this run replaced a row of the view (§747).
+                            transaction_type = engine.merge_transaction(
+                                storage_local, new_parquet, primary_key_column)
+                        else:
+                            final_parquet = new_parquet
+                            rows_synced = new_row_count
+                            transaction_type = "SNAPSHOT"
+
+                    with platform_db.connect_scoped_to(workspace_id) as conn:
+                        with conn.cursor() as cur:
+                            if nothing_new:
+                                new_dataset_id = dataset_id
+                                schema_changes = None
+                            else:
+                                new_dataset_id, schema_changes = _record_synced_dataset(
+                                    cur, storage,
+                                    connection_id=UUID(str(connection_id)),
+                                    dataset_name=dataset_name or source_table,
+                                    dataset_id=UUID(str(dataset_id)) if dataset_id else None,
+                                    project_id=UUID(str(project_id)), workspace_id=UUID(str(workspace_id)),
+                                    parquet_path=final_parquet, schema=schema, row_count=rows_synced,
+                                    cursor_value=new_cursor_value if mode == "incremental" else None,
+                                    transaction_type=transaction_type,
+                                )
+                            cur.execute(
+                                "INSERT INTO sync_runs (connection_id, dataset_id, mode, source_table, "
+                                "status, rows_synced, finished_at, schema_changes) "
+                                "VALUES (%s, %s, %s, %s, 'succeeded', %s, now(), %s)",
+                                (str(connection_id), str(new_dataset_id), mode,
+                                 f"{source_schema}.{source_table}", rows_synced,
+                                 json.dumps(schema_changes) if schema_changes else None),
+                            )
+                        conn.commit()
             # Every exception type on the call path, enumerated deliberately (the
             # standing checklist item from instance_syncs.py's own history): a
             # driver/extract failure (ConnectorError, including an unregistered

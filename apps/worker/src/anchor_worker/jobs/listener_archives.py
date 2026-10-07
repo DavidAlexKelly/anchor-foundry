@@ -136,20 +136,18 @@ def archive_one(platform_db: PlatformDatabase, storage, listener_id, workspace_i
             with tempfile.TemporaryDirectory() as tmp:
                 dest = os.path.join(tmp, "data.parquet")
                 schema, count = archive_file(previous, events, dest)
-                with open(dest, "rb") as handle:
-                    parquet = handle.read()
-            if dataset_id is None:
-                dataset_id = uuid4()
-                name = _free_name(cur, project_id, dataset_name(display_name))
-                cur.execute("""
-                    INSERT INTO datasets (id, project_id, workspace_id, name, slug, description,
-                                          origin, s3_location, current_version)
-                    VALUES (%s, %s, %s, %s, %s, %s, 'listener', %s, 0)
-                """, (str(dataset_id), str(project_id), str(workspace_id), name, slugify(name),
-                      f"Events received by the listener {display_name}",
-                      storage_prefix(ws_prefix, dataset_id)))
-            key = f"{storage_prefix(ws_prefix, dataset_id)}v{version}/data.parquet"
-            storage.put(key, parquet)
+                if dataset_id is None:
+                    dataset_id = uuid4()
+                    name = _free_name(cur, project_id, dataset_name(display_name))
+                    cur.execute("""
+                        INSERT INTO datasets (id, project_id, workspace_id, name, slug, description,
+                                              origin, s3_location, current_version)
+                        VALUES (%s, %s, %s, %s, %s, %s, 'listener', %s, 0)
+                    """, (str(dataset_id), str(project_id), str(workspace_id), name, slugify(name),
+                          f"Events received by the listener {display_name}",
+                          storage_prefix(ws_prefix, dataset_id)))
+                key = f"{storage_prefix(ws_prefix, dataset_id)}v{version}/data.parquet"
+                storage.put_file(key, dest)
             schema_json = json.dumps([{"name": n, "data_type": t} for n, t in schema])
             cur.execute("""
                 UPDATE datasets SET s3_location = %s, table_schema = %s, row_count = %s,
