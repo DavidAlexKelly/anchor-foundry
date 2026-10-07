@@ -422,6 +422,11 @@ and when they clear, to one SNS topic (the `AlarmTopicArn` stack output);
 - database storage under 2 GiB, database CPU over 80% for fifteen minutes,
   or more than four in five of its connections held for ten (§925).
 
+Which statements the database spends its time on is in CloudWatch Database
+Insights (Standard, Performance Insights' free seven days; §930), under the
+RDS instance: the place to start when a page is slow and the API's latency
+alarm has fired.
+
 The worker has no load balancer in front of it; ECS itself replaces a worker
 whose Dagster daemon stops beating (§924), and `WorkerNotRunning` fires if
 none comes back.
