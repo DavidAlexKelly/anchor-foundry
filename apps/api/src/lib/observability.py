@@ -237,8 +237,14 @@ def configure_logging() -> None:
     """Structured lines on stderr for the `anchor` loggers, once.
 
     Only `anchor.*`: the root logger and uvicorn's own are left as the server
-    configured them, so a developer's terminal still reads as it did.
+    configured them, so a developer's terminal still reads as it did - except
+    **uvicorn's access line, which is switched off** (§922). It printed each
+    request's raw path and query string, so a listener's endpoint token
+    (`/api/listen/{token}`) and an OAuth callback's `code` went into the
+    stack's logs in full, for anyone who can read them. `anchor.access`
+    records the same request by its route template, which names no token.
     """
+    logging.getLogger("uvicorn.access").disabled = True
     root = logging.getLogger("anchor")
     if any(isinstance(h.formatter, JsonFormatter) for h in root.handlers):
         return
