@@ -184,3 +184,96 @@ def test_a_listener_with_nothing_new_is_left_alone(workspace) -> None:
     db = PlatformDatabase(dsn=APP_DSN)
     assert listener_archives.archive_one(db, gateway_from_env(), lid, workspace["workspace_id"]) == 0
     assert archived(lid) == before
+
+
+# ---- retention (§915; db 0168) ---------------------------------------------
+def prune() -> int:
+    return listener_archives.prune_archived_listener_events(
+        build_op_context(resources={"platform_db": PlatformDatabase(dsn=APP_DSN)}))
+
+
+def events(listener_id: uuid.UUID) -> list[bytes]:
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        return [bytes(r[0]) for r in conn.execute(
+            "SELECT body FROM listener_events WHERE listener_id = %s ORDER BY id",
+            (listener_id,)).fetchall()]
+
+
+def age(listener_id: uuid.UUID, bodies: list[bytes], days: int) -> None:
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        conn.execute(
+            "UPDATE listener_events SET received_at = now() - make_interval(days => %s)"
+            " WHERE listener_id = %s AND body = ANY(%s)", (days, listener_id, bodies))
+
+
+def test_archived_events_past_the_retention_are_deleted(workspace) -> None:
+    """Only what is both archived and old. The archive is the record; an event
+    not yet in it is kept however old it is."""
+    lid = listener(workspace, f"Kept {workspace['tag']}")
+    for body in (b"1", b"2", b"3"):
+        send(lid, body)
+    run()
+    send(lid, b"4")
+    age(lid, [b"1", b"2", b"4"], days=8)
+    never = listener(workspace, f"Never {workspace['tag']}")
+    send(never, b"old")
+    age(never, [b"old"], days=30)
+
+    assert prune() >= 2
+    assert events(lid) == [b"3", b"4"], "3 is recent, 4 is not archived yet"
+    assert events(never) == [b"old"], "a listener with no archive keeps everything"
+    _, _, _, location, rows, _ = archived(lid)
+    assert rows == 3 and bodies(location) == ["1", "2", "3"], "the archive is untouched"
+
+
+def test_a_listener_whose_archive_was_deleted_keeps_its_events(workspace) -> None:
+    """Its `archived_through` still names the old archive's last event, but the
+    archive starts again from the first one still held (db 0108), so none of
+    them is archived any more."""
+    lid = listener(workspace, f"Restart {workspace['tag']}")
+    send(lid, b"1")
+    run()
+    age(lid, [b"1"], days=30)
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        conn.execute("DELETE FROM datasets d USING listeners l WHERE l.archive_dataset_id = d.id AND l.id = %s",
+                     (lid,))
+    prune()
+    assert events(lid) == [b"1"]
+
+
+def test_the_retention_is_a_setting(workspace, monkeypatch) -> None:
+    lid = listener(workspace, f"Month {workspace['tag']}")
+    send(lid, b"1")
+    run()
+    age(lid, [b"1"], days=10)
+    monkeypatch.setenv("LISTENER_EVENT_RETENTION_DAYS", "30")
+    prune()
+    assert events(lid) == [b"1"]
+    monkeypatch.setenv("LISTENER_EVENT_RETENTION_DAYS", "9")
+    prune()
+    assert events(lid) == []
+
+
+def test_a_run_deletes_in_batches_until_one_is_short(workspace, monkeypatch) -> None:
+    lid = listener(workspace, f"Batches {workspace['tag']}")
+    for body in (b"1", b"2", b"3"):
+        send(lid, body)
+    run()
+    age(lid, [b"1", b"2", b"3"], days=8)
+    monkeypatch.setattr(listener_archives, "PRUNE_BATCH", 1)
+    assert prune() >= 3
+    assert events(lid) == []
+
+
+def test_less_than_a_day_is_refused_here_and_by_the_database(monkeypatch) -> None:
+    monkeypatch.setenv("LISTENER_EVENT_RETENTION_DAYS", "0")
+    with pytest.raises(ValueError, match="at least 1"):
+        listener_archives.retention_days()
+    with psycopg.connect(APP_DSN) as conn:
+        with pytest.raises(psycopg.errors.RaiseException, match="at least a day"):
+            conn.execute("SELECT prune_archived_listener_events(interval '23 hours', 10)")
+
+
+def test_the_five_minute_job_prunes() -> None:
+    names = {node.name for node in listener_archives.scheduled_listener_archives.graph.node_defs}
+    assert names == {"archive_listener_events", "prune_archived_listener_events"}

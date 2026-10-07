@@ -42,3 +42,14 @@ The correction was briefly made *in the file* (commit `b0235cd`) and then
 reverted, because it broke `migrate.py` for every database that had already
 applied 0034 — which is the whole point of the guard, demonstrated at the cost of
 one afternoon. See `STATUS.md`'s rough edges.
+
+---
+
+## `0108_listener_archives.sql` — "nothing is lost by starting over"
+
+It says deleting a listener's archive dataset starts the archive again from
+the first event, and that nothing is lost, because the events are still in
+`listener_events`. Since 0168 (§915) an archived event is deleted once it is
+older than the worker's retention (`LISTENER_EVENT_RETENTION_DAYS`, 7 by
+default), so starting over begins at the oldest event still held. What was
+archived before that went with the deleted dataset.

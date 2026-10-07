@@ -185,6 +185,48 @@ def archive_listener_events(context: OpExecutionContext, platform_db: PlatformDa
     return archived
 
 
+#: How long an archived event stays in the stream (§915; db 0168). The
+#: backing dataset is the record; the stream holds what is waiting to be
+#: archived and what the listener's screen shows of the last few days.
+RETENTION_DAYS = 7
+#: Events deleted per call, each call its own short transaction, and calls per
+#: run: 100,000 every five minutes, past a listener's 100 requests a second.
+PRUNE_BATCH = 5000
+PRUNE_CALLS = 20
+
+
+def retention_days() -> int:
+    """`LISTENER_EVENT_RETENTION_DAYS`, or the default. Anything under a day
+    is refused, here and by the database (db 0168)."""
+    days = int(os.environ.get("LISTENER_EVENT_RETENTION_DAYS") or RETENTION_DAYS)
+    if days < 1:
+        raise ValueError(f"LISTENER_EVENT_RETENTION_DAYS must be at least 1, not {days}")
+    return days
+
+
+@op
+def prune_archived_listener_events(context: OpExecutionContext, platform_db: PlatformDatabase) -> int:
+    """Delete archived events past the retention (§915). Until this, every
+    event a listener took stayed in the database for good, after the archive
+    had copied it, and a busy listener could fill the database."""
+    days = retention_days()
+    pruned = 0
+    with platform_db.connect() as conn:
+        for _ in range(PRUNE_CALLS):
+            with conn.cursor() as cur:
+                cur.execute("SELECT prune_archived_listener_events(make_interval(days => %s), %s)",
+                            (days, PRUNE_BATCH))
+                n = cur.fetchone()[0]
+            conn.commit()
+            pruned += n
+            if n < PRUNE_BATCH:
+                break
+    if pruned:
+        context.log.info(f"deleted {pruned} archived listener events older than {days} days")
+    return pruned
+
+
 @job
 def scheduled_listener_archives() -> None:
     archive_listener_events()
+    prune_archived_listener_events()
