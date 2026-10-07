@@ -11,10 +11,12 @@ files, never a dataset that 404s on read.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shutil
 import tempfile
+from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Any
 from uuid import UUID, uuid4
@@ -384,13 +386,26 @@ async def list_dataset_files(
     return [DatasetFileOut(**r) for r in rows]
 
 
-def _ingest_bytes(directory: str, name: str, raw: bytes) -> tuple[str, list[engine.ColumnSchema]]:
-    """One file read the way an upload reads it, into `directory`; returns
-    its Parquet's path and its columns."""
+def _place(directory: str, name: str, source: bytes | str) -> str:
+    """A file under its own name in a new `directory`: the bytes a person
+    just sent, or a stored file's local path, copied rather than read into
+    memory (§914). Returns where it is."""
     os.makedirs(directory)
     src = os.path.join(directory, name)
-    with open(src, "wb") as handle:
-        handle.write(raw)
+    if isinstance(source, bytes):
+        with open(src, "wb") as handle:
+            handle.write(source)
+    else:
+        shutil.copyfile(source, src)
+    return src
+
+
+def _ingest_file(
+    directory: str, name: str, source: bytes | str
+) -> tuple[str, list[engine.ColumnSchema]]:
+    """One file read the way an upload reads it, into `directory`; returns
+    its Parquet's path and its columns."""
+    src = _place(directory, name, source)
     dest = os.path.join(directory, "data.parquet")
     schema, _rows = engine.ingest_to_parquet(src, os.path.splitext(name)[1].lower(), dest)
     return dest, schema
@@ -450,76 +465,80 @@ async def upload_file_into(
     # Compared with the dataset's first file, which every file - the one of
     # this name included, if it is a replace - already agrees with.
     reference = names[0]
-    kept = {n: await anyio.to_thread.run_sync(_storage.read, key) for n, key in files}
+    # Local paths, not their bytes (§914): a dataset of many files held every
+    # one of them in memory at once to read them back together.
+    kept = {n: await anyio.to_thread.run_sync(_storage.local_path, key) for n, key in files}
     after = [*names, name] if mode == "append" else names
 
-    def work() -> tuple[list[engine.ColumnSchema], int, bytes]:
-        with tempfile.TemporaryDirectory() as tmp:
-            def read(directory: str, n: str, raw: bytes) -> tuple[str, list[engine.ColumnSchema]]:
-                if options is None:
-                    return _ingest_bytes(directory, n, raw)
-                return _parse_file(directory, n, raw, options)
+    def work(tmp: str) -> tuple[list[engine.ColumnSchema], int, str]:
+        def read(
+            directory: str, n: str, source: bytes | str
+        ) -> tuple[str, list[engine.ColumnSchema]]:
+            if options is None:
+                return _ingest_file(directory, n, source)
+            return _parse_file(directory, n, source, options)
 
-            _path, new_schema = read(os.path.join(tmp, "new"), name, data)
-            _path, old_schema = read(os.path.join(tmp, "reference"), reference, kept[reference])
-            if [(c.name, c.data_type) for c in new_schema] != [
-                    (c.name, c.data_type) for c in old_schema]:
-                if mode == "update":
-                    raise ConflictError(
-                        f"{name} is already in this dataset, whose files read as "
-                        f"{_columns(old_schema)}, so this file cannot replace it: it reads "
-                        f"as {_columns(new_schema)}."
-                    )
+        _path, new_schema = read(os.path.join(tmp, "new"), name, data)
+        _path, old_schema = read(os.path.join(tmp, "reference"), reference, kept[reference])
+        if [(c.name, c.data_type) for c in new_schema] != [
+                (c.name, c.data_type) for c in old_schema]:
+            if mode == "update":
                 raise ConflictError(
-                    f"{name} reads as {_columns(new_schema)}, and this dataset's files "
-                    f"read as {_columns(old_schema)}, so it cannot be added to them"
+                    f"{name} is already in this dataset, whose files read as "
+                    f"{_columns(old_schema)}, so this file cannot replace it: it reads "
+                    f"as {_columns(new_schema)}."
                 )
-            parts = [
-                (n, read(os.path.join(tmp, str(index)), n,
-                         data if n == name else kept[n])[0])
-                for index, n in enumerate(after)
-            ]
-            dest = os.path.join(tmp, "data.parquet")
-            schema, rows = engine.combine_parquets(parts, dest)
-            with open(dest, "rb") as handle:
-                return schema, rows, handle.read()
+            raise ConflictError(
+                f"{name} reads as {_columns(new_schema)}, and this dataset's files "
+                f"read as {_columns(old_schema)}, so it cannot be added to them"
+            )
+        parts = [
+            (n, read(os.path.join(tmp, str(index)), n,
+                     data if n == name else kept[n])[0])
+            for index, n in enumerate(after)
+        ]
+        dest = os.path.join(tmp, "data.parquet")
+        schema, rows = engine.combine_parquets(parts, dest)
+        return schema, rows, dest
 
-    schema, rows, parquet = await anyio.to_thread.run_sync(work)
-    async with user_connection(access.auth.user_id) as conn:
-        row = await ds_service.add_version(
-            conn, _storage,
-            dataset_id=dataset_id, workspace_id=access.workspace_id,
-            parquet_bytes=parquet, schema=schema, row_count=rows,
-            produced_by_kind="upload", produced_by_id=None,
-            created_by=access.auth.user_id,
-            # p.10's two words are p.22's two types (§747): a new file adds
-            # to the view, a replaced one overwrites part of it.
-            transaction_type="APPEND" if mode == "append" else "UPDATE",
-        )
-        await ds_service.record_file(
-            conn, dataset_id, name, access.auth.user_id,
-            version_number=int(row["current_version"]),
-        )
-        await audit.record(
-            conn,
-            organisation_id=access.auth.organisation_id,
-            user_id=access.auth.user_id,
-            action="dataset.upload_file",
-            resource_type="dataset",
-            resource_id=dataset_id,
-            workspace_id=access.workspace_id,
-            project_id=access.project_id,
-            metadata={"filename": name, "mode": mode, "rows": rows, "bytes": len(data),
-                      "new_version": row["current_version"]},
-            ip_address=request.client.host if request.client else None,
-            user_agent=request.headers.get("user-agent"),
-        )
-        # Last, inside the transaction: a refusal above leaves the file it
-        # would have replaced as it was, and a failed write here undoes the
-        # rows that would have named it.
-        key = dict(files).get(name) or f"{files[0][1].rsplit('/', 1)[0]}/{name}"
-        await anyio.to_thread.run_sync(_storage.put, key, data)
-        current = await ds_service.get(conn, access.project_id, dataset_id)
+    # Held until the version is stored from it (§913).
+    with tempfile.TemporaryDirectory() as tmp:
+        schema, rows, parquet = await anyio.to_thread.run_sync(work, tmp)
+        async with user_connection(access.auth.user_id) as conn:
+            row = await ds_service.add_version(
+                conn, _storage,
+                dataset_id=dataset_id, workspace_id=access.workspace_id,
+                parquet_path=parquet, schema=schema, row_count=rows,
+                produced_by_kind="upload", produced_by_id=None,
+                created_by=access.auth.user_id,
+                # p.10's two words are p.22's two types (§747): a new file adds
+                # to the view, a replaced one overwrites part of it.
+                transaction_type="APPEND" if mode == "append" else "UPDATE",
+            )
+            await ds_service.record_file(
+                conn, dataset_id, name, access.auth.user_id,
+                version_number=int(row["current_version"]),
+            )
+            await audit.record(
+                conn,
+                organisation_id=access.auth.organisation_id,
+                user_id=access.auth.user_id,
+                action="dataset.upload_file",
+                resource_type="dataset",
+                resource_id=dataset_id,
+                workspace_id=access.workspace_id,
+                project_id=access.project_id,
+                metadata={"filename": name, "mode": mode, "rows": rows, "bytes": len(data),
+                          "new_version": row["current_version"]},
+                ip_address=request.client.host if request.client else None,
+                user_agent=request.headers.get("user-agent"),
+            )
+            # Last, inside the transaction: a refusal above leaves the file it
+            # would have replaced as it was, and a failed write here undoes the
+            # rows that would have named it.
+            key = dict(files).get(name) or f"{files[0][1].rsplit('/', 1)[0]}/{name}"
+            await anyio.to_thread.run_sync(_storage.put, key, data)
+            current = await ds_service.get(conn, access.project_id, dataset_id)
     return FileUploadOut(mode=mode, filename=name, dataset=_out(current))
 
 
@@ -1243,11 +1262,12 @@ class ParsePreviewOut(BaseModel):
     truncated: bool
 
 
+@contextlib.asynccontextmanager
 async def _parse_original(
     access: ProjectAccess, dataset_id: UUID, options: ParseOptionsIn
-) -> tuple[str, list[engine.ColumnSchema], int, bytes]:
+) -> AsyncIterator[tuple[engine.TabularResult, list[engine.ColumnSchema], int, str]]:
     """Read every kept file, parse each as asked, and hand back the Parquet of
-    all of them.
+    all of them: its path, for as long as the caller's `async with` lasts.
 
     One implementation for the preview and the apply, because the whole promise
     of p.24's "visualize … how they affect the output dataset" is that the
@@ -1258,28 +1278,26 @@ async def _parse_original(
     """
     async with user_connection(access.auth.user_id) as conn:
         files = await ds_service.upload_files(conn, access.project_id, dataset_id)
-    raws = [
-        (name, await anyio.to_thread.run_sync(_storage.read, key)) for name, key in files
+    # Paths, not bytes (§914), as `upload_file_into` reads them.
+    sources = [
+        (name, await anyio.to_thread.run_sync(_storage.local_path, key)) for name, key in files
     ]
 
-    def work() -> tuple[str, list[engine.ColumnSchema], int, bytes]:
-        with tempfile.TemporaryDirectory() as tmp:
-            parts = [
-                (name, _parse_file(os.path.join(tmp, str(index)), name, raw, options)[0])
-                for index, (name, raw) in enumerate(raws)
-            ]
-            dest = os.path.join(tmp, "data.parquet")
-            schema, rows = engine.combine_parquets(parts, dest)
-            preview = engine.preview(dest)
-            with open(dest, "rb") as handle:
-                return preview, schema, rows, handle.read()
+    def work(tmp: str) -> tuple[engine.TabularResult, list[engine.ColumnSchema], int, str]:
+        parts = [
+            (name, _parse_file(os.path.join(tmp, str(index)), name, source, options)[0])
+            for index, (name, source) in enumerate(sources)
+        ]
+        dest = os.path.join(tmp, "data.parquet")
+        schema, rows = engine.combine_parquets(parts, dest)
+        return engine.preview(dest), schema, rows, dest
 
-    result = await anyio.to_thread.run_sync(work)
-    return result
+    with tempfile.TemporaryDirectory() as tmp:
+        yield await anyio.to_thread.run_sync(work, tmp)
 
 
 def _parse_file(
-    directory: str, name: str, raw: bytes, options: ParseOptionsIn
+    directory: str, name: str, source: bytes | str, options: ParseOptionsIn
 ) -> tuple[str, list[engine.ColumnSchema]]:
     """One kept file, parsed into `directory`; returns its Parquet's path and
     its columns.
@@ -1289,10 +1307,7 @@ def _parse_file(
     """
     extension = os.path.splitext(name)[1].lower()
     engine.refuse_for_file(extension, options.to_engine())
-    os.makedirs(directory)
-    src = os.path.join(directory, name)
-    with open(src, "wb") as handle:
-        handle.write(raw)
+    src = _place(directory, name, source)
     original = src
     if options.encoding != "utf-8":
         os.makedirs(os.path.join(directory, "utf8"))
@@ -1318,7 +1333,8 @@ async def preview_parse(
     work doing it, and the only reason to ask is that you are about to change
     the dataset. A viewer who cannot apply has no use for the rehearsal.
     """
-    preview, _schema, rows, _parquet = await _parse_original(access, dataset_id, body)
+    async with _parse_original(access, dataset_id, body) as (preview, _schema, rows, _path):
+        pass
     return ParsePreviewOut(
         columns=[c.as_dict() for c in preview.columns],
         rows=preview.rows,
@@ -1340,38 +1356,38 @@ async def parse_again(
     in the history and stays readable, because a run stamped with it has to
     keep resolving to what it was. What changes is what the dataset *is* now.
     """
-    _preview, schema, rows, parquet = await _parse_original(access, dataset_id, body)
-    async with user_connection(access.auth.user_id) as conn:
-        row = await ds_service.add_version(
-            conn, _storage,
-            dataset_id=dataset_id, workspace_id=access.workspace_id,
-            parquet_bytes=parquet, schema=schema, row_count=rows,
-            produced_by_kind="reparse", produced_by_id=None,
-            created_by=access.auth.user_id,
-            # Every row is read again, so this is a new view of the files.
-            transaction_type="SNAPSHOT",
-        )
-        # Kept, so a file added later is read the same way (§746; p.24's
-        # "stored in the schema"). The default read is stored as nothing.
-        await ds_service.set_parse_options(
-            conn, dataset_id, None if body == ParseOptionsIn() else body.model_dump())
-        await audit.record(
-            conn,
-            organisation_id=access.auth.organisation_id,
-            user_id=access.auth.user_id,
-            action="dataset.reparse",
-            resource_type="dataset",
-            resource_id=dataset_id,
-            workspace_id=access.workspace_id,
-            project_id=access.project_id,
-            # In the entry as well as on the dataset: the dataset holds the
-            # options it is read with now, the entry what was chosen when.
-            metadata={"options": body.model_dump(), "rows": rows,
-                      "new_version": row["current_version"]},
-            ip_address=request.client.host if request.client else None,
-            user_agent=request.headers.get("user-agent"),
-        )
-        return _out(await ds_service.get(conn, access.project_id, dataset_id))
+    async with _parse_original(access, dataset_id, body) as (_preview, schema, rows, parquet):
+        async with user_connection(access.auth.user_id) as conn:
+            row = await ds_service.add_version(
+                conn, _storage,
+                dataset_id=dataset_id, workspace_id=access.workspace_id,
+                parquet_path=parquet, schema=schema, row_count=rows,
+                produced_by_kind="reparse", produced_by_id=None,
+                created_by=access.auth.user_id,
+                # Every row is read again, so this is a new view of the files.
+                transaction_type="SNAPSHOT",
+            )
+            # Kept, so a file added later is read the same way (§746; p.24's
+            # "stored in the schema"). The default read is stored as nothing.
+            await ds_service.set_parse_options(
+                conn, dataset_id, None if body == ParseOptionsIn() else body.model_dump())
+            await audit.record(
+                conn,
+                organisation_id=access.auth.organisation_id,
+                user_id=access.auth.user_id,
+                action="dataset.reparse",
+                resource_type="dataset",
+                resource_id=dataset_id,
+                workspace_id=access.workspace_id,
+                project_id=access.project_id,
+                # In the entry as well as on the dataset: the dataset holds the
+                # options it is read with now, the entry what was chosen when.
+                metadata={"options": body.model_dump(), "rows": rows,
+                          "new_version": row["current_version"]},
+                ip_address=request.client.host if request.client else None,
+                user_agent=request.headers.get("user-agent"),
+            )
+            return _out(await ds_service.get(conn, access.project_id, dataset_id))
 
 
 class RollbackIn(BaseModel):

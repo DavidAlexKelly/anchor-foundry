@@ -117,15 +117,28 @@ def test_bytes_go_to_storage_only_where_they_are_small_or_already_in_hand() -> N
 
 
 def test_versions_come_from_bytes_only_where_the_bytes_are_small() -> None:
-    """`parquet_bytes=` is for an output small by construction. The two in
-    routes/datasets.py combine an upload dataset's files, whose originals are
-    already read into memory, one each at most 50 MB."""
+    """`parquet_bytes=` is for an output small by construction: an empty
+    dataset's file. An upload dataset rebuilt from its files reads them from
+    local paths, not into memory (§914)."""
     def is_bytes_version(node: ast.AST) -> bool:
         return (isinstance(node, ast.keyword) and node.arg == "parquet_bytes"
                 and not (isinstance(node.value, ast.Name) and node.value.id == "parquet_bytes"))
 
     assert _sites(is_bytes_version) == [
-        ("routes/datasets.py", "parse_again"),
-        ("routes/datasets.py", "upload_file_into"),
         ("services/datasets.py", "create_empty"),    # an empty dataset's file
+    ]
+
+
+def test_an_upload_dataset_reads_its_kept_files_from_disk() -> None:
+    """§914: re-reading a dataset's files - to add one, or to parse them all
+    again - read every one of them whole first. Nothing in the API reads a
+    stored object into memory but a file a person downloads or one small by
+    kind."""
+    def is_read(node: ast.AST) -> bool:
+        return (isinstance(node, ast.Attribute) and node.attr == "read"
+                and isinstance(node.value, ast.Name) and node.value.id in {"storage", "_storage"})
+
+    assert _sites(is_read) == [
+        ("routes/objects.py", "download_attachment"),  # at most the 51 MB it came in as
+        ("services/models.py", "run_log"),             # text the run captured
     ]
