@@ -193,6 +193,19 @@ check("the database keeps a week of statement timings, under the data's key (§9
   }
 });
 
+check("Postgres's own log goes to CloudWatch for a month (§931)", () => {
+  const db = only(plain, "AWS::RDS::DBInstance").Properties;
+  if (JSON.stringify(db.EnableCloudwatchLogsExports) !== JSON.stringify(["postgresql"])) {
+    throw new Error(`exports ${JSON.stringify(db.EnableCloudwatchLogsExports)}`);
+  }
+  const retention = Object.values(plain.findResources("Custom::LogRetention"))
+    .map((r) => r.Properties)
+    .find((p) => JSON.stringify(p.LogGroupName).includes("/postgresql"));
+  if (!retention || Number(retention.RetentionInDays) !== 30) {
+    throw new Error(`retention ${JSON.stringify(retention?.RetentionInDays)}`);
+  }
+});
+
 console.log("what the edge caches (§865):");
 
 check("the web app's build output is cached, and nothing else is", () => {
