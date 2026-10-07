@@ -1,6 +1,6 @@
 # 0025 — How CloudFront reaches the services, and who else can
 
-**Status:** proposed, not built (§842). It changes a deployed stack's network edge, and this repository has no AWS account to deploy it to. The construct checks can show the template says what is intended, but not that a customer stack still answers afterwards. Building it should happen where a stack can be deployed and visited before and after.
+**Status:** option B built behind `-c originAccess=vpc` (§909), off by default and not yet deployed. It changes a deployed stack's network edge, and this repository has no AWS account to deploy it to. The construct checks show that the template says what is intended, and that a stack without the flag synthesizes exactly as before. They cannot show that a customer stack still answers afterwards. `docs/deploying.md`, "Taking the load balancer off the internet", is the procedure for the first stack that tries it. Making it the default should wait for that.
 **Roadmap:** `docs/roadmap-phase-3-fidelity.md` E.11.
 **Found by:** an audit of `infra/cdk` (§842), reading `constructs/services.ts` and `stacks/customer-stack.ts` against the comments that describe them.
 

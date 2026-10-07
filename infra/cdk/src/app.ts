@@ -32,6 +32,17 @@ if (objectStore !== "postgres" && objectStore !== "opensearch") {
   throw new Error(`Invalid objectStore: ${objectStore} (postgres or opensearch)`);
 }
 
+// How CloudFront reaches the services (decision 0025, §909). "public", the
+// default, is every stack deployed so far: an internet-facing load balancer
+// that CloudFront reaches in plain HTTP. "vpc" is the decision's option B: an
+// internal load balancer reached through a CloudFront VPC origin. It replaces
+// the load balancer on an existing stack, so it is opt-in until one has been
+// deployed and visited before and after (docs/deploying.md).
+const originAccess = (app.node.tryGetContext("originAccess") as string | undefined) ?? "public";
+if (originAccess !== "public" && originAccess !== "vpc") {
+  throw new Error(`Invalid originAccess: ${originAccess} (public or vpc)`);
+}
+
 // Where the stack's alarms are sent (§815). Optional: the topic exists either
 // way, and its ARN is a stack output for anything else to subscribe.
 const alarmEmail = app.node.tryGetContext("alarmEmail") as string | undefined;
@@ -73,6 +84,7 @@ new CustomerStack(app, "PlatformStack", {
   imageTag,
   deletionProtection,
   objectStore,
+  originAccess,
   alarmEmail,
   inviteFromEmail,
   bootstrapTokenHash,
