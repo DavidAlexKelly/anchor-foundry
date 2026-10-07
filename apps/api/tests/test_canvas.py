@@ -1551,3 +1551,33 @@ def test_the_saved_read_does_not_reach_across_workspaces(
     there = client.get(f"{wbase(fx)}/saved-canvas-apps/{app_id}",
                        headers=hdr(fx.admin_sub))
     assert there.status_code == 404, there.text
+
+
+def test_the_versions_are_read_a_page_at_a_time(client: TestClient, fx: Fixture) -> None:
+    """§906. Every save writes a version, so the list grows for as long as the
+    app is edited. `limit` bounds a page and `before` continues below the
+    oldest version already held."""
+    aid = _new_app(client, fx)
+    for n in range(5):
+        doc = {"format": 2, "variables": {}, "events": {},
+               "layout": {"ROOT": {"type": "Container", "nodes": [f"n{n}"]}}}
+        r = client.put(f"{base(fx)}/{aid}/definition", headers=hdr(fx.editor_sub),
+                       json={"definition": doc})
+        assert r.status_code == 200, r.text
+
+    def page(**params: int) -> list[int]:
+        r = client.get(f"{base(fx)}/{aid}/versions", params=params,
+                       headers=hdr(fx.viewer_sub))
+        assert r.status_code == 200, r.text
+        return [v["version_number"] for v in r.json()]
+
+    everything = page()
+    assert everything == sorted(everything, reverse=True) and len(everything) >= 5
+    newest = everything[0]
+    assert page(limit=2) == everything[:2]
+    assert page(limit=2, before=newest - 1) == [newest - 2, newest - 3]
+    assert page(before=1) == []
+    for params in ({"limit": 0}, {"limit": 201}, {"before": 0}):
+        r = client.get(f"{base(fx)}/{aid}/versions", params=params,
+                       headers=hdr(fx.viewer_sub))
+        assert r.status_code == 422, (params, r.text)

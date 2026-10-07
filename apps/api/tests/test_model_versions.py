@@ -211,3 +211,36 @@ def test_role_floors(client: TestClient, fx: Fixture, model: str) -> None:
     assert r.status_code == 403, "but cannot restore"
     r = client.get(f"{base(fx)}/{model}/versions", headers=hdr(fx.outsider_sub))
     assert r.status_code == 404
+
+
+def test_the_history_is_read_a_page_at_a_time(
+    client: TestClient, fx: Fixture, model: str
+) -> None:
+    """§906. Each row carries its version's whole code, so the list grew with
+    every save. `limit` bounds a page and `before` continues below the oldest
+    version already held; the pages, read in turn, are the whole history once
+    each."""
+    for n in range(2, 7):
+        r = client.patch(f"{base(fx)}/{model}", headers=hdr(fx.editor_sub),
+                         json={"code": f"SELECT id, {n} AS n FROM raw"})
+        assert r.status_code == 200, r.text
+
+    def page(**params: int) -> list[int]:
+        r = client.get(f"{base(fx)}/{model}/versions", params=params,
+                       headers=hdr(fx.viewer_sub))
+        assert r.status_code == 200, r.text
+        return [v["version_number"] for v in r.json()]
+
+    assert page() == [6, 5, 4, 3, 2, 1]
+    assert page(limit=2) == [6, 5]
+    assert page(limit=2, before=5) == [4, 3]
+    assert page(limit=2, before=3) == [2, 1]
+    assert page(limit=2, before=1) == []
+    assert page(before=4) == [3, 2, 1]
+
+
+def test_a_page_is_bounded(client: TestClient, fx: Fixture, model: str) -> None:
+    for params in ({"limit": 0}, {"limit": 201}, {"before": 0}):
+        r = client.get(f"{base(fx)}/{model}/versions", params=params,
+                       headers=hdr(fx.viewer_sub))
+        assert r.status_code == 422, (params, r.text)

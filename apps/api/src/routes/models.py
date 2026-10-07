@@ -451,13 +451,17 @@ async def run_model(
 @router.get("/{model_id}/versions", response_model=list[ModelVersionOut])
 async def list_model_versions(
     model_id: UUID,
+    limit: int = Query(default=model_service.VERSION_PAGE, ge=1, le=200),
+    before: int | None = Query(default=None, ge=1),
     access: ProjectAccess = Depends(require_project_role("viewer")),
 ) -> list[ModelVersionOut]:
-    """Every definition this model has had, newest first. Viewer level, like
-    run history - it exposes nothing a viewer cannot already read off the
-    model itself."""
+    """The definitions this model has had, newest first, a page at a time:
+    `before` is the oldest version number the caller already has. Viewer
+    level, like run history - it exposes nothing a viewer cannot already read
+    off the model itself."""
     async with user_connection(access.auth.user_id) as conn:
-        rows = await model_service.list_versions(conn, access.project_id, model_id)
+        rows = await model_service.list_versions(
+            conn, access.project_id, model_id, limit=limit, before=before)
     return [ModelVersionOut(**_version_out(r)) for r in rows]
 
 
