@@ -58,11 +58,6 @@ class SyncError(RuntimeError):
     """User-safe sync failure."""
 
 
-def _read_bytes(path: str) -> bytes:
-    with open(path, "rb") as handle:
-        return handle.read()
-
-
 async def _insert_version(conn: AsyncConnection, sql: str, params: dict[str, Any]) -> Any:
     """Append a dataset_versions row, translating migration 0023's schema
     policy refusal into a DatasetEngineError. The callers here own a run
@@ -191,6 +186,7 @@ async def run_full_sync(
             )
         return dict(existing_empty), int(existing_empty.get("row_count") or 0), False, None
 
+    # Held to the end: the parquet is stored from this file, not from memory (§913).
     with tempfile.TemporaryDirectory() as tmp:
         parquet_tmp = os.path.join(tmp, "data.parquet")
         try:
@@ -199,117 +195,116 @@ async def run_full_sync(
             )
         except engine.DatasetEngineError as exc:
             raise SyncError(str(exc)) from exc
-        parquet_bytes = await to_thread.run_sync(_read_bytes, parquet_tmp)
 
-    existing = await find_existing_sync_dataset(
-        conn, project_id, UUID(str(connection_row["id"])), slug
-    )
-    ws_prefix = await ds_service.workspace_s3_prefix(conn, workspace_id)
+        existing = await find_existing_sync_dataset(
+            conn, project_id, UUID(str(connection_row["id"])), slug
+        )
+        ws_prefix = await ds_service.workspace_s3_prefix(conn, workspace_id)
 
-    import json
+        import json
 
-    schema_json = json.dumps([c.as_dict() for c in schema])
+        schema_json = json.dumps([c.as_dict() for c in schema])
 
-    if existing is None:
-        dataset_id = uuid4()
-        parquet_key = f"{ds_service.storage_prefix(ws_prefix, dataset_id)}v1/data.parquet"
-        await to_thread.run_sync(storage.put, parquet_key, parquet_bytes)
-        row = await fetch_one(
+        if existing is None:
+            dataset_id = uuid4()
+            parquet_key = f"{ds_service.storage_prefix(ws_prefix, dataset_id)}v1/data.parquet"
+            await to_thread.run_sync(storage.put_file, parquet_key, parquet_tmp)
+            row = await fetch_one(
+                conn,
+                """
+                INSERT INTO datasets (id, project_id, workspace_id, name, slug, description,
+                                      origin, connection_id, s3_location, table_schema,
+                                      row_count, current_version, created_by)
+                VALUES (:id, :pid, :wid, :name, :slug, :descr, 'sync', :cid, :loc,
+                        CAST(:schema AS jsonb), :rows, 1, :by)
+                RETURNING id, name, slug, row_count, current_version
+                """,
+                {
+                    "id": str(dataset_id),
+                    "pid": str(project_id),
+                    "wid": str(workspace_id),
+                    "name": name,
+                    "slug": slug,
+                    "descr": f"Synced from {source_schema}.{source_table}",
+                    "cid": str(connection_row["id"]),
+                    "loc": parquet_key,
+                    "schema": schema_json,
+                    "rows": row_count,
+                    "by": str(requested_by),
+                },
+            )
+            assert row is not None
+            version = 1
+            created = True
+            schema_changes = None  # first version: no baseline to drift from
+        else:
+            # Re-sync: the slug must belong to this connection's synced dataset -
+            # a name collision with an upload or another connection is a conflict,
+            # not an overwrite.
+            if existing["origin"] != "sync" or str(existing["connection_id"]) != str(
+                connection_row["id"]
+            ):
+                raise ConflictError(
+                    f"a different dataset already uses the name '{slug}' in this project"
+                )
+            schema_changes = engine.diff_schemas(_stored_schema(existing["table_schema"]), schema)
+            dataset_id = UUID(str(existing["id"]))
+            # The number under the dataset's lock, as `stage_version` takes it
+            # (§861): its file is written below, before the transaction commits.
+            locked = await fetch_one(
+                conn, "SELECT current_version FROM datasets WHERE id = :did FOR UPDATE",
+                {"did": str(dataset_id)},
+            )
+            if locked is None:
+                raise SyncError("the synced dataset no longer exists")
+            version = int(locked["current_version"]) + 1
+            parquet_key = (
+                f"{ds_service.storage_prefix(ws_prefix, dataset_id)}v{version}/data.parquet"
+            )
+            await to_thread.run_sync(storage.put_file, parquet_key, parquet_tmp)
+            row = await fetch_one(
+                conn,
+                """
+                UPDATE datasets
+                   SET s3_location = :loc,
+                       table_schema = CAST(:schema AS jsonb),
+                       row_count = :rows,
+                       current_version = :version
+                 WHERE id = :id
+                RETURNING id, name, slug, row_count, current_version
+                """,
+                {
+                    "loc": parquet_key,
+                    "schema": schema_json,
+                    "rows": row_count,
+                    "version": version,
+                    "id": str(dataset_id),
+                },
+            )
+            assert row is not None
+            created = False
+
+        await _insert_version(
             conn,
             """
-            INSERT INTO datasets (id, project_id, workspace_id, name, slug, description,
-                                  origin, connection_id, s3_location, table_schema,
-                                  row_count, current_version, created_by)
-            VALUES (:id, :pid, :wid, :name, :slug, :descr, 'sync', :cid, :loc,
-                    CAST(:schema AS jsonb), :rows, 1, :by)
-            RETURNING id, name, slug, row_count, current_version
+            INSERT INTO dataset_versions (dataset_id, version_number, s3_manifest_key,
+                                          table_schema, row_count, produced_by_kind,
+                                          produced_by_id, created_by, transaction_type)
+            VALUES (:did, :version, :key, CAST(:schema AS jsonb), :rows, 'sync', :cid, :by,
+                    'SNAPSHOT')
+            RETURNING id
             """,
             {
-                "id": str(dataset_id),
-                "pid": str(project_id),
-                "wid": str(workspace_id),
-                "name": name,
-                "slug": slug,
-                "descr": f"Synced from {source_schema}.{source_table}",
-                "cid": str(connection_row["id"]),
-                "loc": parquet_key,
+                "did": str(dataset_id),
+                "version": version,
+                "key": parquet_key,
                 "schema": schema_json,
                 "rows": row_count,
+                "cid": str(connection_row["id"]),
                 "by": str(requested_by),
             },
         )
-        assert row is not None
-        version = 1
-        created = True
-        schema_changes = None  # first version: no baseline to drift from
-    else:
-        # Re-sync: the slug must belong to this connection's synced dataset -
-        # a name collision with an upload or another connection is a conflict,
-        # not an overwrite.
-        if existing["origin"] != "sync" or str(existing["connection_id"]) != str(
-            connection_row["id"]
-        ):
-            raise ConflictError(
-                f"a different dataset already uses the name '{slug}' in this project"
-            )
-        schema_changes = engine.diff_schemas(_stored_schema(existing["table_schema"]), schema)
-        dataset_id = UUID(str(existing["id"]))
-        # The number under the dataset's lock, as `stage_version` takes it
-        # (§861): its file is written below, before the transaction commits.
-        locked = await fetch_one(
-            conn, "SELECT current_version FROM datasets WHERE id = :did FOR UPDATE",
-            {"did": str(dataset_id)},
-        )
-        if locked is None:
-            raise SyncError("the synced dataset no longer exists")
-        version = int(locked["current_version"]) + 1
-        parquet_key = (
-            f"{ds_service.storage_prefix(ws_prefix, dataset_id)}v{version}/data.parquet"
-        )
-        await to_thread.run_sync(storage.put, parquet_key, parquet_bytes)
-        row = await fetch_one(
-            conn,
-            """
-            UPDATE datasets
-               SET s3_location = :loc,
-                   table_schema = CAST(:schema AS jsonb),
-                   row_count = :rows,
-                   current_version = :version
-             WHERE id = :id
-            RETURNING id, name, slug, row_count, current_version
-            """,
-            {
-                "loc": parquet_key,
-                "schema": schema_json,
-                "rows": row_count,
-                "version": version,
-                "id": str(dataset_id),
-            },
-        )
-        assert row is not None
-        created = False
-
-    await _insert_version(
-        conn,
-        """
-        INSERT INTO dataset_versions (dataset_id, version_number, s3_manifest_key,
-                                      table_schema, row_count, produced_by_kind,
-                                      produced_by_id, created_by, transaction_type)
-        VALUES (:did, :version, :key, CAST(:schema AS jsonb), :rows, 'sync', :cid, :by,
-                'SNAPSHOT')
-        RETURNING id
-        """,
-        {
-            "did": str(dataset_id),
-            "version": version,
-            "key": parquet_key,
-            "schema": schema_json,
-            "rows": row_count,
-            "cid": str(connection_row["id"]),
-            "by": str(requested_by),
-        },
-    )
-    return dict(row), row_count, created, schema_changes
+        return dict(row), row_count, created, schema_changes
 
 
 # ---- sync_runs bookkeeping ---------------------------------------------------
@@ -417,100 +412,99 @@ async def run_incremental_sync(
                 engine.merge_transaction, existing_local_path, new_parquet, primary_key_column)
         except engine.DatasetEngineError as exc:
             raise SyncError(str(exc)) from exc
-        parquet_bytes = await to_thread.run_sync(_read_bytes, merged_parquet)
 
-    ws_prefix = await ds_service.workspace_s3_prefix(conn, workspace_id)
-    schema_json = json.dumps([c.as_dict() for c in schema])
-    schema_changes = engine.diff_schemas(previous_schema, schema)
+        ws_prefix = await ds_service.workspace_s3_prefix(conn, workspace_id)
+        schema_json = json.dumps([c.as_dict() for c in schema])
+        schema_changes = engine.diff_schemas(previous_schema, schema)
 
-    if existing_dataset_id is None:
-        dataset_id = uuid4()
-        parquet_key = f"{ds_service.storage_prefix(ws_prefix, dataset_id)}v1/data.parquet"
-        await to_thread.run_sync(storage.put, parquet_key, parquet_bytes)
-        row = await fetch_one(
+        if existing_dataset_id is None:
+            dataset_id = uuid4()
+            parquet_key = f"{ds_service.storage_prefix(ws_prefix, dataset_id)}v1/data.parquet"
+            await to_thread.run_sync(storage.put_file, parquet_key, merged_parquet)
+            row = await fetch_one(
+                conn,
+                """
+                INSERT INTO datasets (id, project_id, workspace_id, name, slug, description,
+                                      origin, connection_id, s3_location, table_schema,
+                                      row_count, current_version, created_by)
+                VALUES (:id, :pid, :wid, :name, :slug, :descr, 'sync', :cid, :loc,
+                        CAST(:schema AS jsonb), :rows, 1, :by)
+                RETURNING id, name, slug, row_count, current_version
+                """,
+                {
+                    "id": str(dataset_id), "pid": str(project_id), "wid": str(workspace_id),
+                    "name": name, "slug": slug,
+                    "descr": f"Incremental sync from {source_schema}.{source_table}",
+                    "cid": str(connection_row["id"]), "loc": parquet_key,
+                    "schema": schema_json, "rows": row_count, "by": str(requested_by),
+                },
+            )
+            assert row is not None
+            version = 1
+            created = True
+            from sqlalchemy import text as _text
+
+            await conn.execute(
+                _text("UPDATE connections SET sync_dataset_id = :did WHERE id = :cid"),
+                {"did": str(dataset_id), "cid": str(connection_row["id"])},
+            )
+        else:
+            dataset_id = UUID(str(existing_dataset_id))
+            # Locked, for `stage_version`'s reason (§861).
+            existing = await fetch_one(
+                conn, "SELECT current_version FROM datasets WHERE id = :did FOR UPDATE",
+                {"did": str(dataset_id)},
+            )
+            if existing is None:
+                raise SyncError("the synced dataset no longer exists")
+            version = int(existing["current_version"]) + 1
+            parquet_key = f"{ds_service.storage_prefix(ws_prefix, dataset_id)}v{version}/data.parquet"
+            await to_thread.run_sync(storage.put_file, parquet_key, merged_parquet)
+            row = await fetch_one(
+                conn,
+                """
+                UPDATE datasets
+                   SET s3_location = :loc, table_schema = CAST(:schema AS jsonb),
+                       row_count = :rows, current_version = :version
+                 WHERE id = :did
+                RETURNING id, name, slug, row_count, current_version
+                """,
+                {
+                    "loc": parquet_key, "schema": schema_json, "rows": row_count,
+                    "version": version, "did": str(dataset_id),
+                },
+            )
+            assert row is not None
+            created = False
+
+        await _insert_version(
             conn,
             """
-            INSERT INTO datasets (id, project_id, workspace_id, name, slug, description,
-                                  origin, connection_id, s3_location, table_schema,
-                                  row_count, current_version, created_by)
-            VALUES (:id, :pid, :wid, :name, :slug, :descr, 'sync', :cid, :loc,
-                    CAST(:schema AS jsonb), :rows, 1, :by)
-            RETURNING id, name, slug, row_count, current_version
+            INSERT INTO dataset_versions (dataset_id, version_number, s3_manifest_key,
+                                          table_schema, row_count, produced_by_kind,
+                                          produced_by_id, created_by, sync_cursor_value,
+                                          transaction_type)
+            VALUES (:did, :version, :key, CAST(:schema AS jsonb), :rows, 'sync', :cid, :by,
+                    :cursor, :transaction)
+            RETURNING id
             """,
             {
-                "id": str(dataset_id), "pid": str(project_id), "wid": str(workspace_id),
-                "name": name, "slug": slug,
-                "descr": f"Incremental sync from {source_schema}.{source_table}",
-                "cid": str(connection_row["id"]), "loc": parquet_key,
-                "schema": schema_json, "rows": row_count, "by": str(requested_by),
+                "did": str(dataset_id), "version": version, "key": parquet_key,
+                "schema": schema_json, "rows": row_count,
+                "cid": str(connection_row["id"]), "by": str(requested_by),
+                # Where this run got to (migration 0127, §607): what a rollback to
+                # this version puts the connection's cursor back to.
+                "cursor": new_cursor_value,
+                "transaction": transaction,
             },
         )
-        assert row is not None
-        version = 1
-        created = True
-        from sqlalchemy import text as _text
+        from sqlalchemy import text as _text2
 
         await conn.execute(
-            _text("UPDATE connections SET sync_dataset_id = :did WHERE id = :cid"),
-            {"did": str(dataset_id), "cid": str(connection_row["id"])},
+            _text2("UPDATE connections SET sync_last_cursor_value = :cur WHERE id = :cid"),
+            {"cur": new_cursor_value, "cid": str(connection_row["id"])},
         )
-    else:
-        dataset_id = UUID(str(existing_dataset_id))
-        # Locked, for `stage_version`'s reason (§861).
-        existing = await fetch_one(
-            conn, "SELECT current_version FROM datasets WHERE id = :did FOR UPDATE",
-            {"did": str(dataset_id)},
-        )
-        if existing is None:
-            raise SyncError("the synced dataset no longer exists")
-        version = int(existing["current_version"]) + 1
-        parquet_key = f"{ds_service.storage_prefix(ws_prefix, dataset_id)}v{version}/data.parquet"
-        await to_thread.run_sync(storage.put, parquet_key, parquet_bytes)
-        row = await fetch_one(
-            conn,
-            """
-            UPDATE datasets
-               SET s3_location = :loc, table_schema = CAST(:schema AS jsonb),
-                   row_count = :rows, current_version = :version
-             WHERE id = :did
-            RETURNING id, name, slug, row_count, current_version
-            """,
-            {
-                "loc": parquet_key, "schema": schema_json, "rows": row_count,
-                "version": version, "did": str(dataset_id),
-            },
-        )
-        assert row is not None
-        created = False
-
-    await _insert_version(
-        conn,
-        """
-        INSERT INTO dataset_versions (dataset_id, version_number, s3_manifest_key,
-                                      table_schema, row_count, produced_by_kind,
-                                      produced_by_id, created_by, sync_cursor_value,
-                                      transaction_type)
-        VALUES (:did, :version, :key, CAST(:schema AS jsonb), :rows, 'sync', :cid, :by,
-                :cursor, :transaction)
-        RETURNING id
-        """,
-        {
-            "did": str(dataset_id), "version": version, "key": parquet_key,
-            "schema": schema_json, "rows": row_count,
-            "cid": str(connection_row["id"]), "by": str(requested_by),
-            # Where this run got to (migration 0127, §607): what a rollback to
-            # this version puts the connection's cursor back to.
-            "cursor": new_cursor_value,
-            "transaction": transaction,
-        },
-    )
-    from sqlalchemy import text as _text2
-
-    await conn.execute(
-        _text2("UPDATE connections SET sync_last_cursor_value = :cur WHERE id = :cid"),
-        {"cur": new_cursor_value, "cid": str(connection_row["id"])},
-    )
-    return dict(row), row_count, created, schema_changes
+        return dict(row), row_count, created, schema_changes
 
 
 async def open_run(

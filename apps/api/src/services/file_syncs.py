@@ -81,73 +81,72 @@ async def record(
     taken_paths = [f["path"] for f, _local in taken]
     view = view_after(transaction, held, taken_paths)
 
-    def work() -> tuple[list[engine.ColumnSchema], int, int, bytes, dict[str, bytes]]:
-        with tempfile.TemporaryDirectory() as tmp:
-            parts: dict[str, str] = {}
-            written: dict[str, bytes] = {}
-            rows_taken = 0
-            for index, (f, local) in enumerate(taken):
-                dest = os.path.join(tmp, f"{index}.parquet")
-                try:
-                    _schema, rows = engine.ingest_to_parquet(
-                        local, os.path.splitext(f["path"])[1].lower(), dest)
-                except engine.DatasetEngineError as exc:
-                    raise FileSyncError(f"{f['path']} could not be read: {exc}") from exc
-                rows_taken += rows
-                parts[f["path"]] = dest
-                with open(dest, "rb") as handle:
-                    written[file_key(prefix, f["path"], f["size"], f.get("modified"))] = handle.read()
-            for path in view:
-                if path not in parts:
-                    before = known[path]
-                    parts[path] = storage.local_path(
-                        file_key(prefix, path, before["size"], before.get("modified")))
-            out = os.path.join(tmp, "data.parquet")
+    def work(tmp: str) -> tuple[list[engine.ColumnSchema], int, int, str, dict[str, str]]:
+        parts: dict[str, str] = {}
+        written: dict[str, str] = {}
+        rows_taken = 0
+        for index, (f, local) in enumerate(taken):
+            dest = os.path.join(tmp, f"{index}.parquet")
             try:
-                schema, rows = engine.combine_parquets([(p, parts[p]) for p in view], out)
+                _schema, rows = engine.ingest_to_parquet(
+                    local, os.path.splitext(f["path"])[1].lower(), dest)
             except engine.DatasetEngineError as exc:
-                raise FileSyncError(str(exc)) from exc
-            with open(out, "rb") as handle:
-                return schema, rows, rows_taken, handle.read(), written
+                raise FileSyncError(f"{f['path']} could not be read: {exc}") from exc
+            rows_taken += rows
+            parts[f["path"]] = dest
+            written[file_key(prefix, f["path"], f["size"], f.get("modified"))] = dest
+        for path in view:
+            if path not in parts:
+                before = known[path]
+                parts[path] = storage.local_path(
+                    file_key(prefix, path, before["size"], before.get("modified")))
+        out = os.path.join(tmp, "data.parquet")
+        try:
+            schema, rows = engine.combine_parquets([(p, parts[p]) for p in view], out)
+        except engine.DatasetEngineError as exc:
+            raise FileSyncError(str(exc)) from exc
+        return schema, rows, rows_taken, out, written
 
-    schema, view_rows, rows_taken, parquet, written = await to_thread.run_sync(work)
-    for key, data in written.items():
-        await to_thread.run_sync(storage.put, key, data)
+    # Held to the end: each file is stored from disk, not from memory (§913).
+    with tempfile.TemporaryDirectory() as tmp:
+        schema, view_rows, rows_taken, parquet, written = await to_thread.run_sync(work, tmp)
+        for key, local in written.items():
+            await to_thread.run_sync(storage.put_file, key, local)
 
-    created = existing is None
-    if created:
-        await conn.execute(_text("""
-            INSERT INTO datasets (id, project_id, workspace_id, name, slug, description, origin,
-                                  connection_id, s3_location, current_version, created_by)
-            VALUES (:id, :pid, :wid, :name, :slug, :descr, 'sync', :cid, :loc, 0, :by)
-        """), {"id": str(dataset_id), "pid": str(project_id), "wid": str(workspace_id),
-               "name": dataset_name, "slug": slug,
-               "descr": f"Files synced from {folder or 'the source'}",
-               "cid": str(connection_id), "loc": prefix, "by": str(requested_by)})
-    row = await ds_service.add_version(
-        conn, storage, dataset_id=dataset_id, workspace_id=workspace_id,
-        parquet_bytes=parquet, schema=schema, row_count=view_rows,
-        produced_by_kind="sync", produced_by_id=connection_id, created_by=requested_by,
-        transaction_type=transaction,
-    )
-    version = int(row["current_version"])
-    if transaction == "SNAPSHOT":
-        await conn.execute(_text("DELETE FROM dataset_files WHERE dataset_id = :did"),
-                           {"did": str(dataset_id)})
-    for f, _local in taken:
-        await ds_service.record_file(conn, dataset_id, f["path"], requested_by,
-                                     version_number=version)
-        await conn.execute(_text("""
-            INSERT INTO sync_files (connection_id, path, size, modified)
-            VALUES (:cid, :path, :size, :modified)
-            ON CONFLICT (connection_id, path) DO UPDATE
-                SET size = EXCLUDED.size, modified = EXCLUDED.modified, synced_at = now()
-        """), {"cid": str(connection_id), "path": f["path"], "size": int(f["size"]),
-               "modified": f.get("modified")})
-    await conn.execute(_text("UPDATE connections SET sync_dataset_id = :did WHERE id = :cid"),
-                       {"did": str(dataset_id), "cid": str(connection_id)})
-    out = await fetch_one(
-        conn, "SELECT id, name, slug, row_count, current_version FROM datasets WHERE id = :id",
-        {"id": str(dataset_id)})
-    assert out is not None
-    return dict(out), rows_taken, created
+        created = existing is None
+        if created:
+            await conn.execute(_text("""
+                INSERT INTO datasets (id, project_id, workspace_id, name, slug, description, origin,
+                                      connection_id, s3_location, current_version, created_by)
+                VALUES (:id, :pid, :wid, :name, :slug, :descr, 'sync', :cid, :loc, 0, :by)
+            """), {"id": str(dataset_id), "pid": str(project_id), "wid": str(workspace_id),
+                   "name": dataset_name, "slug": slug,
+                   "descr": f"Files synced from {folder or 'the source'}",
+                   "cid": str(connection_id), "loc": prefix, "by": str(requested_by)})
+        row = await ds_service.add_version(
+            conn, storage, dataset_id=dataset_id, workspace_id=workspace_id,
+            parquet_path=parquet, schema=schema, row_count=view_rows,
+            produced_by_kind="sync", produced_by_id=connection_id, created_by=requested_by,
+            transaction_type=transaction,
+        )
+        version = int(row["current_version"])
+        if transaction == "SNAPSHOT":
+            await conn.execute(_text("DELETE FROM dataset_files WHERE dataset_id = :did"),
+                               {"did": str(dataset_id)})
+        for f, _local in taken:
+            await ds_service.record_file(conn, dataset_id, f["path"], requested_by,
+                                         version_number=version)
+            await conn.execute(_text("""
+                INSERT INTO sync_files (connection_id, path, size, modified)
+                VALUES (:cid, :path, :size, :modified)
+                ON CONFLICT (connection_id, path) DO UPDATE
+                    SET size = EXCLUDED.size, modified = EXCLUDED.modified, synced_at = now()
+            """), {"cid": str(connection_id), "path": f["path"], "size": int(f["size"]),
+                   "modified": f.get("modified")})
+        await conn.execute(_text("UPDATE connections SET sync_dataset_id = :did WHERE id = :cid"),
+                           {"did": str(dataset_id), "cid": str(connection_id)})
+        out = await fetch_one(
+            conn, "SELECT id, name, slug, row_count, current_version FROM datasets WHERE id = :id",
+            {"id": str(dataset_id)})
+        assert out is not None
+        return dict(out), rows_taken, created

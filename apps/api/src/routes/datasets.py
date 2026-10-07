@@ -318,8 +318,7 @@ async def upload_dataset(
             dest = os.path.join(tmp, "data.parquet")
             schema, rows = engine.ingest_to_parquet(src, extension, dest)
             _storage.put(original_key, data)
-            with open(dest, "rb") as handle:
-                _storage.put(parquet_key, handle.read())
+            _storage.put_file(parquet_key, dest)
             return schema, rows
 
     schema, row_count = await anyio.to_thread.run_sync(ingest)

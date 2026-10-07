@@ -265,8 +265,10 @@ async def fork(
     # and for the same reason: an orphaned file is recoverable garbage, a row
     # without its file is a broken dataset.
     try:
-        data = await to_thread.run_sync(storage.read, str(version["s3_manifest_key"]))
-        await to_thread.run_sync(storage.put, parquet_key, data)
+        # From a local copy, not through memory (§913): a fork is of a whole
+        # version, which may be the largest file the dataset has.
+        source = await to_thread.run_sync(storage.local_path, str(version["s3_manifest_key"]))
+        await to_thread.run_sync(storage.put_file, parquet_key, source)
     except FileNotFoundError as exc:
         # The row exists and its bytes do not - storage cleared under a dev
         # machine, a bucket lifecycle rule, a database restored against the
@@ -875,7 +877,8 @@ async def stage_version(
     *,
     dataset_id: UUID,
     workspace_id: UUID,
-    parquet_bytes: bytes,
+    parquet_bytes: bytes | None = None,
+    parquet_path: str | None = None,
     schema: list[ColumnSchema],
     row_count: int,
     produced_by_kind: str,
@@ -887,11 +890,17 @@ async def stage_version(
 
     `transaction_type` has no default (§747): a writer says how its version
     relates to the one before, or it does not write one.
+
+    The file comes as `parquet_path` from a writer whose output is on disk
+    (§913), which is stored from there without being read into memory, or as
+    `parquet_bytes` from one whose output is small by construction.
     """
     import json
 
     if transaction_type not in TRANSACTION_TYPES:
         raise ValueError(f"unknown transaction type {transaction_type!r}")
+    if (parquet_bytes is None) == (parquet_path is None):
+        raise ValueError("a version is written from parquet_bytes or parquet_path, one of them")
 
     ws_prefix = await workspace_s3_prefix(conn, workspace_id)
     # **Locked until this transaction ends** (§861). The bytes go to a key
@@ -910,7 +919,10 @@ async def stage_version(
         raise NotFoundError("dataset")
     version = int(current["current_version"]) + 1
     parquet_key = f"{storage_prefix(ws_prefix, dataset_id)}v{version}/data.parquet"
-    await to_thread.run_sync(storage.put, parquet_key, parquet_bytes)
+    if parquet_path is not None:
+        await to_thread.run_sync(storage.put_file, parquet_key, parquet_path)
+    else:
+        await to_thread.run_sync(storage.put, parquet_key, parquet_bytes)
     return StagedVersion(
         dataset_id=dataset_id,
         version=version,
@@ -1068,7 +1080,8 @@ async def add_version(
     *,
     dataset_id: UUID,
     workspace_id: UUID,
-    parquet_bytes: bytes,
+    parquet_bytes: bytes | None = None,
+    parquet_path: str | None = None,
     schema: list[ColumnSchema],
     row_count: int,
     produced_by_kind: str,
@@ -1089,7 +1102,7 @@ async def add_version(
     record = await stage_version(
         conn, storage,
         dataset_id=dataset_id, workspace_id=workspace_id, parquet_bytes=parquet_bytes,
-        schema=schema, row_count=row_count, produced_by_kind=produced_by_kind,
+        parquet_path=parquet_path, schema=schema, row_count=row_count, produced_by_kind=produced_by_kind,
         produced_by_id=produced_by_id, created_by=created_by,
         transaction_type=transaction_type,
     )
