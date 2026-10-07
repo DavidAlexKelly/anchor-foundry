@@ -32,6 +32,7 @@ import * as path from "path";
 import { App, DockerImage } from "aws-cdk-lib";
 import { Template } from "aws-cdk-lib/assertions";
 
+import { ORIGIN_READ_TIMEOUT_S } from "../constructs/services";
 import { CustomerStack, OIDC_SIGNING_KEY_SECRET, STATIC_ASSETS } from "../stacks/customer-stack";
 
 (DockerImage as unknown as { fromBuild: () => DockerImage }).fromBuild =
@@ -323,6 +324,36 @@ check("and CloudFront reaches it through a VPC origin", () => {
     throw new Error(`the distribution's origin is ${JSON.stringify(origin(viaVpc))}`);
   }
 });
+
+console.log("how long each hop waits (§918):");
+
+function readTimeoutOf(template: Template): number | undefined {
+  const o = origin(template);
+  return (o.CustomOriginConfig ?? o.VpcOriginConfig)?.OriginReadTimeout;
+}
+
+function idleTimeoutOf(template: Template): number {
+  const attrs: { Key: string; Value: string }[] =
+    only(template, "AWS::ElasticLoadBalancingV2::LoadBalancer").Properties.LoadBalancerAttributes ?? [];
+  return Number(attrs.find((a) => a.Key === "idle_timeout.timeout_seconds")?.Value ?? 60);
+}
+
+for (const [name, template] of [["public", plain], ["vpc", viaVpc]] as const) {
+  check(`each hop outlasts the one in front of it (${name} origin)`, () => {
+    // CloudFront gives up before the load balancer drops a quiet connection,
+    // and the load balancer drops it before a server does - so neither ever
+    // sends a request down a connection the next hop has already closed.
+    const read = readTimeoutOf(template);
+    const idle = idleTimeoutOf(template);
+    const api = Number(envOf(template, "api").UVICORN_TIMEOUT_KEEP_ALIVE);
+    const web = Number(envOf(template, "web").KEEP_ALIVE_TIMEOUT) / 1000;
+    if (read !== ORIGIN_READ_TIMEOUT_S) throw new Error(`CloudFront waits ${read} s`);
+    if (!(read < idle)) throw new Error(`CloudFront ${read} s, load balancer ${idle} s`);
+    for (const [server, keep] of [["api", api], ["web", web]] as const) {
+      if (!(idle < keep)) throw new Error(`load balancer ${idle} s, ${server} keeps ${keep} s`);
+    }
+  });
+}
 
 console.log("who creates the first owner (§886):");
 
