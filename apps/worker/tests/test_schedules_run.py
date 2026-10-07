@@ -197,3 +197,22 @@ def test_the_jobs_that_work_datasets_here_are_limited_together(monkeypatch) -> N
                      "scheduled_instance_syncs", "scheduled_exports"}
     limits = yaml.safe_load(open(DAGSTER_YAML))["run_coordinator"]["config"]["tag_concurrency_limits"]
     assert limits == [{"key": WEIGHT_TAG, "value": HEAVY[WEIGHT_TAG], "limit": 2}]
+
+
+def test_model_runs_keep_a_second_pass_free(instance: DagsterInstance, monkeypatch) -> None:
+    """§902: a SQL model asked for now should not wait out a Python model's
+    fifteen minutes on the runner."""
+    from dagster import DagsterRunStatus, build_schedule_context
+
+    monkeypatch.setenv("WORKER_DATABASE_URL", "postgresql://unused@localhost/unused")
+    from anchor_worker.definitions import defs, one_at_a_time
+
+    context = build_schedule_context(instance=instance)
+    may = one_at_a_time("scheduled_model_runs", at_most=2)
+    [schedule] = [s for s in defs.schedules if s.job_name == "scheduled_model_runs"]
+    _run_of(instance, "scheduled_model_runs", DagsterRunStatus.STARTED)
+    assert may(context)
+    # And the schedule uses it: one unfinished pass does not skip its tick.
+    assert schedule._should_execute(context)
+    _run_of(instance, "scheduled_model_runs", DagsterRunStatus.STARTED)
+    assert not may(context) and not schedule._should_execute(context)

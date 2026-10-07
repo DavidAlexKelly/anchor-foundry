@@ -64,7 +64,7 @@ WEIGHT_TAG = "anchor/weight"
 HEAVY = {WEIGHT_TAG: "heavy"}
 
 
-def one_at_a_time(job_name: str):
+def one_at_a_time(job_name: str, at_most: int = 1):
     """**A tick is skipped while the job's last run has not finished
     (§888).** A poll runs every minute and works through everything due, so
     one that outlasts its minute - a model run, a large sync - had a second
@@ -72,11 +72,17 @@ def one_at_a_time(job_name: str):
     from doing the same work twice. Memory was the problem: each pass is a
     process with its own DuckDB, up to 512 MiB (§875), and a 2 GB worker
     holds about three. The next tick after the run finishes picks up
-    whatever is still due."""
+    whatever is still due.
+
+    `at_most` is for the one job that must not wait behind itself (§902): a
+    model pass works through its queue in order, and a Python model waits up
+    to fifteen minutes on the transform runner, so with one pass a SQL model
+    somebody has just asked for waited behind it. Two passes keep one free.
+    The instance's limit on heavy runs still holds the memory."""
 
     def should_execute(context: ScheduleEvaluationContext) -> bool:
-        return not context.instance.get_run_records(
-            filters=RunsFilter(job_name=job_name, statuses=UNFINISHED), limit=1)
+        return len(context.instance.get_run_records(
+            filters=RunsFilter(job_name=job_name, statuses=UNFINISHED), limit=at_most)) < at_most
 
     return should_execute
 
@@ -111,7 +117,7 @@ defs = Definitions(
             default_status=RUNNING,
             job=scheduled_model_runs,
             tags=HEAVY,
-            should_execute=one_at_a_time(scheduled_model_runs.name),
+            should_execute=one_at_a_time(scheduled_model_runs.name, at_most=2),
             cron_schedule="* * * * *",  # every minute: queued python runs and
             # cron-scheduled models should start promptly, not sit for long
             name="poll_model_runs",
