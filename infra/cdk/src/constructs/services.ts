@@ -54,6 +54,10 @@ export const SCALE_AT_CPU_PERCENT = 60;
 export const TASK_MEMORY_MIB = { api: 2048, worker: 4096 };
 export const DUCKDB_MEMORY_MIB = 512;
 export const DUCKDB_THREADS = 2;
+/** How many operations the API lets hold DuckDB at once (§911). The task is
+ * sized for this many; one more waits for a slot rather than taking memory
+ * the task does not have (`apps/api/src/lib/duck.py`). */
+export const API_DUCKDB_SLOTS = 2;
 /** What a task's process holds besides DuckDB, allowed for when sizing. */
 export const PROCESS_ALLOWANCE_MIB = 512;
 /** One worker run's own process, besides its DuckDB (§894: measured 160 MB). */
@@ -487,6 +491,9 @@ export class ServicesConstruct extends Construct {
         LISTENER_PROXY_HOPS: props.internalLoadBalancer ? "2" : "1",
         ...objectIndexEnv,
         ...duckdbEnv,
+        // The API's operations share one process; the worker's runs are each
+        // their own, held to four at once by Dagster (§888).
+        DUCKDB_SLOTS: String(API_DUCKDB_SLOTS),
         ...(props.bootstrapTokenHash ? { BOOTSTRAP_TOKEN_SHA256: props.bootstrapTokenHash } : {}),
       },
     });

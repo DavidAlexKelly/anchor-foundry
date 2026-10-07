@@ -22,7 +22,7 @@ from .lib.security_headers import SecurityHeaders
 from .lib.config import get_settings
 from .lib.db import dispose_engine, get_engine
 from .lib.errors import BreakingChangeError
-from .lib import observability
+from .lib import duck, observability
 from .services.connectors import ConnectorConfigError
 from .services.dataset_engine import DatasetEngineError
 from .services.datasets import SCHEMA_POLICY_SQLSTATE
@@ -169,6 +169,13 @@ def create_app() -> FastAPI:
         request: StarletteRequest, exc: DatasetEngineError
     ) -> JSONResponse:
         return JSONResponse(status_code=422, content={"detail": str(exc)})
+
+    @app.exception_handler(duck.Busy)
+    async def duck_busy(request: StarletteRequest, exc: duck.Busy) -> JSONResponse:
+        # §911: every DuckDB slot stayed taken past the wait. Busy, not
+        # broken: a retry in a moment is the right answer, and says so.
+        return JSONResponse(status_code=503, content={"detail": str(exc)},
+                            headers={"Retry-After": "5"})
 
     @app.exception_handler(StorageKeyError)
     async def storage_key_error(request: StarletteRequest, exc: StorageKeyError) -> JSONResponse:
