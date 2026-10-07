@@ -20,6 +20,7 @@ import * as cognito from "aws-cdk-lib/aws-cognito";
 import { DataStoresConstruct } from "../constructs/data-stores";
 import {
   API_TASKS,
+  API_DUCKDB_SLOTS,
   DUCKDB_MEMORY_MIB,
   DUCKDB_THREADS,
   PROCESS_ALLOWANCE_MIB,
@@ -156,6 +157,15 @@ for (const name of ["api", "worker"] as const) {
     // its limit, beside the process itself.
     const needed = 2 * 1.5 * DUCKDB_MEMORY_MIB + PROCESS_ALLOWANCE_MIB;
     if (needed > memory) throw new Error(`needs ${needed} MiB of ${memory}`);
+    if (name === "api") {
+      // §911: and the API holds itself to that many. Without DUCKDB_SLOTS
+      // nothing did, and anyio's forty worker threads were the only bound.
+      if (value("DUCKDB_SLOTS") !== String(API_DUCKDB_SLOTS)) {
+        throw new Error(`DUCKDB_SLOTS ${value("DUCKDB_SLOTS")}`);
+      }
+      const held = API_DUCKDB_SLOTS * 1.5 * DUCKDB_MEMORY_MIB + PROCESS_ALLOWANCE_MIB;
+      if (held > memory) throw new Error(`${API_DUCKDB_SLOTS} slots need ${held} MiB of ${memory}`);
+    }
     if (name === "worker") {
       // §894: the daemon, every run's process, and the heavy runs' DuckDB,
       // with the numbers the worker's own Dagster settings declare.
