@@ -1,6 +1,7 @@
 "use client";
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { nextBefore } from "@/lib/version-pages";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useState } from "react";
@@ -412,10 +413,16 @@ function HistoryDialog({
     null,
   );
   const queryClient = useQueryClient();
-  const history = useQuery({
+  // **A page at a time** (§906). Every row carries its version's whole code,
+  // so the list a model accumulated over two thousand saves was megabytes on
+  // every open of this dialog.
+  const history = useInfiniteQuery({
     queryKey: ["model-versions", model.id],
-    queryFn: () => modelApi.versions(workspaceId, projectId, model.id),
+    queryFn: ({ pageParam }) => modelApi.versions(workspaceId, projectId, model.id, pageParam),
+    initialPageParam: undefined as number | undefined,
+    getNextPageParam: nextBefore,
   });
+  const versions = history.data?.pages.flat();
   // **The last thing that lived only on the Code pillar page (§291).** §278's
   // table listed `changeSet` + `diff` together and §280 moved only the first:
   // the history dialog could show what a version *is* and not what it
@@ -461,7 +468,7 @@ function HistoryDialog({
             </tr>
           </thead>
           <tbody>
-            {history.data?.map((v, index) => (
+            {versions?.map((v, index) => (
               <tr key={v.id}>
                 <td>
                   <strong>v{v.version_number}</strong>
@@ -533,12 +540,23 @@ function HistoryDialog({
           </tbody>
         </table>
       </div>
+      {history.hasNextPage && (
+        <button
+          className="btn quiet"
+          style={{ marginTop: 8 }}
+          data-testid="older-model-versions"
+          disabled={history.isFetchingNextPage}
+          onClick={() => history.fetchNextPage()}
+        >
+          {history.isFetchingNextPage ? "Loading…" : "Older versions"}
+        </button>
+      )}
       {open?.view === "code" && (
         <pre
           className="sql-box"
           style={{ marginTop: 10, whiteSpace: "pre-wrap", maxHeight: 240, overflow: "auto" }}
         >
-          {history.data?.find((v) => v.version_number === open.version)?.code}
+          {versions?.find((v) => v.version_number === open.version)?.code}
         </pre>
       )}
       {open?.view === "diff" && (

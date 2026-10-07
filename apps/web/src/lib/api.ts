@@ -9,6 +9,7 @@ import type {
   Me, Org, OrgUser, ProjectDetail, ProjectSummary, ResourceKindCounts, ResourceList, ResolvedResource,
   WorkspaceDetail, WorkspaceSummary,
 } from "./types";
+import { pageQuery } from "./version-pages";
 
 export class ApiError extends Error {
   /** The parsed error body, when there was one. Some refusals carry their
@@ -1253,9 +1254,11 @@ export const models = {
     ),
   remove: (wid: string, pid: string, mid: string) =>
     request<void>(`/workspaces/${wid}/projects/${pid}/models/${mid}`, { method: "DELETE" }),
-  versions: (wid: string, pid: string, mid: string) =>
+  /** Newest first, a page at a time; `before` is the oldest version number
+   *  already shown. */
+  versions: (wid: string, pid: string, mid: string, before?: number) =>
     request<import("./types").ModelVersion[]>(
-      `/workspaces/${wid}/projects/${pid}/models/${mid}/versions`,
+      `/workspaces/${wid}/projects/${pid}/models/${mid}/versions${pageQuery(before)}`,
     ),
   restoreVersion: (wid: string, pid: string, mid: string, versionNumber: number) =>
     request<import("./types").Model>(
@@ -3147,9 +3150,11 @@ export const canvas = {
     request<void>(`${canvas.statesBase(wid, pid, appId, published)}/${stateId}`, {
       method: "DELETE",
     }),
-  listVersions: (wid: string, pid: string, appId: string) =>
+  /** Newest first, a page at a time; `before` is the oldest version number
+   *  already shown. */
+  listVersions: (wid: string, pid: string, appId: string, before?: number) =>
     request<import("./types").CanvasAppVersion[]>(
-      `/workspaces/${wid}/projects/${pid}/canvas-apps/${appId}/versions`,
+      `/workspaces/${wid}/projects/${pid}/canvas-apps/${appId}/versions${pageQuery(before)}`,
     ),
   /** One saved version, definition included — "View this version" (p.191). */
   getVersion: (wid: string, pid: string, appId: string, version: number) =>

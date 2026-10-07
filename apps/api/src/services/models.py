@@ -300,9 +300,18 @@ async def _record_definition(
     return dict(row)
 
 
+#: A page of a model's history. Each row carries the version's whole code,
+#: so an unbounded list grew with every save: a model saved two thousand
+#: times at ten kilobytes a definition was twenty megabytes per open.
+VERSION_PAGE = 50
+
+
 async def list_versions(
-    conn: AsyncConnection, project_id: UUID, model_id: UUID
+    conn: AsyncConnection, project_id: UUID, model_id: UUID,
+    *, limit: int = VERSION_PAGE, before: int | None = None,
 ) -> list[dict[str, Any]]:
+    """Newest first, `limit` at a time; `before` is the oldest version number
+    already shown, so the next page starts below it."""
     await get(conn, project_id, model_id)
     return await fetch_all(
         conn,
@@ -310,10 +319,13 @@ async def list_versions(
         SELECT {_VERSION_COLUMNS},
                (SELECT u.email FROM users u WHERE u.id = model_versions.created_by)
                    AS created_by_email
-          FROM model_versions WHERE model_id = :mid
+          FROM model_versions
+         WHERE model_id = :mid
+           AND (CAST(:before AS integer) IS NULL OR version_number < :before)
          ORDER BY version_number DESC
+         LIMIT :limit
         """,
-        {"mid": str(model_id)},
+        {"mid": str(model_id), "before": before, "limit": limit},
     )
 
 

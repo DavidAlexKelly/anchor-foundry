@@ -683,10 +683,15 @@ async def save_definition(
 @router.get("/{app_id}/versions", response_model=list[VersionOut])
 async def list_versions(
     app_id: UUID,
+    limit: int = Query(default=canvas_service.VERSION_PAGE, ge=1, le=200),
+    before: int | None = Query(default=None, ge=1),
     access: ProjectAccess = Depends(require_project_role("viewer")),
 ) -> list[VersionOut]:
+    """Newest first, a page at a time: `before` is the oldest version number
+    the caller already has."""
     async with user_connection(access.auth.user_id) as conn:
-        rows = await canvas_service.list_versions(conn, access.project_id, app_id)
+        rows = await canvas_service.list_versions(
+            conn, access.project_id, app_id, limit=limit, before=before)
     return [VersionOut(**r) for r in rows]
 
 

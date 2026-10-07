@@ -26,7 +26,8 @@
  */
 
 import { Editor, Element, Frame, useEditor } from "@craftjs/core";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { nextBefore } from "@/lib/version-pages";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Dialog, Field } from "@/components/dialog";
 import { heldBy, strandedSummary, type OrphanedKey } from "@/lib/state-impact";
@@ -150,9 +151,13 @@ function VersionsDialog({
   // fetches, and the dialog's first job is the list of versions.
   const [comparing, setComparing] = useState<{ from: number | null; to: number } | null>(null);
 
-  const versions = useQuery({
+  // A page at a time (§906): every save writes a version, so the list grows
+  // for as long as the app is edited.
+  const versions = useInfiniteQuery({
     queryKey: ["canvas-versions", app.id],
-    queryFn: () => canvasApi.listVersions(workspaceId, projectId, app.id),
+    queryFn: ({ pageParam }) => canvasApi.listVersions(workspaceId, projectId, app.id, pageParam),
+    initialPageParam: undefined as number | undefined,
+    getNextPageParam: nextBefore,
   });
 
   const refresh = async () => {
@@ -195,7 +200,7 @@ function VersionsDialog({
           <tr><th>Version</th><th>Saved</th><th>By</th><th>Description</th><th /></tr>
         </thead>
         <tbody>
-          {(versions.data ?? []).map((v) => (
+          {(versions.data?.pages.flat() ?? []).map((v) => (
             <tr key={v.id} data-version={v.version_number}>
               <td>
                 v{v.version_number}
@@ -283,6 +288,16 @@ function VersionsDialog({
           ))}
         </tbody>
       </table>
+      {versions.hasNextPage && (
+        <button
+          className="btn quiet"
+          data-testid="older-canvas-versions"
+          disabled={versions.isFetchingNextPage}
+          onClick={() => versions.fetchNextPage()}
+        >
+          {versions.isFetchingNextPage ? "Loading…" : "Older versions"}
+        </button>
+      )}
 
       {comparing && (
         <ChangelogPanel

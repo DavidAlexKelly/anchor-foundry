@@ -231,7 +231,17 @@ async def save_definition(
     return dict(row)
 
 
-async def list_versions(conn: AsyncConnection, project_id: UUID, app_id: UUID) -> list[dict[str, Any]]:
+#: A page of an app's versions. Every save writes one, so the list grows for
+#: as long as the app is edited.
+VERSION_PAGE = 50
+
+
+async def list_versions(
+    conn: AsyncConnection, project_id: UUID, app_id: UUID,
+    *, limit: int = VERSION_PAGE, before: int | None = None,
+) -> list[dict[str, Any]]:
+    """Newest first, `limit` at a time; `before` is the oldest version number
+    already shown."""
     await get(conn, project_id, app_id)
     return await fetch_all(
         conn,
@@ -247,9 +257,11 @@ async def list_versions(conn: AsyncConnection, project_id: UUID, app_id: UUID) -
           FROM canvas_app_versions v
           LEFT JOIN users u ON u.id = v.created_by
          WHERE v.canvas_app_id = :aid
+           AND (CAST(:before AS integer) IS NULL OR v.version_number < :before)
          ORDER BY v.version_number DESC
+         LIMIT :limit
         """,
-        {"aid": str(app_id)},
+        {"aid": str(app_id), "before": before, "limit": limit},
     )
 
 
