@@ -1283,6 +1283,18 @@ def test_a_source_reports_the_worst_of_its_syncs(
     assert after["last_run_status"] == "failed"
 
 
+def test_a_source_that_failed_and_then_worked_is_not_red(
+    client: TestClient, fx: Fixture, sourced: dict[str, str]
+) -> None:
+    """§916: the worst of each dataset's *latest* run. The worst of every run
+    ever kept a source red after the sync that failed had been fixed, and
+    read the project's whole sync history to draw one page."""
+    _sync_run(sourced["feeder"], sourced["b"], "failed", "public.b")
+    assert node(graph(client, fx), f"Feeder {fx.tag}", "connection")["last_run_status"] == "failed"
+    _sync_run(sourced["feeder"], sourced["b"], "succeeded", "public.b")
+    assert node(graph(client, fx), f"Feeder {fx.tag}", "connection")["last_run_status"] == "succeeded"
+
+
 def test_a_source_is_a_node_a_lineage_view_can_centre_on(
     client: TestClient, fx: Fixture, sourced: dict[str, str]
 ) -> None:

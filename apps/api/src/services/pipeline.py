@@ -203,19 +203,29 @@ async def project_graph(
     # across six projects would otherwise appear on all six graphs — five of
     # them as a node with no arrow out of it. A data source earns its place
     # here by having written something in this project.
+    #
+    # **Each pair's latest run, not every run** (§916). The graph read every
+    # sync the project had ever had, so a page that a five-minute schedule
+    # adds 288 rows a day to slowed for the life of the stack; and the worst
+    # of all of them was a failure from last spring, so a source that failed
+    # once stayed red after every sync since had worked.
     sources = await fetch_all(
         conn,
         """
-        SELECT sr.dataset_id, c.id, c.name, c.source_type,
-               sr.status AS run_status, sr.started_at, sr.finished_at,
-               -- p.51's third question (§583): what the source is expected to
-               -- deliver, which only a scheduled sync says.
-               c.sync_schedule, c.sync_next_run_at, c.sync_dataset_id
-          FROM sync_runs sr
-          JOIN connections c ON c.id = sr.connection_id
-          JOIN datasets d ON d.id = sr.dataset_id
-         WHERE d.project_id = :pid
-         ORDER BY c.name, sr.dataset_id, sr.started_at
+        SELECT * FROM (
+            SELECT DISTINCT ON (sr.connection_id, sr.dataset_id)
+                   sr.dataset_id, c.id, c.name, c.source_type,
+                   sr.status AS run_status, sr.started_at, sr.finished_at,
+                   -- p.51's third question (§583): what the source is expected
+                   -- to deliver, which only a scheduled sync says.
+                   c.sync_schedule, c.sync_next_run_at, c.sync_dataset_id
+              FROM sync_runs sr
+              JOIN connections c ON c.id = sr.connection_id
+              JOIN datasets d ON d.id = sr.dataset_id
+             WHERE d.project_id = :pid
+             ORDER BY sr.connection_id, sr.dataset_id, sr.started_at DESC
+        ) latest
+         ORDER BY name, dataset_id, started_at
         """,
         {"pid": str(project_id)},
     )
@@ -346,9 +356,10 @@ async def project_graph(
     # column is the last *connection test*, and a source that tests fine while
     # every sync fails is exactly the node a reader needs to see red.
     #
-    # The **worst** status of the runs into this project, for the reason an
-    # object type reports the worst of its sources: a graph answering "what is
-    # wrong downstream of here" must not answer with the reassuring half.
+    # The **worst** status of its latest run into each dataset here, for the
+    # reason an object type reports the worst of its sources: a graph
+    # answering "what is wrong downstream of here" must not answer with the
+    # reassuring half.
     by_source: dict[str, dict[str, Any]] = {}
     for row in sources:
         cid = str(row["id"])
