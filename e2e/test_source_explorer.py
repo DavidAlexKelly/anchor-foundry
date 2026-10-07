@@ -77,7 +77,7 @@ def source():
             " order_id bigint CONSTRAINT lines_order_fk REFERENCES public.orders(id))"
         )
         conn.execute(f"GRANT ALL ON ALL TABLES IN SCHEMA public TO {SOURCE_USER}")
-    yield {"host": "localhost", "port": 5432, "database": SOURCE_DB, "user": SOURCE_USER}
+    yield {"host": "localhost", "port": 5432, "database": SOURCE_DB, "user": SOURCE_USER, "sslmode": "disable"}
     with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
         conn.execute(f"DROP DATABASE IF EXISTS {SOURCE_DB}")
         conn.execute(f"DROP ROLE IF EXISTS {SOURCE_USER}")

@@ -69,7 +69,7 @@ def source_database():
     with psycopg.connect(src_dsn, autocommit=True) as conn:
         conn.execute("CREATE TABLE public.items (id bigint PRIMARY KEY, val text NOT NULL)")
         conn.execute(f"GRANT ALL ON ALL TABLES IN SCHEMA public TO {SOURCE_USER}")
-    yield {"host": "localhost", "port": 5432, "database": SOURCE_DB, "user": SOURCE_USER}
+    yield {"host": "localhost", "port": 5432, "database": SOURCE_DB, "user": SOURCE_USER, "sslmode": "disable"}
     with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
         conn.execute(f"DROP DATABASE IF EXISTS {SOURCE_DB}")
         conn.execute(f"DROP ROLE IF EXISTS {SOURCE_USER}")
@@ -438,3 +438,13 @@ def test_a_claim_moves_the_next_run_on_and_only_once(workspace: dict, source_dat
         conn.execute("UPDATE connections SET sync_next_run_at=NULL, sync_schedule='not cron' "
                      "WHERE id=%s", (cid,))
     assert claim() is False and warned and "invalid schedule" in warned[0]
+
+
+def test_a_config_written_without_sslmode_asks_for_tls() -> None:
+    """§929: the worker's default is the API's, for a config that never went
+    through the API's validation."""
+    from anchor_worker.connectors import get_connector
+
+    info = get_connector("postgres").conninfo(
+        {"host": "localhost", "port": 5432, "database": "d", "user": "u"}, {})
+    assert info["sslmode"] == "require"

@@ -64,7 +64,7 @@ def warehouse():
     with psycopg.connect(_dsn(DEST_DB), autocommit=True) as conn:
         conn.execute("CREATE TABLE public.orders (id bigint, email text)")
         conn.execute(f"GRANT ALL ON public.orders TO {DEST_USER}")
-    yield {"host": "localhost", "port": 5432, "database": DEST_DB, "user": DEST_USER}
+    yield {"host": "localhost", "port": 5432, "database": DEST_DB, "user": DEST_USER, "sslmode": "disable"}
     with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
         conn.execute(f"DROP DATABASE IF EXISTS {DEST_DB}")
         conn.execute(f"DROP ROLE IF EXISTS {DEST_USER}")

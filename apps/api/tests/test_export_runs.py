@@ -55,7 +55,7 @@ def destination() -> dict[str, object]:
         conn.execute(f"CREATE ROLE {DEST_USER} LOGIN PASSWORD '{DEST_PASSWORD}'")
         conn.execute(f"GRANT {DEST_USER} TO platform")
         conn.execute(f"CREATE DATABASE {DEST_DB} OWNER {DEST_USER}")
-    yield {"host": "localhost", "port": 5432, "database": DEST_DB, "user": DEST_USER}
+    yield {"host": "localhost", "port": 5432, "database": DEST_DB, "user": DEST_USER, "sslmode": "disable"}
     with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
         conn.execute(f"DROP DATABASE IF EXISTS {DEST_DB}")
         conn.execute(f"DROP ROLE IF EXISTS {DEST_USER}")
