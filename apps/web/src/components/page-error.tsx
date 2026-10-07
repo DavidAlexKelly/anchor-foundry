@@ -8,8 +8,9 @@ import { pageErrorKind } from "@/lib/page-error";
  *
  * Without a route error boundary, a production build answers an exception in
  * any page with a blank screen and "Application error: a client-side exception
- * has occurred", and the top bar goes with it. This keeps the layout around
- * it, says what can be done, and offers it. */
+ * has occurred". This says what happened, what can be done, and offers it.
+ * It sits below the root layout (app/error.tsx), so a platform page's top bar
+ * goes with the page that failed. */
 export function PageError({
   error,
   reset,
