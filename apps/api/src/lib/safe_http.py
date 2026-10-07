@@ -161,3 +161,19 @@ def open_url(
     opener = urllib.request.build_opener(
         _HTTPHandler, _HTTPSHandler, _Redirects(allow_insecure_http, check_destination))
     return opener.open(request, timeout=timeout)
+
+
+class ResponseTooLarge(ValueError):
+    """A response past what its caller reads. The message is user-safe."""
+
+
+def read_capped(response, limit: int) -> bytes:
+    """A response body, read to one byte past `limit` and refused past it
+    (§912). A REST source's page or a token endpoint's answer was read whole,
+    so one response could hold the process: the API's, for a preview, and
+    every request on it."""
+    body = response.read(limit + 1)
+    if len(body) > limit:
+        size = f"{limit // (1024 * 1024)} MB" if limit >= 1024 * 1024 else f"{limit} bytes"
+        raise ResponseTooLarge(f"the response is larger than {size}")
+    return body

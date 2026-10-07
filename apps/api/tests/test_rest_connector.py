@@ -267,6 +267,36 @@ def test_the_byte_cap_stops_a_large_response(api_base: str, tmp_path) -> None:
     assert "exceeds" in str(exc.value)
 
 
+def test_one_page_past_the_response_cap_is_refused(api_base: str, monkeypatch) -> None:
+    # §912: a page was read whole whatever its size, so a hostile or broken API
+    # could hold the API's memory with one answer to a preview.
+    import src.services.connectors as connectors_module
+
+    monkeypatch.setattr(connectors_module, "_REST_MAX_BYTES", 64)
+    with pytest.raises(SourceReadError) as exc:
+        RestConnector().test(cfg(api_base, "/records"), {})
+    assert "too large" in str(exc.value) and "64 bytes" in str(exc.value)
+
+    monkeypatch.setattr(connectors_module, "_REST_MAX_BYTES", 1024 * 1024)
+    RestConnector().test(cfg(api_base, "/records"), {})
+
+
+def test_a_token_answer_past_its_cap_is_refused(api_base: str, monkeypatch) -> None:
+    import src.services.connectors as connectors_module
+
+    config = cfg(
+        api_base, "/oauth-data",
+        auth_type="oauth2_client_credentials",
+        token_url=f"{api_base}/oauth-token",
+    )
+    secrets = {"client_id": "the-client", "client_secret": "the-secret"}
+    monkeypatch.setattr(connectors_module, "_TOKEN_MAX_BYTES", 8)
+    with pytest.raises(ConnectorOperationError) as exc:
+        RestConnector().test(config, secrets)
+    assert "token endpoint's answer is too large" in str(exc.value)
+    assert "the-secret" not in str(exc.value)
+
+
 def test_there_is_no_server_side_cursor(api_base: str) -> None:
     """REST has no universal "changed since", so incremental mode still
     fetches everything and merges - asserted so the absence is deliberate."""
