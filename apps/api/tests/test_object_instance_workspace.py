@@ -222,3 +222,14 @@ def test_a_count_can_be_answered_from_the_index_alone(fx) -> None:
             "EXPLAIN SELECT count(*) FROM object_instances WHERE object_type_id = %s",
             (type_id,)).fetchall())
     assert "Index Only Scan using idx_object_instances_type_workspace" in plan, plan
+
+
+def test_the_stamp_reads_the_type_as_its_owner() -> None:
+    """§899: under `object_types`' policies, evaluated per row, the trigger
+    was nine tenths of a sync's write. As the owner it is a key lookup, with a
+    search path of its own; `test_the_policy_refuses_what_the_join_refused`
+    is what says nothing more is admitted."""
+    [(definer, config)] = admin(
+        "SELECT prosecdef, proconfig FROM pg_proc WHERE proname = 'object_instances_set_workspace'")
+    assert definer is True
+    assert config == ["search_path=public"]
