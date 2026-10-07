@@ -267,8 +267,8 @@ async def fork(
     try:
         # From a local copy, not through memory (§913): a fork is of a whole
         # version, which may be the largest file the dataset has.
-        source = await to_thread.run_sync(storage.local_path, str(version["s3_manifest_key"]))
-        await to_thread.run_sync(storage.put_file, parquet_key, source)
+        local = await to_thread.run_sync(storage.local_path, str(version["s3_manifest_key"]))
+        await to_thread.run_sync(storage.put_file, parquet_key, local)
     except FileNotFoundError as exc:
         # The row exists and its bytes do not - storage cleared under a dev
         # machine, a bucket lifecycle rule, a database restored against the
