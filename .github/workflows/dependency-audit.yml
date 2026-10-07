@@ -1,0 +1,48 @@
+name: dependency audit
+
+# Known vulnerabilities in what ships (§917): `scripts/check.sh audit`, which
+# holds the commands, as `checks` does for everything else.
+#
+# **Its own workflow, and not a job in `checks`**, because what it asks is a
+# vulnerability database rather than the change in front of it. As a job on
+# every pull request, an advisory published overnight would turn every open
+# branch red at once over code none of them touched. So it runs where the
+# answer can change: on a change to what is pinned, and every Monday for the
+# advisories published against what already was. A red Monday run is the
+# signal to bump a pin; GitHub mails the repository's watchers when a
+# scheduled run fails.
+
+on:
+  pull_request:
+    paths:
+      - "package.json"
+      - "package-lock.json"
+      - "apps/*/package.json"
+      - "apps/*/requirements*.txt"
+      - ".github/workflows/dependency-audit.yml"
+      - "scripts/check.sh"
+  push:
+    branches: [main]
+    paths:
+      - "package.json"
+      - "package-lock.json"
+      - "apps/*/package.json"
+      - "apps/*/requirements*.txt"
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+jobs:
+  audit:
+    name: dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pip-audit==2.10.1
+      - run: ANCHOR_PYTHON=python scripts/check.sh audit
