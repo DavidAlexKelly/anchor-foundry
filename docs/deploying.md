@@ -405,15 +405,26 @@ task, so scrape each task.
 **What a stack alarms on (§815).** The containers' lines already go to the
 stack's CloudWatch log group. Metric filters there count the API's
 `anchor.access` and `anchor.error` lines into the `Anchor/Platform`
-namespace, so no scraper is needed. Eight alarms report, when they fire and
-when they clear, to one SNS topic (the `AlarmTopicArn` stack output):
+namespace, so no scraper is needed. Thirteen alarms report, when they fire
+and when they clear, to one SNS topic (the `AlarmTopicArn` stack output);
+`infra/cdk/src/checks/monitoring-check.ts` counts them:
 
 - API 5xx over 5% of requests for ten minutes, once there are 20 requests;
 - any unhandled error;
 - API p95 latency over two seconds for fifteen minutes;
-- the API or the worker with no running task for three minutes;
-- an API target failing the load balancer's health check for three minutes;
-- database storage under 2 GiB, or database CPU over 80% for fifteen minutes.
+- the API, the worker or the web server with no running task for three
+  minutes (the web server's since §925);
+- three or more of the worker's scheduled runs failing in five minutes (§889);
+- an API or a web target failing the load balancer's health check for three
+  minutes;
+- five or more pages failing in people's browsers in five minutes, each a
+  line on `anchor.client_error` with its path, error and who saw it (§926);
+- database storage under 2 GiB, database CPU over 80% for fifteen minutes,
+  or more than four in five of its connections held for ten (§925).
+
+The worker has no load balancer in front of it; ECS itself replaces a worker
+whose Dagster daemon stops beating (§924), and `WorkerNotRunning` fires if
+none comes back.
 
 Deploy with `-c alarmEmail=ops@example.com` to subscribe an address; the
 subscription waits for its confirmation email. Without it, attach whatever
