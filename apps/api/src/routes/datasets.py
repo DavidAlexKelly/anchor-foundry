@@ -1121,6 +1121,21 @@ async def _sizes(keys: list[Any]) -> list[int | None]:
     return sizes
 
 
+async def _sizes_by_listing(keys: list[Any]) -> list[int | None]:
+    """Every version's size from one listing of the dataset's prefix (§898),
+    rather than a HEAD each: a dataset synced every five minutes has a
+    hundred thousand versions a year, which was minutes of HEADs for one
+    number. A key outside the shared prefix - there should be none - is
+    asked about on its own."""
+    present = [str(k) for k in keys if k]
+    common = os.path.commonprefix(present)
+    prefix = common[: common.rfind("/") + 1]
+    if "/datasets/" not in prefix or not hasattr(_storage, "sizes_under"):
+        return await _sizes(keys)
+    listed = await anyio.to_thread.run_sync(_storage.sizes_under, prefix)
+    return [listed.get(str(k)) if k else None for k in keys]
+
+
 @router.get("/{dataset_id}/retention", response_model=RetentionOut)
 async def dataset_retention(
     dataset_id: UUID,
@@ -1137,7 +1152,7 @@ async def dataset_retention(
         rows = await ds_service.list_versions(conn, access.project_id, dataset_id)
     total = 0
     unmeasured = 0
-    for size in await _sizes([row.get("s3_manifest_key") for row in rows]):
+    for size in await _sizes_by_listing([row.get("s3_manifest_key") for row in rows]):
         if size is None:
             unmeasured += 1
         else:
