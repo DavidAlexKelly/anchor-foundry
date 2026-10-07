@@ -41,13 +41,17 @@ const context = JSON.parse(
   fs.readFileSync(path.join(__dirname, "..", "..", "cdk.json"), "utf8")
 ).context;
 
-function synth(platformUrl?: string, inviteFromEmail?: string, bootstrapTokenHash?: string): Template {
+function synth(
+  platformUrl?: string, inviteFromEmail?: string, bootstrapTokenHash?: string,
+  originAccess?: "public" | "vpc",
+): Template {
   const app = new App({ context: { ...context, "aws:cdk:bundling-stacks": [] } });
   const stack = new CustomerStack(app, "PlatformStack", {
     orgSlug: "check",
     platformUrl,
     inviteFromEmail,
     bootstrapTokenHash,
+    originAccess,
     vendorEcrRegistry: "111111111111.dkr.ecr.eu-west-2.amazonaws.com",
     imageTag: "check",
     objectStore: "postgres",
@@ -238,19 +242,86 @@ check("Cognito sends them unless an SES address is given, and then SES does", ()
 
 console.log("who a listener's allowlist sees (§850):");
 
-check("the proxy hops match how the load balancer is reached", () => {
+const viaVpc = synth(undefined, undefined, undefined, "vpc");
+
+function hopsMatchScheme(template: Template): void {
   // Public, a request can reach the load balancer directly and write every
   // X-Forwarded-For entry left of the load balancer's own: only one hop can
   // be trusted. Internal behind a CloudFront VPC origin (decision 0025), the
   // entry CloudFront writes is the sender's, two from the right.
-  const scheme = only(plain, "AWS::ElasticLoadBalancingV2::LoadBalancer").Properties.Scheme;
-  const api = Object.values(plain.findResources("AWS::ECS::TaskDefinition"))
-    .map((r) => r.Properties.ContainerDefinitions[0])
-    .find((c) => c.Name === "api");
-  const hops = (api.Environment as { Name: string; Value: string }[])
-    .find((e) => e.Name === "LISTENER_PROXY_HOPS")?.Value;
+  const scheme = only(template, "AWS::ElasticLoadBalancingV2::LoadBalancer").Properties.Scheme;
+  const hops = envOf(template, "api").LISTENER_PROXY_HOPS;
   const want = scheme === "internal" ? "2" : "1";
   if (hops !== want) throw new Error(`a ${scheme} load balancer with LISTENER_PROXY_HOPS=${hops}; expected ${want}`);
+}
+
+check("the proxy hops match how the load balancer is reached", () => hopsMatchScheme(plain));
+check("and on a stack whose load balancer is internal (§909)", () => hopsMatchScheme(viaVpc));
+
+console.log("how CloudFront reaches the services (decision 0025, §909):");
+
+/** The ingress rules of the security group the load balancer's listener uses. */
+function albIngress(template: Template): Record<string, any>[] {
+  const alb = only(template, "AWS::ElasticLoadBalancingV2::LoadBalancer");
+  const groups: string[] = alb.Properties.SecurityGroups.map(
+    (g: { "Fn::GetAtt": [string, string] }) => g["Fn::GetAtt"][0]);
+  const inline = groups.flatMap((id) =>
+    template.findResources("AWS::EC2::SecurityGroup")[id]?.Properties.SecurityGroupIngress ?? []);
+  const separate = Object.values(template.findResources("AWS::EC2::SecurityGroupIngress"))
+    .map((r) => r.Properties)
+    .filter((p) => groups.includes(p.GroupId?.["Fn::GetAtt"]?.[0]));
+  return [...inline, ...separate];
+}
+
+function origin(template: Template): Record<string, any> {
+  const config = only(template, "AWS::CloudFront::Distribution").Properties.DistributionConfig;
+  if (config.Origins.length !== 1) throw new Error(`${config.Origins.length} origins`);
+  return config.Origins[0];
+}
+
+check("by default, nothing changes for a stack already deployed", () => {
+  const scheme = only(plain, "AWS::ElasticLoadBalancingV2::LoadBalancer").Properties.Scheme;
+  if (scheme !== "internet-facing") throw new Error(`the load balancer is ${scheme}`);
+  if (!albIngress(plain).some((r) => r.CidrIp === "0.0.0.0/0")) throw new Error("not open as before");
+  if (!origin(plain).CustomOriginConfig || origin(plain).VpcOriginConfig) {
+    throw new Error("the origin is not the load balancer's public name");
+  }
+  if (Object.keys(plain.findResources("AWS::CloudFront::VpcOrigin")).length) {
+    throw new Error("a VPC origin was created");
+  }
+});
+
+check("with originAccess=vpc, the load balancer is internal", () => {
+  const alb = only(viaVpc, "AWS::ElasticLoadBalancingV2::LoadBalancer");
+  if (alb.Properties.Scheme !== "internal") throw new Error(`the load balancer is ${alb.Properties.Scheme}`);
+});
+
+check("and admits the VPC, not the internet", () => {
+  const rules = albIngress(viaVpc);
+  if (rules.some((r) => r.CidrIp === "0.0.0.0/0" || r.CidrIpv6 === "::/0")) {
+    throw new Error("still open to the internet");
+  }
+  const fromVpc = rules.filter((r) => r.FromPort === 80 && r.ToPort === 80
+    && JSON.stringify(r.CidrIp ?? "").includes("CidrBlock"));
+  if (fromVpc.length !== 1) throw new Error(`${fromVpc.length} rules admit the VPC on port 80`);
+});
+
+check("and CloudFront reaches it through a VPC origin", () => {
+  const vpcOrigins = Object.entries(viaVpc.findResources("AWS::CloudFront::VpcOrigin"));
+  if (vpcOrigins.length !== 1) throw new Error(`${vpcOrigins.length} VPC origins`);
+  const [id, resource] = vpcOrigins[0];
+  const endpoint = resource.Properties.VpcOriginEndpointConfig;
+  if (endpoint.OriginProtocolPolicy !== "http-only" || endpoint.HTTPPort !== 80) {
+    throw new Error(`the VPC origin is ${JSON.stringify(endpoint)}`);
+  }
+  if (JSON.stringify(endpoint.Arn) !== JSON.stringify(
+    { Ref: Object.keys(viaVpc.findResources("AWS::ElasticLoadBalancingV2::LoadBalancer"))[0] })) {
+    throw new Error("the VPC origin is not the load balancer");
+  }
+  const used = origin(viaVpc).VpcOriginConfig?.VpcOriginId;
+  if (JSON.stringify(used) !== JSON.stringify({ "Fn::GetAtt": [id, "Id"] })) {
+    throw new Error(`the distribution's origin is ${JSON.stringify(origin(viaVpc))}`);
+  }
 });
 
 console.log("who creates the first owner (§886):");

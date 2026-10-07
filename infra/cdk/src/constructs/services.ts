@@ -85,6 +85,10 @@ export interface ServicesProps {
   /** SHA-256, in hex, of the token the provisioner creates the first owner
    * with (§886). Set, the API's first-owner route refuses anyone else. */
   readonly bootstrapTokenHash?: string;
+  /** Decision 0025's option B (§909): the load balancer is internal, in
+   * private subnets, and admits only the VPC, where CloudFront's VPC origin
+   * reaches it from. Unset, it is internet-facing, as every stack so far. */
+  readonly internalLoadBalancer?: boolean;
 }
 
 /**
@@ -476,7 +480,11 @@ export class ServicesConstruct extends Construct {
       // senders that come through CloudFront. stack-check.ts holds the two
       // together.
       extraEnv: {
-        LISTENER_PROXY_HOPS: "1",
+        // Public, a request can reach the load balancer directly and write
+        // every entry left of the load balancer's own, so one hop is all that
+        // can be trusted (§850). Internal, CloudFront's entry - the sender's -
+        // is the second from the right, and nobody else can write it (§909).
+        LISTENER_PROXY_HOPS: props.internalLoadBalancer ? "2" : "1",
         ...objectIndexEnv,
         ...duckdbEnv,
         ...(props.bootstrapTokenHash ? { BOOTSTRAP_TOKEN_SHA256: props.bootstrapTokenHash } : {}),
@@ -554,16 +562,27 @@ export class ServicesConstruct extends Construct {
     });
 
     // ---- ALB: the only public-facing component (§10) ------------------------
+    const internal = props.internalLoadBalancer === true;
     this.alb = new elbv2.ApplicationLoadBalancer(this, "Alb", {
       vpc,
-      internetFacing: true,
-      vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
+      internetFacing: !internal,
+      vpcSubnets: { subnetType: internal ? ec2.SubnetType.PRIVATE_WITH_EGRESS : ec2.SubnetType.PUBLIC },
     });
-    // HTTP only, and open to the internet. This said the control plane would
-    // attach a certificate and an HTTPS listener once a customer subdomain was
-    // issued; nothing does, so CloudFront reaches this in plain HTTP and so
-    // can anyone else. Decision 0025 (roadmap E.11) proposes the fix.
-    const listener = this.alb.addListener("Http", { port: 80, open: true });
+    // Public: HTTP only, and open to the internet. This said the control plane
+    // would attach a certificate and an HTTPS listener once a customer
+    // subdomain was issued; nothing does, so CloudFront reaches this in plain
+    // HTTP and so can anyone else. Decision 0025 (roadmap E.11).
+    //
+    // Internal (option B, §909): open to the VPC only. CloudFront's VPC origin
+    // reaches it through network interfaces it places in the VPC, so its
+    // traffic comes from inside the VPC's range, and a fixed range needs no
+    // lookup of the origin's security group, which CloudFront creates itself.
+    const listener = this.alb.addListener("Http", { port: 80, open: !internal });
+    if (internal) {
+      listener.connections.allowFrom(
+        ec2.Peer.ipv4(vpc.vpcCidrBlock), ec2.Port.tcp(80),
+        "CloudFront's VPC origin, from inside the VPC (decision 0025)");
+    }
     listener.addTargets("Web", {
       port: 3000,
       protocol: elbv2.ApplicationProtocol.HTTP,

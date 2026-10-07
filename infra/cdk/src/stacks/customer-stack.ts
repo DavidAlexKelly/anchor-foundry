@@ -40,6 +40,9 @@ export interface CustomerStackProps extends StackProps {
   /** Where objects live: "postgres" (the default) or "opensearch", after the
    * cutover in docs/deploying.md (§814; app.ts's `objectStore` context). */
   readonly objectStore?: "postgres" | "opensearch";
+  /** How CloudFront reaches the services (decision 0025, §909; app.ts's
+   * `originAccess` context). "public" when unset. */
+  readonly originAccess?: "public" | "vpc";
   /** Subscribed to the stack's alarms (§815; app.ts's `alarmEmail` context). */
   readonly alarmEmail?: string;
 }
@@ -158,6 +161,7 @@ export class CustomerStack extends Stack {
       imageTag: props.imageTag,
       objectIndexSecret: props.objectStore === "opensearch" ? data.searchMasterSecret : undefined,
       bootstrapTokenHash: props.bootstrapTokenHash,
+      internalLoadBalancer: props.originAccess === "vpc",
     });
     Tags.of(services.apiService).add("platform:component", "app-server");
     Tags.of(services.workerService).add("platform:component", "pipeline-runs");
@@ -204,10 +208,18 @@ export class CustomerStack extends Stack {
     });
 
     // ---- CloudFront in front of the ALB (§7) --------------------------------
-    const origin = new origins.LoadBalancerV2Origin(services.alb, {
-      // Plain HTTP to a public load balancer: decision 0025 (roadmap E.11).
-      protocolPolicy: cloudfront.OriginProtocolPolicy.HTTP_ONLY,
-    });
+    // Decision 0025 (roadmap E.11). "public": plain HTTP to an internet-facing
+    // load balancer, which anyone who learns its name can reach directly.
+    // "vpc" (option B, §909): the load balancer is internal, and CloudFront
+    // reaches it through a VPC origin, inside AWS's network.
+    const origin = props.originAccess === "vpc"
+      ? origins.VpcOrigin.withApplicationLoadBalancer(services.alb, {
+          protocolPolicy: cloudfront.OriginProtocolPolicy.HTTP_ONLY,
+          httpPort: 80,
+        })
+      : new origins.LoadBalancerV2Origin(services.alb, {
+          protocolPolicy: cloudfront.OriginProtocolPolicy.HTTP_ONLY,
+        });
     const distribution = new cloudfront.Distribution(this, "Cdn", {
       defaultBehavior: {
         origin,

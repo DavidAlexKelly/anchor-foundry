@@ -272,6 +272,44 @@ copying an object twice rewrites one document.
 4. Run `python -m src.services.restore_check` with the same variables. A
    non-empty `stale_index` names the sources to re-sync.
 
+## Taking the load balancer off the internet (decision 0025, §909)
+
+Every stack deployed so far has an internet-facing load balancer with an HTTP
+listener open to `0.0.0.0/0`. CloudFront reaches it in plain HTTP, and so can
+anyone who learns its name, skipping CloudFront altogether. Decision 0025's
+option B moves it behind a CloudFront VPC origin:
+
+```
+cdk deploy -c originAccess=vpc ...
+```
+
+- The load balancer becomes **internal**, in the private subnets, and its
+  listener admits only the VPC's own range. CloudFront's VPC origin reaches it
+  from network interfaces inside the VPC.
+- The distribution's origin becomes that VPC origin.
+- `LISTENER_PROXY_HOPS` goes from 1 to 2. A listener's allowlist then sees the
+  sender's own address, the one CloudFront writes, instead of the CloudFront
+  edge's (§850).
+
+Without the flag a stack synthesizes exactly as before. The construct check
+compares the two (`src/checks/stack-check.ts`). **This has not been deployed
+yet.** `internetFacing` cannot change in place, so the first deploy replaces
+the load balancer, and the distribution moves to the new one in the same
+deployment. Try it on a stack that can be visited before and after:
+
+1. Before: note the load balancer's DNS name (`aws elbv2
+   describe-load-balancers`), and that `curl http://<that name>/api/health`
+   answers from the internet.
+2. Deploy with `-c originAccess=vpc` and wait for CloudFront's deployment to
+   finish.
+3. After: `https://<distribution>/api/health` answers, and a sign-in completes.
+   The old name no longer resolves, and the new load balancer's name resolves
+   only to private addresses, so the same `curl` cannot connect.
+4. A listener with an allowlist admits a sender listed by its own address.
+
+To roll back, deploy again without the flag. That replaces the load balancer
+once more.
+
 ## Backup and restore (§803)
 
 The stack's three stores are backed up three ways, and a restore is finished
