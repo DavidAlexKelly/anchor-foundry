@@ -269,11 +269,19 @@ jobs:
       - run: npm ci
       # The package is pinned in requirements-dev.txt; this fetches the
       # browser binary, which pip cannot.
-      # §933: this hung for over an hour on two shards of #741 (an apt or
-      # download stall), holding the pull request with it. Ten minutes is
-      # several times what it takes.
-      - run: python -m playwright install --with-deps chromium
-        timeout-minutes: 10
+      # §933: this hung for over an hour on two shards of #741 and twice on
+      # one of #742 - an apt or download stall that never recovers by
+      # waiting. Each attempt gets five minutes, several times what it takes,
+      # and a stalled one is killed and tried again on a repaired dpkg.
+      - name: Install the browser
+        timeout-minutes: 20
+        run: |
+          for attempt in 1 2 3; do
+            timeout 300 python -m playwright install --with-deps chromium && exit 0
+            echo "::warning::playwright install attempt $attempt stalled or failed"
+            sudo dpkg --configure -a || true
+          done
+          exit 1
       # Same two overrides as the api job; see there for why.
       - name: Migrate
         run: python packages/db/migrate.py
