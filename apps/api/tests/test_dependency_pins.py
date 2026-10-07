@@ -339,3 +339,17 @@ def test_every_app_that_ships_python_is_audited() -> None:
     assert shipped, "no apps/*/requirements.txt found - has the layout moved?"
     missing = [p for p in shipped if p not in audit]
     assert not missing, f"scripts/check.sh's run_audit does not check {missing}"
+
+
+def test_no_workflow_runs_on_a_label_that_moves() -> None:
+    """§921: `ubuntu-latest` is a new operating system on GitHub's date,
+    under every open pull request at once. The image is named instead, and
+    moved in a change of its own."""
+    import glob
+
+    moving = []
+    for path in sorted(glob.glob(os.path.join(ROOT, ".github", "workflows", "*.yml"))):
+        for number, line in enumerate(open(path, encoding="utf-8"), 1):
+            if re.search(r"runs-on:\s*\S*-latest\b", line):
+                moving.append(f"{os.path.relpath(path, ROOT)}:{number}")
+    assert not moving, f"runs-on names a moving label at {moving}"
