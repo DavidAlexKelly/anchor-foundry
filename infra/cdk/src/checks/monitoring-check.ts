@@ -53,7 +53,9 @@ function build(alarmEmail?: string): Template {
     cluster: services.cluster,
     apiService: services.apiService,
     workerService: services.workerService,
+    webService: services.webService,
     apiTargetGroup: services.apiTargetGroup,
+    webTargetGroup: services.webTargetGroup,
     database: data.database,
     alarmEmail,
   });
@@ -114,7 +116,7 @@ check("the API's lines are counted by the patterns its formatter matches", () =>
 });
 
 check("every alarm reaches the topic when it fires and when it clears", () => {
-  if (alarms.length !== 9) throw new Error(`expected 9 alarms, found ${alarms.length}`);
+  if (alarms.length !== 12) throw new Error(`expected 12 alarms, found ${alarms.length}`);
   for (const [id, made] of alarms) {
     for (const key of ["AlarmActions", "OKActions"]) {
       if (!JSON.stringify(made.Properties?.[key] ?? []).includes(topicId)) {
@@ -162,9 +164,10 @@ check("latency is judged at p95, in milliseconds", () => {
   }
 });
 
-check("the API and the worker are each watched for having no task", () => {
+check("the API, the worker and the web server are each watched for having no task", () => {
   for (const [prefix, service] of [["ApiNotRunning", "ServicesapiService"],
-                                   ["WorkerNotRunning", "ServicesworkerService"]]) {
+                                   ["WorkerNotRunning", "ServicesworkerService"],
+                                   ["WebNotRunning", "ServiceswebService"]]) {
     const props = alarm(prefix);
     const dims = JSON.stringify(props.Dimensions);
     if (props.MetricName !== "RunningTaskCount" || props.Statistic !== "Minimum" || !dims.includes(service)
@@ -181,6 +184,23 @@ check("the database is watched for storage and CPU", () => {
   }
   if (alarm("DatabaseCpu").MetricName !== "CPUUtilization") throw new Error("cpu metric");
   if (alarm("ApiUnhealthyTargets").MetricName !== "UnHealthyHostCount") throw new Error("targets metric");
+});
+
+check("the web server's targets and the database's connections are watched (§925)", () => {
+  const web = alarm("WebUnhealthyTargets");
+  if (web.MetricName !== "UnHealthyHostCount" || !JSON.stringify(web.Dimensions).includes("Web")) {
+    throw new Error(`web targets: ${web.MetricName} ${JSON.stringify(web.Dimensions)}`);
+  }
+  const connections = alarm("DatabaseConnections");
+  if (connections.MetricName !== "DatabaseConnections" || connections.Statistic !== "Maximum"
+      || connections.ComparisonOperator !== "GreaterThanThreshold") {
+    throw new Error(`connections: ${connections.MetricName} ${connections.Statistic}`);
+  }
+  // Above what the API's pools may hold at their ceiling (scaling-check.ts),
+  // so a busy day at six tasks is not an incident, and below the limit.
+  const limit = Math.floor((4 * 1024 ** 3) / 9531392);
+  const threshold = connections.Threshold as number;
+  if (!(threshold > limit / 2 && threshold < limit)) throw new Error(`threshold ${threshold} of ${limit}`);
 });
 
 check("the email is subscribed only when given", () => {
