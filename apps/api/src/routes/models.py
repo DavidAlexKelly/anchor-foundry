@@ -399,20 +399,18 @@ async def run_model(
             schema, rows_produced = await anyio.to_thread.run_sync(
                 engine.run_transform, input_paths, str(model["code"]), dest
             )
-            with open(dest, "rb") as handle:
-                parquet_bytes = handle.read()
-        async with user_connection(access.auth.user_id) as conn:
-            output_dataset, output_version_id = await model_service.record_output(
-                conn,
-                storage,
-                model=model,
-                workspace_id=access.workspace_id,
-                project_id=access.project_id,
-                parquet_bytes=parquet_bytes,
-                schema=schema,
-                row_count=rows_produced,
-                triggered_by=access.auth.user_id,
-            )
+            async with user_connection(access.auth.user_id) as conn:
+                output_dataset, output_version_id = await model_service.record_output(
+                    conn,
+                    storage,
+                    model=model,
+                    workspace_id=access.workspace_id,
+                    project_id=access.project_id,
+                    parquet_path=dest,
+                    schema=schema,
+                    row_count=rows_produced,
+                    triggered_by=access.auth.user_id,
+                )
     except DatasetEngineError as exc:
         ok, error = False, str(exc)
 

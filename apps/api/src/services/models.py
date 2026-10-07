@@ -882,13 +882,13 @@ async def record_output(
     model: dict[str, Any],
     workspace_id: UUID,
     project_id: UUID,
-    parquet_bytes: bytes,
+    parquet_path: str,
     schema: list[engine.ColumnSchema],
     row_count: int,
     triggered_by: UUID,
 ) -> tuple[dict[str, Any], UUID]:
     """Create-or-version the model's output dataset; returns (dataset row,
-    dataset_version id)."""
+    dataset_version id). The output is stored from its file (§913)."""
     import json
 
     schema_json = json.dumps([c.as_dict() for c in schema])
@@ -908,7 +908,7 @@ async def record_output(
                 f"a dataset named '{slug}' already exists - rename the model or that dataset"
             )
         parquet_key = f"{ds_service.storage_prefix(ws_prefix, dataset_id)}v1/data.parquet"
-        await to_thread.run_sync(storage.put, parquet_key, parquet_bytes)
+        await to_thread.run_sync(storage.put_file, parquet_key, parquet_path)
         row = await fetch_one(
             conn,
             """
@@ -954,7 +954,7 @@ async def record_output(
         parquet_key = (
             f"{ds_service.storage_prefix(ws_prefix, dataset_id)}v{version}/data.parquet"
         )
-        await to_thread.run_sync(storage.put, parquet_key, parquet_bytes)
+        await to_thread.run_sync(storage.put_file, parquet_key, parquet_path)
         row = await fetch_one(
             conn,
             """

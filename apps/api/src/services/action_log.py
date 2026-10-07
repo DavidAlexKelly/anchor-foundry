@@ -466,14 +466,12 @@ async def extend(
         dest = os.path.join(tmp, "out.parquet")
         schema, rows = await to_thread.run_sync(
             dataset_engine.add_columns, path, columns, dest)
-        with open(dest, "rb") as handle:
-            data = handle.read()
-    await ds_service.add_version(
-        conn, storage, dataset_id=UUID(str(source["dataset_id"])), workspace_id=workspace_id,
-        parquet_bytes=data, schema=schema, row_count=rows, produced_by_kind="action_log",
-        produced_by_id=UUID(str(action_type["id"])), created_by=by,
-        transaction_type="SNAPSHOT",
-    )
+        await ds_service.add_version(
+            conn, storage, dataset_id=UUID(str(source["dataset_id"])), workspace_id=workspace_id,
+            parquet_path=dest, schema=schema, row_count=rows, produced_by_kind="action_log",
+            produced_by_id=UUID(str(action_type["id"])), created_by=by,
+            transaction_type="SNAPSHOT",
+        )
     # The property, after the log's own: a plain text one, as `enable` makes
     # each parameter's. The `[LOG]` type is the log's, so it is written here
     # rather than through a whole-definition edit of somebody's type.

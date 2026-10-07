@@ -1579,29 +1579,27 @@ async def _write_pairs(
             engine.write_pairs, path, table["from_column"], table["to_column"],
             add, remove, dest,
         )
-        with open(dest, "rb") as handle:
-            data = handle.read()
-    changes = [
-        {"kind": "link", "made": made, "dataset_id": dataset_id,
-         "from_column": table["from_column"], "to_column": table["to_column"],
-         "from_key": f, "to_key": t}
-        for made, pairs in ((True, added), (False, removed)) for f, t in pairs
-    ]
-    if not changes:
-        return None, []
-    staged = await dataset_service.stage_version(
-        conn, storage,
-        dataset_id=UUID(dataset_id),
-        workspace_id=access.workspace_id,
-        parquet_bytes=data,
-        schema=schema,
-        row_count=rows,
-        produced_by_kind=kind,
-        produced_by_id=run_id,
-        created_by=access.auth.user_id,
-        # A join table only gains pairs unless one was removed (§747).
-        transaction_type="UPDATE" if removed else "APPEND",
-    )
+        changes = [
+            {"kind": "link", "made": made, "dataset_id": dataset_id,
+             "from_column": table["from_column"], "to_column": table["to_column"],
+             "from_key": f, "to_key": t}
+            for made, pairs in ((True, added), (False, removed)) for f, t in pairs
+        ]
+        if not changes:
+            return None, []
+        staged = await dataset_service.stage_version(
+            conn, storage,
+            dataset_id=UUID(dataset_id),
+            workspace_id=access.workspace_id,
+            parquet_path=dest,
+            schema=schema,
+            row_count=rows,
+            produced_by_kind=kind,
+            produced_by_id=run_id,
+            created_by=access.auth.user_id,
+            # A join table only gains pairs unless one was removed (§747).
+            transaction_type="UPDATE" if removed else "APPEND",
+        )
     return staged, changes
 
 
@@ -1953,21 +1951,19 @@ async def undo_action(
                         dest,
                         work["deletes"],
                     )
-                    with open(dest, "rb") as handle:
-                        work_bytes = handle.read()
-                staged_all.append(await dataset_service.stage_version(
-                    conn, storage,
-                    dataset_id=UUID(dataset_key),
-                    workspace_id=access.workspace_id,
-                    parquet_bytes=work_bytes,
-                    schema=work_schema,
-                    row_count=work_rows,
-                    produced_by_kind="action",
-                    produced_by_id=undo_run_id,
-                    created_by=access.auth.user_id,
-                    transaction_type=dataset_service.written_transaction(
-                        work["updates"], work["deletes"]),
-                ))
+                    staged_all.append(await dataset_service.stage_version(
+                        conn, storage,
+                        dataset_id=UUID(dataset_key),
+                        workspace_id=access.workspace_id,
+                        parquet_path=dest,
+                        schema=work_schema,
+                        row_count=work_rows,
+                        produced_by_kind="action",
+                        produced_by_id=undo_run_id,
+                        created_by=access.auth.user_id,
+                        transaction_type=dataset_service.written_transaction(
+                            work["updates"], work["deletes"]),
+                    ))
             for dataset_key, table in join_tables.items():
                 staged, _changes = await _write_pairs(
                     conn, storage, access, undo_run_id, dataset_key, table,
@@ -3662,25 +3658,23 @@ async def _commit_rows(
                     dest,
                     work["deletes"],
                 )
-                with open(dest, "rb") as handle:
-                    work_bytes = handle.read()
-            staged_all.append(
-                await dataset_service.stage_version(
-                    conn, storage,
-                    dataset_id=UUID(dataset_key),
-                    workspace_id=access.workspace_id,
-                    parquet_bytes=work_bytes,
-                    schema=work_schema,
-                    row_count=work_rows,
-                    produced_by_kind=produced_by_kind,
-                    produced_by_id=produced_by_id,
-                    created_by=access.auth.user_id,
-                    # An action that only creates objects (and the
-                    # log's one row) adds to the view (§747).
-                    transaction_type=dataset_service.written_transaction(
-                        work["updates"], work["deletes"]),
+                staged_all.append(
+                    await dataset_service.stage_version(
+                        conn, storage,
+                        dataset_id=UUID(dataset_key),
+                        workspace_id=access.workspace_id,
+                        parquet_path=dest,
+                        schema=work_schema,
+                        row_count=work_rows,
+                        produced_by_kind=produced_by_kind,
+                        produced_by_id=produced_by_id,
+                        created_by=access.auth.user_id,
+                        # An action that only creates objects (and the
+                        # log's one row) adds to the view (§747).
+                        transaction_type=dataset_service.written_transaction(
+                            work["updates"], work["deletes"]),
+                    )
                 )
-            )
         for dataset_key, table in join_tables.items():
             if dataset_key in plan:
                 raise DatasetEngineError(
@@ -4439,26 +4433,24 @@ async def execute_batch(
                         dest,
                         [],
                     )
-                    with open(dest, "rb") as handle:
-                        work_bytes = handle.read()
-                staged_all.append(
-                    await dataset_service.stage_version(
-                        conn, storage,
-                        dataset_id=UUID(dataset_key),
-                        workspace_id=access.workspace_id,
-                        parquet_bytes=work_bytes,
-                        schema=work_schema,
-                        row_count=work_rows,
-                        # The submission produced this version, not any one of
-                        # its runs (db 0063). Naming the first run would be a
-                        # lineage entry that is wrong for every other row.
-                        produced_by_kind="action_batch",
-                        produced_by_id=batch_id,
-                        created_by=access.auth.user_id,
-                        transaction_type=dataset_service.written_transaction(
-                            work["updates"], []),
+                    staged_all.append(
+                        await dataset_service.stage_version(
+                            conn, storage,
+                            dataset_id=UUID(dataset_key),
+                            workspace_id=access.workspace_id,
+                            parquet_path=dest,
+                            schema=work_schema,
+                            row_count=work_rows,
+                            # The submission produced this version, not any one of
+                            # its runs (db 0063). Naming the first run would be a
+                            # lineage entry that is wrong for every other row.
+                            produced_by_kind="action_batch",
+                            produced_by_id=batch_id,
+                            created_by=access.auth.user_id,
+                            transaction_type=dataset_service.written_transaction(
+                                work["updates"], []),
+                        )
                     )
-                )
             # p.167's "automatically linked to all edited objects" (§587): a
             # pair per entry and the object it edited, in the log's join table.
             if log_edits is not None and log_edits["to_type_id"] == str(object_type_id):

@@ -147,36 +147,33 @@ async def archive(conn: AsyncConnection, storage: StorageGateway, listener_id: U
                                   {"id": str(dataset_id)})
         previous = await to_thread.run_sync(storage.local_path, str(current["s3_location"]))
 
-    def build() -> tuple[list[tuple[str, str]], int, bytes]:
-        with tempfile.TemporaryDirectory() as tmp:
-            dest = os.path.join(tmp, "data.parquet")
-            schema, count = archive_file(previous, rows, dest)
-            with open(dest, "rb") as handle:
-                return schema, count, handle.read()
-
-    schema, count, parquet = await to_thread.run_sync(build)
-    if dataset_id is None:
-        dataset_id = uuid4()
-        name = await _free_name(conn, project_id, dataset_name(listener["display_name"]))
-        prefix = await ds_service.workspace_s3_prefix(conn, listener["workspace_id"])
+    # Held to the end: the archive is stored from this file, not from memory
+    # (§913), as it holds every event the listener has archived.
+    with tempfile.TemporaryDirectory() as tmp:
+        dest = os.path.join(tmp, "data.parquet")
+        schema, count = await to_thread.run_sync(archive_file, previous, rows, dest)
+        if dataset_id is None:
+            dataset_id = uuid4()
+            name = await _free_name(conn, project_id, dataset_name(listener["display_name"]))
+            prefix = await ds_service.workspace_s3_prefix(conn, listener["workspace_id"])
+            await conn.execute(text("""
+                INSERT INTO datasets (id, project_id, workspace_id, name, slug, description, origin,
+                                      s3_location, current_version, created_by)
+                VALUES (:id, :pid, :wid, :name, :slug, :descr, 'listener', :loc, 0, :by)
+            """), {"id": str(dataset_id), "pid": str(project_id), "wid": str(listener["workspace_id"]),
+                   "name": name, "slug": ds_service.slugify(name),
+                   "descr": f"Events received by the listener {listener['display_name']}",
+                   "loc": ds_service.storage_prefix(prefix, dataset_id), "by": str(by)})
+        committed = await ds_service.add_version(
+            conn, storage, dataset_id=dataset_id, workspace_id=listener["workspace_id"],
+            parquet_path=dest, schema=[ColumnSchema(name=n, data_type=t) for n, t in schema],
+            row_count=count, produced_by_kind="listener", produced_by_id=listener_id, created_by=by,
+            # An archive only ever adds the events since the last (§747).
+            transaction_type="APPEND")
         await conn.execute(text("""
-            INSERT INTO datasets (id, project_id, workspace_id, name, slug, description, origin,
-                                  s3_location, current_version, created_by)
-            VALUES (:id, :pid, :wid, :name, :slug, :descr, 'listener', :loc, 0, :by)
-        """), {"id": str(dataset_id), "pid": str(project_id), "wid": str(listener["workspace_id"]),
-               "name": name, "slug": ds_service.slugify(name),
-               "descr": f"Events received by the listener {listener['display_name']}",
-               "loc": ds_service.storage_prefix(prefix, dataset_id), "by": str(by)})
-    committed = await ds_service.add_version(
-        conn, storage, dataset_id=dataset_id, workspace_id=listener["workspace_id"],
-        parquet_bytes=parquet, schema=[ColumnSchema(name=n, data_type=t) for n, t in schema],
-        row_count=count, produced_by_kind="listener", produced_by_id=listener_id, created_by=by,
-        # An archive only ever adds the events since the last (§747).
-        transaction_type="APPEND")
-    await conn.execute(text("""
-        UPDATE listeners SET archive_dataset_id = :did, archived_through = :through, archived_at = now()
-         WHERE id = :id
-    """), {"id": str(listener_id), "did": str(dataset_id), "through": rows[-1][0]})
-    return {"dataset_id": dataset_id, "version": committed["current_version"],
-            "archived": len(rows), "rows": count}
+            UPDATE listeners SET archive_dataset_id = :did, archived_through = :through, archived_at = now()
+             WHERE id = :id
+        """), {"id": str(listener_id), "did": str(dataset_id), "through": rows[-1][0]})
+        return {"dataset_id": dataset_id, "version": committed["current_version"],
+                "archived": len(rows), "rows": count}
 
