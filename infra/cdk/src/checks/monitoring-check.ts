@@ -100,6 +100,7 @@ check("the API's lines are counted by the patterns its formatter matches", () =>
     ApiUnhandledErrors: ['{ $.logger = "anchor.error" }', "1"],
     ApiLatency: ['{ $.logger = "anchor.access" }', "$.duration_ms"],
     WorkerRunFailures: ['"RUN_FAILURE"', "1"],
+    WebPageErrors: ['{ $.logger = "anchor.client_error" && $.kind = "fault" }', "1"],
   };
   if (filters.length !== Object.keys(expected).length) {
     throw new Error(`expected ${Object.keys(expected).length} filters, found ${filters.length}`);
@@ -116,7 +117,7 @@ check("the API's lines are counted by the patterns its formatter matches", () =>
 });
 
 check("every alarm reaches the topic when it fires and when it clears", () => {
-  if (alarms.length !== 12) throw new Error(`expected 12 alarms, found ${alarms.length}`);
+  if (alarms.length !== 13) throw new Error(`expected 13 alarms, found ${alarms.length}`);
   for (const [id, made] of alarms) {
     for (const key of ["AlarmActions", "OKActions"]) {
       if (!JSON.stringify(made.Properties?.[key] ?? []).includes(topicId)) {
@@ -201,6 +202,19 @@ check("the web server's targets and the database's connections are watched (§92
   const limit = Math.floor((4 * 1024 ** 3) / 9531392);
   const threshold = connections.Threshold as number;
   if (!(threshold > limit / 2 && threshold < limit)) throw new Error(`threshold ${threshold} of ${limit}`);
+});
+
+check("pages failing in browsers are counted, and a stale one is not (§926)", () => {
+  const filters = Object.values(quiet.findResources("AWS::Logs::MetricFilter"))
+    .map((f) => f.Properties)
+    .filter((p) => p.MetricTransformations[0].MetricName === "WebPageErrors");
+  if (filters.length !== 1) throw new Error(`${filters.length} WebPageErrors filters`);
+  const pattern: string = filters[0].FilterPattern;
+  if (!pattern.includes('$.logger = "anchor.client_error"') || !pattern.includes('$.kind = "fault"')) {
+    throw new Error(pattern);
+  }
+  const props = alarm("WebPageErrors");
+  if (props.MetricName !== "WebPageErrors" || props.Statistic !== "Sum") throw new Error(`${props.MetricName}`);
 });
 
 check("the email is subscribed only when given", () => {

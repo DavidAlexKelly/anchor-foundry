@@ -276,7 +276,9 @@ def deployed_filters() -> dict[str, tuple[str, str]]:
         for name, pattern, value in re.findall(
             r'counted\(\s*"(\w+)",\s*\'([^\']+)\'(?:,\s*"([^"]+)")?\s*\)', source)
     }
-    api = {"ApiRequests", "ApiServerErrors", "ApiUnhandledErrors", "ApiLatency"}
+    api = {"ApiRequests", "ApiServerErrors", "ApiUnhandledErrors", "ApiLatency",
+           # The browser's, as the API logs it (§926; test_client_errors.py).
+           "WebPageErrors"}
     # The worker's is checked against the worker's lines (§889).
     assert set(found) == api | {"WorkerRunFailures"}, found
     return {name: found[name] for name in api}

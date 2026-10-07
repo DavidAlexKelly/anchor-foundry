@@ -35,6 +35,7 @@ from .routes import actions as action_routes
 from .routes import auth as auth_routes
 from .routes import bootstrap as bootstrap_routes
 from .routes import canvas as canvas_routes
+from .routes import client_errors as client_error_routes
 from .routes import kiosk as kiosk_routes
 from .routes import series_analyses as series_analysis_routes
 from .routes import code as code_routes
@@ -271,6 +272,7 @@ def create_app() -> FastAPI:
     # the metrics name routes by (`observability.route_template`, §837).
     prefix = observability.API_PREFIX
     app.include_router(auth_routes.router, prefix=prefix)
+    app.include_router(client_error_routes.router, prefix=prefix)
     app.include_router(org_routes.router, prefix=prefix)
     app.include_router(workspace_routes.router, prefix=prefix)
     app.include_router(project_routes.router, prefix=prefix)
