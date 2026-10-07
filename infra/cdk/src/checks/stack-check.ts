@@ -33,7 +33,7 @@ import { App, DockerImage } from "aws-cdk-lib";
 import { Template } from "aws-cdk-lib/assertions";
 
 import { ORIGIN_READ_TIMEOUT_S } from "../constructs/services";
-import { CustomerStack, OIDC_SIGNING_KEY_SECRET, STATIC_ASSETS } from "../stacks/customer-stack";
+import { CustomerStack, HSTS_DAYS, OIDC_SIGNING_KEY_SECRET, STATIC_ASSETS } from "../stacks/customer-stack";
 
 (DockerImage as unknown as { fromBuild: () => DockerImage }).fromBuild =
   () => DockerImage.fromRegistry("bundling-skipped");
@@ -354,6 +354,23 @@ for (const [name, template] of [["public", plain], ["vpc", viaVpc]] as const) {
     }
   });
 }
+
+console.log("HTTPS from the first request on (§920):");
+
+check("every behaviour tells the browser to keep to HTTPS for a year", () => {
+  const config = only(plain, "AWS::CloudFront::Distribution").Properties.DistributionConfig;
+  const behaviours = [config.DefaultCacheBehavior, ...(config.CacheBehaviors ?? [])];
+  const policies = plain.findResources("AWS::CloudFront::ResponseHeadersPolicy");
+  for (const behaviour of behaviours) {
+    const ref = behaviour.ResponseHeadersPolicyId?.Ref;
+    const policy = ref && policies[ref]?.Properties.ResponseHeadersPolicyConfig;
+    const hsts = policy?.SecurityHeadersConfig?.StrictTransportSecurity;
+    if (!hsts) throw new Error(`${behaviour.PathPattern ?? "the default behaviour"} sends no HSTS`);
+    if (hsts.AccessControlMaxAgeSec < HSTS_DAYS * 86400 || !hsts.Override) {
+      throw new Error(`HSTS is ${JSON.stringify(hsts)}`);
+    }
+  }
+});
 
 console.log("who creates the first owner (§886):");
 
