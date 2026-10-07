@@ -353,3 +353,16 @@ def test_no_workflow_runs_on_a_label_that_moves() -> None:
             if re.search(r"runs-on:\s*\S*-latest\b", line):
                 moving.append(f"{os.path.relpath(path, ROOT)}:{number}")
     assert not moving, f"runs-on names a moving label at {moving}"
+
+
+def test_every_workflow_reads_and_writes_nothing() -> None:
+    """§932: each workflow states its token's permissions, and grants no write,
+    so what runs in CI cannot push or publish with it."""
+    import glob
+
+    for path in sorted(glob.glob(os.path.join(ROOT, ".github", "workflows", "*.yml"))):
+        text = open(path, encoding="utf-8").read()
+        block = re.search(r"^permissions:\n((?:  .*\n)+)", text, re.M)
+        assert block, f"{os.path.relpath(path, ROOT)} does not state its permissions"
+        assert "write" not in block.group(1), f"{os.path.relpath(path, ROOT)}: {block.group(1)}"
+        assert not re.search(r"^\s+permissions:.*write", text, re.M), path

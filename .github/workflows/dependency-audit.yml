@@ -32,6 +32,13 @@ on:
     - cron: "17 6 * * 1"
   workflow_dispatch:
 
+# **Read-only, stated** (§932). Unset, a job's token gets the repository's
+# default, which may be write: a compromised action or a poisoned
+# dependency running here could then push to a branch or edit a release.
+# Nothing in these jobs writes to GitHub.
+permissions:
+  contents: read
+
 jobs:
   audit:
     name: dependency audit
