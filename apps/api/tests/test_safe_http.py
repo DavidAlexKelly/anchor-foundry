@@ -180,3 +180,14 @@ def test_an_s3_source_cannot_name_a_metadata_address(endpoint: str) -> None:
     with pytest.raises(ConnectorConfigError, match="link-local"):
         S3Connector()._client(
             {"bucket": "landing", "region": "eu-west-2", "endpoint_url": endpoint}, {})
+
+
+def test_read_capped_reads_up_to_its_limit_and_refuses_past_it() -> None:
+    # §912. The one-byte-past read is how "past" is told from "exactly at".
+    import io
+
+    assert safe_http.read_capped(io.BytesIO(b"x" * 10), 10) == b"x" * 10
+    with pytest.raises(safe_http.ResponseTooLarge, match="larger than 10 bytes"):
+        safe_http.read_capped(io.BytesIO(b"x" * 11), 10)
+    with pytest.raises(safe_http.ResponseTooLarge, match="larger than 2 MB"):
+        safe_http.read_capped(io.BytesIO(b"x" * (2 * 1024 * 1024 + 1)), 2 * 1024 * 1024)

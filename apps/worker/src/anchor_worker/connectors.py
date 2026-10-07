@@ -779,6 +779,9 @@ def _s3_timestamp(value):
 # reasoning and the scope boundaries.
 _REST_TIMEOUT_S = 20
 _REST_MAX_PAGES = 1000
+#: One page of a REST source, and one token endpoint's answer (§912).
+_REST_MAX_BYTES = 32 * 1024 * 1024
+_TOKEN_MAX_BYTES = 1024 * 1024
 
 
 class RestConnector:
@@ -840,7 +843,10 @@ class RestConnector:
                 allow_insecure_http=bool(config.get("allow_insecure_http", False)),
                 check_destination=egress.check_current,
             ) as response:
-                payload = json.loads(response.read().decode("utf-8", "replace"))
+                payload = json.loads(
+                    safe_http.read_capped(response, _TOKEN_MAX_BYTES).decode("utf-8", "replace"))
+        except safe_http.ResponseTooLarge as exc:
+            raise ConnectorError(f"the token endpoint's answer is too large: {exc}") from exc
         except urllib.error.HTTPError as exc:
             # Never echo the body - a token endpoint can quote back the secret.
             raise ConnectorError(
@@ -878,7 +884,9 @@ class RestConnector:
                 allow_insecure_http=bool(config.get("allow_insecure_http", False)),
                 check_destination=egress.check_current,
             ) as response:
-                body = response.read()
+                body = safe_http.read_capped(response, _REST_MAX_BYTES)
+        except safe_http.ResponseTooLarge as exc:
+            raise ConnectorError(f"a page of the API's records is too large: {exc}") from exc
         except urllib.error.HTTPError as exc:
             raise ConnectorError(f"the API returned HTTP {exc.code}") from exc
         except (urllib.error.URLError, OSError) as exc:

@@ -198,3 +198,34 @@ def test_a_source_called_as_a_person_is_refused_on_a_schedule() -> None:
         RestConnector()._auth_headers(
             {"auth_type": "oauth2_authorization_code", "token_url": "https://x.example/t"},
             {"client_id": "a", "client_secret": "b"})
+
+
+def test_a_page_past_the_response_cap_fails_only_its_candidate(
+    workspace: dict, api_base: str, monkeypatch
+) -> None:
+    """§912: a page was read whole whatever its size, so one answer could hold
+    the worker - and every schedule on it."""
+    import anchor_worker.connectors as connectors_module
+
+    monkeypatch.setattr(connectors_module, "_REST_MAX_BYTES", 64)
+    cid = _create_connection(
+        workspace, _config(api_base, "/records"),
+        mode="full", dataset_name=f"rest_large_{uuid.uuid4().hex[:6]}",
+        source_type="rest", source_schema="", source_table="records",
+    )
+    run_due_scheduled_syncs(_ctx())
+    row = _connection_row(cid)
+    assert row["status"] == "error"
+    assert "too large" in (row["last_error"] or "")
+
+
+def test_a_token_answer_past_its_cap_is_refused(api_base: str, monkeypatch) -> None:
+    import anchor_worker.connectors as connectors_module
+    from anchor_worker.connectors import ConnectorError
+
+    monkeypatch.setattr(connectors_module, "_TOKEN_MAX_BYTES", 8)
+    with pytest.raises(ConnectorError, match="token endpoint's answer is too large"):
+        RestConnector()._auth_headers(
+            _config(api_base, "/oauth-data", auth_type="oauth2_client_credentials",
+                    token_url=f"{api_base}/oauth-token"),
+            {"client_id": "the-client", "client_secret": "the-secret"})

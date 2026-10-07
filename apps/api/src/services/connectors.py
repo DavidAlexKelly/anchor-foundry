@@ -1766,6 +1766,9 @@ SUPPORTED_FILE_EXTENSIONS: tuple[str, ...] = _supported_file_extensions()
 
 _REST_TIMEOUT_S = 20
 _REST_MAX_PAGES = 1000  # a guard against a mis-configured cursor looping forever
+#: One page of a REST source, and one token endpoint's answer (§912).
+_REST_MAX_BYTES = 32 * 1024 * 1024
+_TOKEN_MAX_BYTES = 1024 * 1024
 
 
 class RestConfig(BaseModel):
@@ -1923,7 +1926,10 @@ class RestConnector:
                 allow_insecure_http=bool(config.get("allow_insecure_http", False)),
                 check_destination=egress.check_current,
             ) as response:
-                payload = json.loads(response.read().decode("utf-8", "replace"))
+                payload = json.loads(
+                    safe_http.read_capped(response, _TOKEN_MAX_BYTES).decode("utf-8", "replace"))
+        except safe_http.ResponseTooLarge as exc:
+            raise ConnectorOperationError(f"the token endpoint's answer is too large: {exc}") from exc
         except urllib.error.HTTPError as exc:
             # Deliberately not echoing the body: a token endpoint's error can
             # quote back what was sent, which is the client_secret.
@@ -1961,7 +1967,9 @@ class RestConnector:
                 allow_insecure_http=bool(config.get("allow_insecure_http", False)),
                 check_destination=egress.check_current,
             ) as response:
-                body = response.read()
+                body = safe_http.read_capped(response, _REST_MAX_BYTES)
+        except safe_http.ResponseTooLarge as exc:
+            raise SourceReadError(f"a page of the API's records is too large: {exc}") from exc
         except urllib.error.HTTPError as exc:
             if exc.code in (401, 403):
                 raise SourceReadError(
