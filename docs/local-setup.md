@@ -228,7 +228,12 @@ scripts/check.sh types    # tsc --noEmit
 scripts/check.sh unit     # the TypeScript unit tests
 scripts/check.sh e2e      # the browser suite, against the running stack
 scripts/fresh-e2e.sh      # the browser suite, against a database made for it
+scripts/check.sh audit    # known vulnerabilities in the pinned dependencies
 ```
+
+`audit` is not part of "everything": it asks a vulnerability database, not
+this checkout, so its answer changes overnight. It needs `pip install
+pip-audit`, and runs in CI weekly and on any change to a pin (§917).
 
 Ordered cheapest-first and exits on the first failure.
 

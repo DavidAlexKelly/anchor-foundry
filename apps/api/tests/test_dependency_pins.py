@@ -324,3 +324,18 @@ def test_the_browser_job_installs_what_the_browser_suite_imports() -> None:
             f"install {requirement} - without it the suite fails on a fresh checkout "
             "and passes on any machine whose virtualenv happens to have it"
         )
+
+
+def test_every_app_that_ships_python_is_audited() -> None:
+    """§917: `scripts/check.sh audit` names the requirements files it checks,
+    so a new app's would otherwise ship unchecked with nothing to say so."""
+    import glob
+
+    check = open(os.path.join(ROOT, "scripts", "check.sh"), encoding="utf-8").read()
+    audit = check[check.index("run_audit() {"):]
+    audit = audit[:audit.index("\n) }")]
+    shipped = sorted(os.path.relpath(p, ROOT)
+                     for p in glob.glob(os.path.join(ROOT, "apps", "*", "requirements.txt")))
+    assert shipped, "no apps/*/requirements.txt found - has the layout moved?"
+    missing = [p for p in shipped if p not in audit]
+    assert not missing, f"scripts/check.sh's run_audit does not check {missing}"

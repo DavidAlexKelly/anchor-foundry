@@ -11,6 +11,7 @@
 #   scripts/check.sh types        # just tsc
 #   scripts/check.sh unit         # just the TypeScript unit tests
 #   scripts/check.sh e2e          # just the browser suite
+#   scripts/check.sh audit        # known vulnerabilities in what ships (not in `all`)
 #
 # **`e2e` here runs against whatever database the stack is up on, and that is
 # not the environment CI has.** §271: the browser job was red on `main` for ten
@@ -130,6 +131,23 @@ run_types() { ( cd "$ROOT/apps/web" && npx tsc --noEmit -p tsconfig.json ); }
 # §359 for the morning it was discovered that setting it in the config did
 # nothing at all.
 run_unit()  { ( cd "$ROOT/apps/web" && npm test --silent ); }
+
+# **Known vulnerabilities in what ships** (§917): the npm packages the web
+# server runs, at high severity and above, and each Python app's pinned
+# requirements. Not in `all`, because it asks a vulnerability database rather
+# than this checkout, and an advisory published overnight would turn every
+# branch red at once; `.github/workflows/dependency-audit.yml` runs it weekly
+# and on any change to what is pinned. pip-audit is installed by its caller.
+run_audit() { (
+  set -e
+  cd "$ROOT"
+  npm audit --omit=dev --audit-level=high
+  for requirements in apps/api/requirements.txt apps/worker/requirements.txt \
+                      apps/control-plane/requirements.txt; do
+    echo "pip-audit $requirements"
+    "$PYTHON" -m pip_audit --progress-spinner off -r "$requirements"
+  done
+) }
 # `-p no:randomly`-free and deliberately serial: these drive one dev stack, and
 # two of them at once would each be seeding into the other's workspace.
 #
@@ -193,6 +211,7 @@ case "$WHICH" in
   types)  step "TypeScript" run_types ;;
   unit)   step "TypeScript unit tests" run_unit ;;
   e2e)    step "Browser suite" run_e2e ;;
+  audit)  step "Dependency audit" run_audit ;;
   all)
     # Cheapest first: a type error or a broken pure function should not cost
     # twelve minutes of browser time to find out about. The worker suite is
@@ -204,7 +223,7 @@ case "$WHICH" in
     step "API tests" run_api
     step "Browser suite" run_e2e
     ;;
-  *) echo "unknown target '$WHICH' (api, worker, control-plane, types, unit, e2e, all)" >&2; exit 2 ;;
+  *) echo "unknown target '$WHICH' (api, worker, control-plane, types, unit, e2e, audit, all)" >&2; exit 2 ;;
 esac
 
 echo
