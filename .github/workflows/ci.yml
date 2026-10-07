@@ -10,6 +10,12 @@ name: checks
 # Migrate steps. Everything it checks had been passing locally the whole time,
 # which is exactly why "verified locally" is not a substitute for a run.
 
+# **The runner image is named, not `ubuntu-latest`** (§921). GitHub moves
+# that label to a new Ubuntu on its own date (26.04, from 2026-10-19), and a
+# label that moves changes every job under every open pull request at once,
+# with nothing in the repository to say why they went red. Moving to a new
+# image is a change of its own, made here, in one pull request.
+
 on:
   pull_request:
   push:
@@ -17,7 +23,7 @@ on:
 
 jobs:
   api:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     services:
       # **`-U platform` on the healthcheck, and it is not cosmetic** (§275).
       # `pg_isready` with no user defaults to the *invoking OS user*, which in
@@ -131,7 +137,7 @@ jobs:
   # share a database with anything, because its discovery functions are
   # RLS-blind and act on every workspace they can see.
   worker:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     services:
       postgres:
         image: postgres:16
@@ -169,7 +175,7 @@ jobs:
 
   types:
     name: types and unit tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -197,7 +203,7 @@ jobs:
   # always had, so a rule requiring that check still finds it.
   browser-shard:
     name: browser shard ${{ matrix.shard }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       # Every shard runs to the end: a failure in one says nothing about the
       # others, and stopping them would hide the rest of what is red.
@@ -314,6 +320,6 @@ jobs:
   browser:
     needs: browser-shard
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - run: test "${{ needs.browser-shard.result }}" = success
