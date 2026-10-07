@@ -310,6 +310,18 @@ deployment. Try it on a stack that can be visited before and after:
 To roll back, deploy again without the flag. That replaces the load balancer
 once more.
 
+## A migration the running version survives (§927)
+
+An update migrates the database first, then replaces the services' tasks a
+few at a time, and every old task keeps serving until its replacement is
+healthy. For those minutes the previous API and worker run against the new
+schema. A migration therefore adds before it removes: a new column is
+nullable or defaulted, or filled by a trigger, and a column, table, view or
+function the previous version reads is dropped or renamed a release after
+the code stopped reading it. `apps/api/tests/test_migration_deploy_safety.py`
+refuses, from 0169 on, a drop, a rename, a type change or a `SET NOT NULL`
+that has no `-- deploy-safe: <why>` comment just above it.
+
 ## Backup and restore (§803)
 
 The stack's three stores are backed up three ways, and a restore is finished
