@@ -20,7 +20,7 @@ fallback.
 
 | Connector | TLS | Plaintext |
 |---|---|---|
-| PostgreSQL | libpq's `sslmode`, `prefer` by default; `require`, `verify-ca` and `verify-full` are offered | `sslmode: disable` |
+| PostgreSQL | libpq's `sslmode`, `require` by default (§929; it was `prefer`, which falls back to plaintext when TLS is refused); `prefer`, `verify-ca` and `verify-full` are offered | `sslmode: disable` |
 | MySQL / MariaDB | `ssl_mode: required` by default, and a session that did not actually upgrade to TLS is refused | `ssl_mode: disabled` |
 | REST / HTTP | `https` | `allow_insecure_http`; without it an `http://` URL is refused by name |
 | S3 | boto3's HTTPS to AWS, or to a custom `endpoint_url` | a custom endpoint given as `http://` |

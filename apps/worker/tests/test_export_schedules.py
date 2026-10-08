@@ -83,7 +83,7 @@ def source_database():
         conn.execute("CREATE TABLE public.items (id bigint PRIMARY KEY, val text NOT NULL)")
         conn.execute("CREATE TABLE public.exported (id bigint, val text)")
         conn.execute(f"GRANT ALL ON ALL TABLES IN SCHEMA public TO {SOURCE_USER}")
-    yield {"host": "localhost", "port": 5432, "database": SOURCE_DB, "user": SOURCE_USER}
+    yield {"host": "localhost", "port": 5432, "database": SOURCE_DB, "user": SOURCE_USER, "sslmode": "disable"}
     with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
         conn.execute(f"DROP DATABASE IF EXISTS {SOURCE_DB}")
         conn.execute(f"DROP ROLE IF EXISTS {SOURCE_USER}")

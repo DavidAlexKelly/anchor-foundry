@@ -386,7 +386,14 @@ class PostgresConfig(BaseModel):
     user: str = Field(min_length=1, max_length=128)
     # Literal rather than a regex so the generated JSON schema carries `enum`:
     # the create wizard renders a picker from it instead of a free-text box.
-    sslmode: Literal["disable", "prefer", "require", "verify-ca", "verify-full"] = "prefer"
+    #
+    # **`require` by default, not libpq's `prefer`** (§929). `prefer` tries TLS
+    # and, if the server - or anyone on the path pretending to be it - says no,
+    # carries on in plaintext, password and rows included. That is the silent
+    # downgrade MySQL's `ssl_mode` already refuses, and the "never a fallback"
+    # `docs/data-connection-reference.md` promised. A source without TLS now
+    # says so by choosing `disable`; one saved before keeps what it stored.
+    sslmode: Literal["disable", "prefer", "require", "verify-ca", "verify-full"] = "require"
 
 
 class PostgresConnector:
@@ -432,6 +439,10 @@ class PostgresConnector:
         # First line of the driver message is user-safe (auth failed, host
         # unreachable, unknown database); never includes the password.
         reason = str(exc).strip().splitlines()[0] if str(exc).strip() else "connection failed"
+        if "does not support SSL" in reason:
+            # §929: TLS is asked for by default, so say what to change.
+            reason += (" - this source does not offer TLS; set sslmode to 'disable' to "
+                       "connect to it in plaintext")
         return ConnectorOperationError(reason)
 
     def test(self, config: dict[str, Any], secret: dict[str, str]) -> None:

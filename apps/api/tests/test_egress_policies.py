@@ -374,7 +374,7 @@ def db_connection(client: TestClient, fx: Fixture) -> str:
               "scope": "project", "secret": {"password": DB.password},
               "config": {"host": DB.hostname, "port": DB.port or 5432,
                          "database": (DB.path or "/platform").lstrip("/"),
-                         "user": DB.username}},
+                         "user": DB.username, "sslmode": "disable"}},
     )
     assert r.status_code == 201, r.text
     return r.json()["id"]

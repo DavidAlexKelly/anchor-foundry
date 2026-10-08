@@ -90,7 +90,9 @@ class PostgresConnector:
             "dbname": config["database"],
             "user": config["user"],
             "password": secret.get("password", ""),
-            "sslmode": config.get("sslmode", "prefer"),
+            # The API's default (§929): a config saved by the API always
+            # carries its own, so this is for one written by hand.
+            "sslmode": config.get("sslmode", "require"),
             "connect_timeout": 8,
         }
 

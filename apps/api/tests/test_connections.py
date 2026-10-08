@@ -88,7 +88,7 @@ def source_database() -> dict[str, object]:
         conn.execute(f"GRANT USAGE ON SCHEMA billing TO {SOURCE_USER}")
         conn.execute(f"GRANT SELECT ON billing.invoices TO {SOURCE_USER}")
     # Connection details as the API's connector will use them: TCP localhost.
-    return {"host": "localhost", "port": 5432, "database": SOURCE_DB, "user": SOURCE_USER}
+    return {"host": "localhost", "port": 5432, "database": SOURCE_DB, "user": SOURCE_USER, "sslmode": "disable"}
 
 
 @pytest.fixture(scope="module")
@@ -402,3 +402,41 @@ def test_no_read_endpoint_returns_the_credential_at_any_role(
     assert any(p.endswith("/connections") for p in checked), checked
     assert any("{connection_id}" in p for p in checked), checked
     assert len(checked) > 50, len(checked)
+
+
+# ---- TLS by default (§929) -----------------------------------------------------
+def test_a_postgres_source_asks_for_tls_unless_told_not_to() -> None:
+    from src.services.connectors import PostgresConnector
+
+    stored = PostgresConnector().validate_config({"host": "h", "database": "d", "user": "u"})
+    assert stored["sslmode"] == "require", "prefer falls back to plaintext when TLS is refused"
+    assert PostgresConnector().validate_config(
+        {"host": "h", "database": "d", "user": "u", "sslmode": "disable"})["sslmode"] == "disable"
+
+
+def test_a_default_connection_is_never_plaintext(source_database) -> None:
+    """Whether this server speaks TLS or not (CI's does not; a developer's
+    may): by default a session is encrypted or it is refused, never quietly
+    plain."""
+    from src.services.connectors import PostgresConnector
+
+    config = {k: v for k, v in source_database.items() if k != "sslmode"}
+    conninfo = PostgresConnector()._conninfo(config, {"password": SOURCE_PASSWORD})
+    try:
+        with psycopg.connect(**conninfo) as conn:
+            encrypted = conn.execute(
+                "SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()").fetchone()[0]
+    except psycopg.OperationalError as exc:
+        assert "SSL" in str(exc), exc
+    else:
+        assert encrypted is True
+
+
+def test_a_source_without_tls_is_told_what_to_change() -> None:
+    from src.services.connectors import PostgresConnector
+
+    error = PostgresConnector._operational(
+        Exception("server does not support SSL, but SSL was required\nmore"))
+    assert "set sslmode to 'disable'" in str(error)
+    assert str(PostgresConnector._operational(Exception("password authentication failed"))) == \
+        "password authentication failed"
