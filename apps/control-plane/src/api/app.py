@@ -22,6 +22,7 @@ of the registry, without the product's web build anywhere near it.
 from __future__ import annotations
 
 import hmac
+import logging
 import os
 from typing import Any
 
@@ -106,6 +107,29 @@ def _customer(request: Request) -> CustomerRecord:
     return record
 
 
+class AccessLineWithoutQuery(logging.Filter):
+    """uvicorn's access line, without the query string (§922).
+
+    A customer arrives by a link carrying their onboarding token as `?token=`
+    (`_customer`), and uvicorn wrote each request's path *with* its query
+    string, so every token clicked was in the control plane's logs in full.
+    The line is this service's only record of its requests, so it is kept;
+    only what follows the `?` goes. uvicorn's arguments are (client, method,
+    path with query, HTTP version, status)."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if isinstance(args, tuple) and len(args) == 5 and isinstance(args[2], str):
+            record.args = (args[0], args[1], args[2].split("?", 1)[0], args[3], args[4])
+        return True
+
+
+def _redact_access_lines() -> None:
+    access = logging.getLogger("uvicorn.access")
+    if not any(isinstance(f, AccessLineWithoutQuery) for f in access.filters):
+        access.addFilter(AccessLineWithoutQuery())
+
+
 def create_app(
     onboarding: OnboardingService | None = None,
     reg: StackRegistry | None = None,
@@ -120,6 +144,7 @@ def create_app(
         "CONTROL_PLANE_ADMIN_TOKEN", ""
     )
     public_url = base_url or os.environ.get("CONTROL_PLANE_PUBLIC_URL", "")
+    _redact_access_lines()
 
     app = FastAPI(title="Anchor onboarding", docs_url=None, redoc_url=None, openapi_url=None)
 

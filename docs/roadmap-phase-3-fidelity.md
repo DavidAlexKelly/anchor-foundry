@@ -390,6 +390,8 @@ The sync pays for it: the trigger, one more index and the `ANALYZE` add about 17
 
 **E.32 — No response told a browser to keep to HTTPS. Done (§920), S.** CloudFront redirects plain HTTP to HTTPS, but the redirect is itself sent in plain HTTP, so on a network someone else controls the first request of every visit could be answered by them instead. Nothing sent `Strict-Transport-Security`. Every CloudFront behaviour now does, for a year and for the platform's own host only, through one response headers policy; `stack-check.ts` holds every behaviour to it. CloudFront sets it because it is the only hop that speaks HTTPS.
 
+**E.33 — Secrets in request lines were written to the logs. Done (§922), S.** Found while checking what a listener's endpoint leaves behind. uvicorn writes an access line for every request with its path and query string in full, beside the API's own structured line (§802), which names only the route template. So every listener endpoint token (`/api/listen/{token}`) and OAuth callback `code` reached the stack's logs, readable by anyone who can read them, and on the control plane so did every customer's onboarding token (`/onboarding?token=`). The API's uvicorn line is now off, since `anchor.access` already records each request. The control plane's is its only request log, so it is kept, without the query string. Both are tested against uvicorn's own record format, and the API's through a real uvicorn process.
+
 ## Suggested order
 
 **First, out of band:** E.1.
