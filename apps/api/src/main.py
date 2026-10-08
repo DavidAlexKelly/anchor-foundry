@@ -15,6 +15,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 
 from fastapi.responses import JSONResponse
+from starlette.middleware.gzip import DEFAULT_EXCLUDED_CONTENT_TYPES, GZipMiddleware
 from starlette.requests import Request as StarletteRequest
 
 from .lib.body_limit import BodyLimit
@@ -146,6 +147,18 @@ def create_app() -> FastAPI:
     # sniff it, not to frame it elsewhere, and how much of a referrer to send
     # (§836).
     app.add_middleware(SecurityHeaders)
+    # Compressed on the way out (§919). CloudFront compresses only what it may
+    # cache, and nothing the API answers is cacheable, so every preview, graph
+    # and object set crossed the internet as plain JSON - several times the
+    # bytes, on a person's connection, every time. Level 6 is gzip's own
+    # default and most of 9's saving for a fraction of its time; parquet is
+    # compressed already and left alone.
+    app.add_middleware(
+        GZipMiddleware,
+        minimum_size=1024,
+        compresslevel=6,
+        exclude_content_types=(*DEFAULT_EXCLUDED_CONTENT_TYPES, "application/vnd.apache.parquet"),
+    )
 
     # Request ids, access lines, metrics and the unhandled-error record (§802).
     # After CORS, so it is the outer of the two and times the whole request.
