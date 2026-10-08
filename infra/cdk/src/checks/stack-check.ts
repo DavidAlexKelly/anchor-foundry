@@ -181,6 +181,18 @@ check("the data bucket keeps a previous version past the database's oldest backu
   }
 });
 
+check("the database keeps a week of statement timings, under the data's key (§930)", () => {
+  const db = only(plain, "AWS::RDS::DBInstance").Properties;
+  if (db.EnablePerformanceInsights !== true) throw new Error("Performance Insights is off");
+  if (db.DatabaseInsightsMode !== "standard") throw new Error(`insights mode ${db.DatabaseInsightsMode}: Advanced is billed`);
+  if (db.PerformanceInsightsRetentionPeriod !== 7) {
+    throw new Error(`retention ${db.PerformanceInsightsRetentionPeriod}: past seven days is billed`);
+  }
+  if (JSON.stringify(db.PerformanceInsightsKMSKeyId) !== JSON.stringify(db.KmsKeyId)) {
+    throw new Error("its samples are not under the data's key");
+  }
+});
+
 console.log("what the edge caches (§865):");
 
 check("the web app's build output is cached, and nothing else is", () => {

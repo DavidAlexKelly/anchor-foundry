@@ -115,6 +115,15 @@ export class DataStoresConstruct extends Construct {
       publiclyAccessible: false, // §10
       deletionProtection: props.deletionProtection ?? true, // §10
       backupRetention: Duration.days(BACKUP_DAYS), // §10: automated backups
+      // §930: which statements the database spends its time on. Nothing on a
+      // stack logged a slow query or kept a statement's timings, so a slow
+      // page was a guess about which query. CloudWatch Database Insights'
+      // Standard mode, which is Performance Insights' free seven days; its
+      // samples are encrypted with the same key as the data they quote.
+      enablePerformanceInsights: true,
+      databaseInsightsMode: rds.DatabaseInsightsMode.STANDARD,
+      performanceInsightRetention: rds.PerformanceInsightRetention.DEFAULT,
+      performanceInsightEncryptionKey: this.dataKey,
       credentials: rds.Credentials.fromGeneratedSecret("platform"),
       databaseName: "platform",
       securityGroups: [dbSg],
