@@ -9,6 +9,7 @@ import type {
   Me, Org, OrgUser, ProjectDetail, ProjectSummary, ResourceKindCounts, ResourceList, ResolvedResource,
   WorkspaceDetail, WorkspaceSummary,
 } from "./types";
+import type { PageErrorReport } from "./page-error";
 import { pageQuery } from "./version-pages";
 
 export class ApiError extends Error {
@@ -39,6 +40,23 @@ export function setKioskToken(token: string | null): void {
 
 function credentialHeaders(): Record<string, string> {
   return kioskToken ? { ...SESSION_HEADERS, Authorization: `Bearer ${kioskToken}` } : SESSION_HEADERS;
+}
+
+/** A page that failed, told to the operators (§926). Fire and forget: it
+ * never throws, never renews a session or sends anyone to sign in, and
+ * `keepalive` lets it finish if the person reloads straight away. */
+export function reportPageError(report: PageErrorReport): void {
+  try {
+    void fetch("/api/client-errors", {
+      method: "POST",
+      credentials: "same-origin",
+      keepalive: true,
+      headers: { ...credentialHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify(report),
+    }).catch(() => undefined);
+  } catch {
+    // Nothing to do: the page already says what happened.
+  }
 }
 
 async function request<T>(path: string, init?: RequestInit, renewed = false): Promise<T> {

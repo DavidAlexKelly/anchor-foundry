@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { useEffect } from "react";
-import { pageErrorKind } from "@/lib/page-error";
+import { reportPageError } from "@/lib/api";
+import { pageErrorKind, pageErrorReport } from "@/lib/page-error";
 
 /** A page that failed to render, said in words (§908).
  *
@@ -21,6 +22,8 @@ export function PageError({
   useEffect(() => {
     // The browser console is where somebody reporting it will be asked to look.
     console.error(error);
+    // And the operators hear of it without anybody reporting it (§926).
+    reportPageError(pageErrorReport(error, window.location.pathname));
   }, [error]);
   const stale = pageErrorKind(error) === "stale";
   return (

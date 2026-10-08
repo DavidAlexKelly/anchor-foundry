@@ -49,6 +49,7 @@ export const METRIC_NAMESPACE = "Anchor/Platform";
  *   - p95 latency over two seconds;
  *   - the API, the worker or the web server with no task running (§925);
  *   - the worker's scheduled runs failing (§889);
+ *   - pages failing in people's browsers (§926);
  *   - the API's or the web server's targets failing the load balancer's
  *     health check (§925);
  *   - the database short of storage, of CPU, or of connections (§925).
@@ -97,6 +98,13 @@ export class MonitoringConstruct extends Construct {
     // run processes write to the container's output (§889). Quoted, so the
     // whole term is matched rather than its parts.
     const workerRunFailures = counted("WorkerRunFailures", '"RUN_FAILURE"');
+    // A page that threw in someone's browser, as the error page reports it
+    // (§926; `routes/client_errors.py`). "stale" is a page from before a
+    // deploy, which a reload fixes, and is not counted.
+    const pageErrors = counted(
+      "WebPageErrors",
+      '{ $.logger = "anchor.client_error" && $.kind = "fault" }'
+    );
 
     const alarm = (
       name: string,
@@ -173,6 +181,12 @@ export class MonitoringConstruct extends Construct {
       "Three or more of the worker's scheduled runs failed in five minutes: a poll itself is " +
         "failing, every minute. A sync's or a model's own failure is recorded on it, not here. " +
         "The worker's log has Dagster's RUN_FAILURE lines with the error."
+    );
+    alarm(
+      "WebPageErrors",
+      pageErrors, 5, atLeast, 1,
+      "Five or more pages failed in people's browsers in five minutes. Each is a line on " +
+        "anchor.client_error with the page's path, its error and who saw it."
     );
     alarm(
       "ApiUnhealthyTargets",
