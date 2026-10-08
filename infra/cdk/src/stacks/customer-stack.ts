@@ -19,6 +19,8 @@ export const OIDC_SIGNING_KEY_SECRET = "anchor/connections/_platform/oidc-signin
 
 /** Where Next serves its content-hashed build output (§865). */
 export const STATIC_ASSETS = "/_next/static/*";
+/** How long a browser keeps to HTTPS for the platform's host (§920). */
+export const HSTS_DAYS = 365;
 
 export interface CustomerStackProps extends StackProps {
   readonly orgSlug: string;
@@ -224,6 +226,23 @@ export class CustomerStack extends Stack {
           // shorter than the servers' keep-alive (constructs/services.ts).
           readTimeout: Duration.seconds(ORIGIN_READ_TIMEOUT_S),
         });
+    // **HTTPS from the first request on** (§920). CloudFront redirects plain
+    // HTTP, but a redirect is itself sent in plain HTTP, so whoever sits on
+    // the network between a person and the platform could answer that first
+    // request instead. Strict-Transport-Security tells the browser to make
+    // every later request over HTTPS without asking. Set here rather than by
+    // the services because CloudFront is the only hop that speaks HTTPS; a
+    // year, as the header's own guidance has it, and only for this host - a
+    // customer's domain's other names are the customer's to decide.
+    const securityHeaders = new cloudfront.ResponseHeadersPolicy(this, "SecurityHeaders", {
+      securityHeadersBehavior: {
+        strictTransportSecurity: {
+          accessControlMaxAge: Duration.days(HSTS_DAYS),
+          includeSubdomains: false,
+          override: true,
+        },
+      },
+    });
     const distribution = new cloudfront.Distribution(this, "Cdn", {
       defaultBehavior: {
         origin,
@@ -231,6 +250,7 @@ export class CustomerStack extends Stack {
         allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
         cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED, // app traffic: pages and the API
         originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER,
+        responseHeadersPolicy: securityHeaders,
       },
       additionalBehaviors: {
         // **The web app's build output, cached at the edge** (§865). Next
@@ -246,6 +266,7 @@ export class CustomerStack extends Stack {
           allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD,
           cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
           compress: true,
+          responseHeadersPolicy: securityHeaders,
         },
       },
     });

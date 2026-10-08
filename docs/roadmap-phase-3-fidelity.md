@@ -388,6 +388,8 @@ The sync pays for it: the trigger, one more index and the `ANALYZE` add about 17
 
 **E.31 — A request could fail on its way in for nothing it did. Done (§918), S.** Found while reading what happens to a long request in a deploy. uvicorn and Next.js close an idle connection after 5 seconds; the load balancer keeps its own for 60, and reuses one the server has just closed, so a request now and then got a 502, more often under load: the mismatch AWS's own guidance on load balancer timeouts warns of. And CloudFront waits 30 seconds for an answer by default, so a sync or a model run run from the API that took longer was a 504 to the person who started it while the API carried on and finished it. Each hop now outlasts the one in front of it: CloudFront waits 60 seconds, the most it allows without a quota increase, the load balancer keeps a quiet connection 75, and both servers keep theirs 90. `stack-check.ts` holds the order on both origins. An operation past a minute is still a 504; moving those onto the worker is the remedy if one is found that needs it.
 
+**E.32 — No response told a browser to keep to HTTPS. Done (§920), S.** CloudFront redirects plain HTTP to HTTPS, but the redirect is itself sent in plain HTTP, so on a network someone else controls the first request of every visit could be answered by them instead. Nothing sent `Strict-Transport-Security`. Every CloudFront behaviour now does, for a year and for the platform's own host only, through one response headers policy; `stack-check.ts` holds every behaviour to it. CloudFront sets it because it is the only hop that speaks HTTPS.
+
 ## Suggested order
 
 **First, out of band:** E.1.
