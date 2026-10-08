@@ -2,6 +2,7 @@ import { Duration, RemovalPolicy } from "aws-cdk-lib";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as kms from "aws-cdk-lib/aws-kms";
+import * as logs from "aws-cdk-lib/aws-logs";
 import * as opensearch from "aws-cdk-lib/aws-opensearchservice";
 import * as rds from "aws-cdk-lib/aws-rds";
 import * as s3 from "aws-cdk-lib/aws-s3";
@@ -122,6 +123,11 @@ export class DataStoresConstruct extends Construct {
       // samples are encrypted with the same key as the data they quote.
       enablePerformanceInsights: true,
       databaseInsightsMode: rds.DatabaseInsightsMode.STANDARD,
+      // §931: and Postgres's own log - a deadlock, a refused connection, a
+      // statement that failed - in CloudWatch beside the services' lines, for
+      // a month, rather than only in the RDS console's short-lived files.
+      cloudwatchLogsExports: ["postgresql"],
+      cloudwatchLogsRetention: logs.RetentionDays.ONE_MONTH,
       performanceInsightRetention: rds.PerformanceInsightRetention.DEFAULT,
       performanceInsightEncryptionKey: this.dataKey,
       credentials: rds.Credentials.fromGeneratedSecret("platform"),
