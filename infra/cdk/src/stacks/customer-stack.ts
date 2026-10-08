@@ -1,4 +1,4 @@
-import { CfnOutput, Stack, StackProps, Tags } from "aws-cdk-lib";
+import { CfnOutput, Duration, Stack, StackProps, Tags } from "aws-cdk-lib";
 import * as cloudfront from "aws-cdk-lib/aws-cloudfront";
 import * as origins from "aws-cdk-lib/aws-cloudfront-origins";
 import * as cloudtrail from "aws-cdk-lib/aws-cloudtrail";
@@ -10,7 +10,7 @@ import { AuthConstruct } from "../constructs/auth";
 import { DataStoresConstruct } from "../constructs/data-stores";
 import { MigrationTriggerConstruct } from "../constructs/migration";
 import { MonitoringConstruct } from "../constructs/monitoring";
-import { ServicesConstruct } from "../constructs/services";
+import { ORIGIN_READ_TIMEOUT_S, ServicesConstruct } from "../constructs/services";
 import { webAclRules } from "../constructs/waf";
 
 /** The secret the platform's OIDC signing key is kept in (§871): under the
@@ -216,9 +216,13 @@ export class CustomerStack extends Stack {
       ? origins.VpcOrigin.withApplicationLoadBalancer(services.alb, {
           protocolPolicy: cloudfront.OriginProtocolPolicy.HTTP_ONLY,
           httpPort: 80,
+          readTimeout: Duration.seconds(ORIGIN_READ_TIMEOUT_S),
         })
       : new origins.LoadBalancerV2Origin(services.alb, {
           protocolPolicy: cloudfront.OriginProtocolPolicy.HTTP_ONLY,
+          // §918: shorter than the load balancer's idle timeout, which is
+          // shorter than the servers' keep-alive (constructs/services.ts).
+          readTimeout: Duration.seconds(ORIGIN_READ_TIMEOUT_S),
         });
     const distribution = new cloudfront.Distribution(this, "Cdn", {
       defaultBehavior: {

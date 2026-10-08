@@ -63,6 +63,25 @@ export const PROCESS_ALLOWANCE_MIB = 512;
 /** One worker run's own process, besides its DuckDB (§894: measured 160 MB). */
 export const WORKER_RUN_PROCESS_MIB = 256;
 
+/**
+ * **Each hop on a request's way in waits longer than the one in front of it**
+ * (§918). CloudFront gives the load balancer `ORIGIN_READ_TIMEOUT_S` to start
+ * answering; the load balancer keeps a quiet connection `ALB_IDLE_TIMEOUT_S`;
+ * the API and the web server keep theirs `TARGET_KEEP_ALIVE_S`.
+ *
+ * Unset, the order was backwards at its last step. uvicorn and Next.js close
+ * an idle connection after 5 seconds, and the load balancer, which keeps its
+ * own for 60, would send the next request down one the server had just
+ * closed: a 502 for a request nothing was wrong with, the failure AWS's own
+ * guidance warns of, at random and more often under load. And CloudFront's
+ * 30-second default answered a sync or a model run that took longer with a
+ * 504 while the API carried on and finished it. 60 seconds is the most
+ * CloudFront allows without a quota increase.
+ */
+export const ORIGIN_READ_TIMEOUT_S = 60;
+export const ALB_IDLE_TIMEOUT_S = 75;
+export const TARGET_KEEP_ALIVE_S = 90;
+
 export interface ServicesProps {
   readonly vpc: ec2.IVpc;
   readonly dataBucket: s3.IBucket;
@@ -494,6 +513,8 @@ export class ServicesConstruct extends Construct {
         // The API's operations share one process; the worker's runs are each
         // their own, held to four at once by Dagster (§888).
         DUCKDB_SLOTS: String(API_DUCKDB_SLOTS),
+        // uvicorn reads its options from UVICORN_*; seconds.
+        UVICORN_TIMEOUT_KEEP_ALIVE: String(TARGET_KEEP_ALIVE_S),
         ...(props.bootstrapTokenHash ? { BOOTSTRAP_TOKEN_SHA256: props.bootstrapTokenHash } : {}),
       },
     });
@@ -566,6 +587,8 @@ export class ServicesConstruct extends Construct {
       memory: 512,
       port: 3000,
       tasks: WEB_TASKS,
+      // Next.js's standalone server reads this; milliseconds.
+      extraEnv: { KEEP_ALIVE_TIMEOUT: String(TARGET_KEEP_ALIVE_S * 1000) },
     });
 
     // ---- ALB: the only public-facing component (§10) ------------------------
@@ -574,6 +597,7 @@ export class ServicesConstruct extends Construct {
       vpc,
       internetFacing: !internal,
       vpcSubnets: { subnetType: internal ? ec2.SubnetType.PRIVATE_WITH_EGRESS : ec2.SubnetType.PUBLIC },
+      idleTimeout: Duration.seconds(ALB_IDLE_TIMEOUT_S),
     });
     // Public: HTTP only, and open to the internet. This said the control plane
     // would attach a certificate and an HTTPS listener once a customer
