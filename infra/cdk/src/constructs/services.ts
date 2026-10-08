@@ -78,6 +78,17 @@ export const WORKER_RUN_PROCESS_MIB = 256;
  * 504 while the API carried on and finished it. 60 seconds is the most
  * CloudFront allows without a quota increase.
  */
+/**
+ * **How long the worker's Dagster daemon may go without a heartbeat** before
+ * ECS replaces the task (§924). The worker has no load balancer, so nothing
+ * asked whether it was alive: a daemon that hung, or a thread of it that died,
+ * left a task ECS saw as running while no schedule fired - every scheduled
+ * sync, export, model and cleanup stopped, and nothing said so. The daemons
+ * beat every 30 seconds; five minutes is ten missed beats, which a busy tick
+ * does not come near.
+ */
+export const WORKER_HEARTBEAT_TOLERANCE_S = 300;
+
 export const ORIGIN_READ_TIMEOUT_S = 60;
 export const ALB_IDLE_TIMEOUT_S = 75;
 export const TARGET_KEEP_ALIVE_S = 90;
@@ -406,6 +417,9 @@ export class ServicesConstruct extends Construct {
         mountScratch?: boolean;
         /** Env this service needs and the others do not. */
         extraEnv?: Record<string, string>;
+        /** How ECS asks the container whether it is alive, for a service no
+         * load balancer health-checks. */
+        healthCheck?: ecs.HealthCheck;
         /** How many tasks, scaled on CPU between the two (§841). Omitted, one
          * task and no scaling - which only the worker should be. */
         tasks?: { min: number; max: number };
@@ -447,6 +461,7 @@ export class ServicesConstruct extends Construct {
         environment: { ...commonEnv, ...(opts.extraEnv ?? {}) },
         secrets: name === "web" ? undefined : dbSecretEnv,
         command: opts.command,
+        healthCheck: opts.healthCheck,
       });
       if (opts.port !== undefined) {
         container.addPortMappings({ containerPort: opts.port });
@@ -542,6 +557,18 @@ export class ServicesConstruct extends Construct {
       memory: TASK_MEMORY_MIB.worker,
       mountScratch: true,
       extraEnv: { ...transformRunnerEnv, ...objectIndexEnv, ...duckdbEnv },
+      // §924: Dagster's own check of its daemons' heartbeats, read from the
+      // instance on the task's disk. About two seconds; a deploy's new task
+      // has five minutes to start beating before a miss counts. While old
+      // and new both run, `jobs/claims.py` keeps each due run to one of them.
+      healthCheck: {
+        command: ["CMD-SHELL",
+          `DAGSTER_DAEMON_HEARTBEAT_TOLERANCE=${WORKER_HEARTBEAT_TOLERANCE_S} dagster-daemon liveness-check`],
+        interval: Duration.seconds(60),
+        timeout: Duration.seconds(30),
+        retries: 3,
+        startPeriod: Duration.seconds(300),
+      },
     });
 
     // ---- Permission to dispatch, and nothing more ---------------------------

@@ -359,6 +359,18 @@ check("the API does not name its server (§923)", () => {
   if (envOf(plain, "api").UVICORN_SERVER_HEADER !== "false") throw new Error("uvicorn sends server: uvicorn");
 });
 
+check("ECS replaces a worker whose daemon stopped beating (§924)", () => {
+  const found = Object.entries(plain.findResources("AWS::ECS::TaskDefinition"))
+    .filter(([id]) => id.startsWith("ServicesworkerTaskDef"));
+  const check = found[0]?.[1].Properties.ContainerDefinitions[0].HealthCheck;
+  const command = (check?.Command ?? []).join(" ");
+  if (!command.includes("dagster-daemon liveness-check")) throw new Error(`health check ${command || "none"}`);
+  const tolerance = Number(/DAGSTER_DAEMON_HEARTBEAT_TOLERANCE=(\d+)/.exec(command)?.[1]);
+  // Dagster's own default is half an hour of silence.
+  if (!(tolerance > 0 && tolerance <= 600)) throw new Error(`tolerance ${tolerance}`);
+  if (!(check.StartPeriod >= tolerance)) throw new Error(`a new task has ${check.StartPeriod} s to start`);
+});
+
 console.log("HTTPS from the first request on (§920):");
 
 check("every behaviour tells the browser to keep to HTTPS for a year", () => {
