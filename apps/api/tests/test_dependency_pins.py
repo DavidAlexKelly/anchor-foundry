@@ -366,3 +366,20 @@ def test_every_workflow_reads_and_writes_nothing() -> None:
         assert block, f"{os.path.relpath(path, ROOT)} does not state its permissions"
         assert "write" not in block.group(1), f"{os.path.relpath(path, ROOT)}: {block.group(1)}"
         assert not re.search(r"^\s+permissions:.*write", text, re.M), path
+
+
+def test_every_ci_job_has_a_ceiling() -> None:
+    """§933: a job with no `timeout-minutes` may hang for GitHub's six hours.
+    Read as text, by indentation, as the other checks here read the workflow."""
+    import glob
+
+    for path in sorted(glob.glob(os.path.join(ROOT, ".github", "workflows", "*.yml"))):
+        text = open(path, encoding="utf-8").read()
+        jobs = text.split("\njobs:\n", 1)[1]
+        blocks = re.split(r"^  (?=[A-Za-z0-9_-]+:\n)", jobs, flags=re.M)[1:]
+        assert blocks, path
+        for block in blocks:
+            name = block.split(":", 1)[0]
+            limit = re.search(r"^    timeout-minutes: (\d+)$", block, re.M)
+            assert limit and 0 < int(limit.group(1)) <= 60, (
+                f"{os.path.relpath(path, ROOT)} job {name}: no timeout-minutes of an hour or less")

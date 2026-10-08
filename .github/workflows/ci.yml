@@ -28,9 +28,14 @@ on:
 permissions:
   contents: read
 
+# **Every job has a ceiling** (§933): two to three times its longest recent
+# run. Without one GitHub allows six hours, so a stalled download held a
+# pull request for as long as nobody noticed.
+
 jobs:
   api:
     runs-on: ubuntu-24.04
+    timeout-minutes: 40
     services:
       # **`-U platform` on the healthcheck, and it is not cosmetic** (§275).
       # `pg_isready` with no user defaults to the *invoking OS user*, which in
@@ -145,6 +150,7 @@ jobs:
   # RLS-blind and act on every workspace they can see.
   worker:
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:16
@@ -183,6 +189,7 @@ jobs:
   types:
     name: types and unit tests
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -211,6 +218,7 @@ jobs:
   browser-shard:
     name: browser shard ${{ matrix.shard }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     strategy:
       # Every shard runs to the end: a failure in one says nothing about the
       # others, and stopping them would hide the rest of what is red.
@@ -261,7 +269,19 @@ jobs:
       - run: npm ci
       # The package is pinned in requirements-dev.txt; this fetches the
       # browser binary, which pip cannot.
-      - run: python -m playwright install --with-deps chromium
+      # §933: this hung for over an hour on two shards of #741 and twice on
+      # one of #742 - an apt or download stall that never recovers by
+      # waiting. Each attempt gets five minutes, several times what it takes,
+      # and a stalled one is killed and tried again on a repaired dpkg.
+      - name: Install the browser
+        timeout-minutes: 20
+        run: |
+          for attempt in 1 2 3; do
+            timeout 300 python -m playwright install --with-deps chromium && exit 0
+            echo "::warning::playwright install attempt $attempt stalled or failed"
+            sudo dpkg --configure -a || true
+          done
+          exit 1
       # Same two overrides as the api job; see there for why.
       - name: Migrate
         run: python packages/db/migrate.py
@@ -328,5 +348,6 @@ jobs:
     needs: browser-shard
     if: always()
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
       - run: test "${{ needs.browser-shard.result }}" = success
