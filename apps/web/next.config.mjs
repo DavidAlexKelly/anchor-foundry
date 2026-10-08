@@ -24,6 +24,9 @@ const nextConfig = {
   // `next dev`: every test that finds a button by a name containing "Open"
   // found two. It is a development aid only - a production build has none.
   devIndicators: false,
+  // No `X-Powered-By: Next.js` on every page (§923), naming the software to
+  // anyone matching it against advisories; the API's `server` header goes too.
+  poweredByHeader: false,
   // What every page says about itself (§836): not to sniff it, not to frame it
   // anywhere but here - the platform frames its own pages, nothing else may -
   // and to send other sites the origin and no more. The API sets the same
