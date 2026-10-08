@@ -16,7 +16,7 @@
  */
 
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 export type UrlState = {
   params: URLSearchParams;
@@ -55,7 +55,19 @@ export function useUrlState(): UrlState {
    * previous render.
    */
   const pending = useRef<string | null>(null);
-  if (pending.current === params.toString()) pending.current = null;
+  // **Forgotten once the write is committed, not when a render sees it**
+  // (§934). `router.replace` runs as a transition, so React may render the
+  // new URL and then not commit that render yet; clearing this during render
+  // let a click handled meanwhile - on the old, committed render - build on
+  // the old URL with nothing pending. The explorer's regex tick did exactly
+  // that and dropped the property typed a moment before (`?match=regex`
+  // with no `property`), a flake in `test_regex_search.py`. An effect runs
+  // only after the commit, and React says not to write refs during render
+  // for this reason.
+  const committed = params.toString();
+  useEffect(() => {
+    if (pending.current === committed) pending.current = null;
+  }, [committed]);
 
   return {
     params,
