@@ -186,7 +186,9 @@ export class CustomerStack extends Stack {
       cluster: services.cluster,
       apiService: services.apiService,
       workerService: services.workerService,
+      webService: services.webService,
       apiTargetGroup: services.apiTargetGroup,
+      webTargetGroup: services.webTargetGroup,
       database: data.database,
       alarmEmail: props.alarmEmail,
     });

@@ -153,6 +153,7 @@ export class ServicesConstruct extends Construct {
   /** Every container's log stream, for the alarms that read it (§815). */
   public readonly logGroup: logs.LogGroup;
   public readonly apiTargetGroup: elbv2.ApplicationTargetGroup;
+  public readonly webTargetGroup: elbv2.ApplicationTargetGroup;
 
   constructor(scope: Construct, id: string, props: ServicesProps) {
     super(scope, id);
@@ -644,7 +645,7 @@ export class ServicesConstruct extends Construct {
         ec2.Peer.ipv4(vpc.vpcCidrBlock), ec2.Port.tcp(80),
         "CloudFront's VPC origin, from inside the VPC (decision 0025)");
     }
-    listener.addTargets("Web", {
+    this.webTargetGroup = listener.addTargets("Web", {
       port: 3000,
       protocol: elbv2.ApplicationProtocol.HTTP,
       targets: [this.webService],

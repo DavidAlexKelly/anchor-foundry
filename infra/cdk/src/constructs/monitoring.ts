@@ -15,12 +15,22 @@ export interface MonitoringProps {
   readonly cluster: ecs.ICluster;
   readonly apiService: ecs.FargateService;
   readonly workerService: ecs.FargateService;
+  readonly webService: ecs.FargateService;
   readonly apiTargetGroup: elbv2.ApplicationTargetGroup;
+  readonly webTargetGroup: elbv2.ApplicationTargetGroup;
   readonly database: rds.DatabaseInstance;
   /** Subscribed to every alarm when given (app.ts's `alarmEmail` context).
    * Without it the topic still exists, for whatever the operator attaches. */
   readonly alarmEmail?: string;
 }
+
+/**
+ * Connections the database is held to warn at (§925): four in five of what a
+ * db.t4g.medium allows, LEAST(memory / 9531392, 5000). scaling-check.ts
+ * budgets the API's pools to half of it; past this, something holds far more
+ * than any pool should, and the next task to start will be refused one.
+ */
+export const DATABASE_CONNECTIONS_ALARM = Math.floor(0.8 * Math.floor((4 * 1024 ** 3) / 9531392));
 
 /** What the API's JSON lines are counted as (§815). */
 export const METRIC_NAMESPACE = "Anchor/Platform";
@@ -37,10 +47,11 @@ export const METRIC_NAMESPACE = "Anchor/Platform";
  *   - the API answering 5xx to more than 5% of requests;
  *   - any unhandled error, each of which already carries its request id;
  *   - p95 latency over two seconds;
- *   - the API or the worker with no task running;
+ *   - the API, the worker or the web server with no task running (§925);
  *   - the worker's scheduled runs failing (§889);
- *   - the API's targets failing the load balancer's health check;
- *   - the database short of storage, or of CPU.
+ *   - the API's or the web server's targets failing the load balancer's
+ *     health check (§925);
+ *   - the database short of storage, of CPU, or of connections (§925).
  *
  * The filters name the formatter's own fields (`logger`, `status`,
  * `duration_ms`); `apps/api/tests/test_observability.py` reads them out of
@@ -136,9 +147,12 @@ export class MonitoringConstruct extends Construct {
       latency, 2000, above, 3,
       "The API's p95 latency was over two seconds for fifteen minutes."
     );
+    // §925: the web server too. Without a task every page is gone, the API
+    // answering or not, and nothing was watching it.
     for (const [name, service] of [
       ["Api", props.apiService],
       ["Worker", props.workerService],
+      ["Web", props.webService],
     ] as const) {
       alarm(
         `${name}NotRunning`,
@@ -165,6 +179,19 @@ export class MonitoringConstruct extends Construct {
       props.apiTargetGroup.metrics.unhealthyHostCount({ period: Duration.minutes(1) }),
       1, atLeast, 3,
       "An API task has failed the load balancer's health check for three minutes."
+    );
+    alarm(
+      "WebUnhealthyTargets",
+      props.webTargetGroup.metrics.unhealthyHostCount({ period: Duration.minutes(1) }),
+      1, atLeast, 3,
+      "A web task has failed the load balancer's health check for three minutes."
+    );
+    alarm(
+      "DatabaseConnections",
+      props.database.metricDatabaseConnections({ period: Duration.minutes(5), statistic: "Maximum" }),
+      DATABASE_CONNECTIONS_ALARM, above, 2,
+      `The database has held more than ${DATABASE_CONNECTIONS_ALARM} connections for ten minutes, ` +
+        "four in five of what it allows. A new task may soon be refused one."
     );
     alarm(
       "DatabaseStorage",
