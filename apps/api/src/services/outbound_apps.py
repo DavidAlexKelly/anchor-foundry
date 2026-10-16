@@ -22,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
+import anyio
 from sqlalchemy import text as _text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
@@ -156,7 +157,8 @@ async def _store(
     conn: AsyncConnection, gateway: SecretsGateway, *, connection_id: UUID, user_id: UUID,
     values: dict[str, str],
 ) -> dict[str, Any]:
-    arn = gateway.put_secret(f"{connection_id}/grants/{user_id}", values)
+    arn = await anyio.to_thread.run_sync(
+        gateway.put_secret, f"{connection_id}/grants/{user_id}", values)
     expires = (datetime.fromtimestamp(int(values["expires_at"]), timezone.utc)
                if values.get("expires_at") else None)
     row = await fetch_one(conn, """
@@ -211,7 +213,7 @@ async def revoke(conn: AsyncConnection, gateway: SecretsGateway, connection_id: 
     """, {"cid": str(connection_id)})
     if row is None:
         return False
-    gateway.delete_secret(str(row["secret_arn"]))
+    await anyio.to_thread.run_sync(gateway.delete_secret, str(row["secret_arn"]))
     return True
 
 
@@ -246,7 +248,7 @@ async def secret_for(
             "you have not authorized this source: it is called as the person using it, "
             "through its outbound application - authorize it from the source first")
     try:
-        values = gateway.get_secret(str(row["secret_arn"]))
+        values = await anyio.to_thread.run_sync(gateway.get_secret, str(row["secret_arn"]))
     except KeyError:
         await _forget(conn, gateway, connection_id)
         raise AuthorizationNeeded(

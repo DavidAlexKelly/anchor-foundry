@@ -1407,7 +1407,7 @@ async def _run_file_sync(
     taken: list[dict[str, Any]] = []
     tmp_dir = _tempfile.mkdtemp()
     try:
-        secret = conn_service.secret_values_for(_secrets, row)
+        secret = await anyio.to_thread.run_sync(conn_service.secret_values_for, _secrets, row)
         connector = get_connector(str(row["source_type"]))
         with egress.restricted_to(policies):
             listing = await anyio.to_thread.run_sync(
@@ -1492,7 +1492,7 @@ async def _caller_secret(
 ) -> dict[str, str]:
     """The secret a call made by this person sends: the source's own, and an
     outbound application's person's token beside it (§753; decision 0022)."""
-    secret = conn_service.secret_values_for(_secrets, row)
+    secret = await anyio.to_thread.run_sync(conn_service.secret_values_for, _secrets, row)
     config = row["config"] if isinstance(row["config"], dict) else _parse(row["config"])
     if not outbound_apps.is_outbound(config):
         return secret
@@ -1542,7 +1542,7 @@ async def start_authorization(
     async with user_connection(access.auth.user_id) as conn:
         row = await conn_service.get(conn, access.workspace_id, access.project_id, connection_id)
         config = row["config"] if isinstance(row["config"], dict) else _parse(row["config"])
-        secret = conn_service.secret_values_for(_secrets, row)
+        secret = await anyio.to_thread.run_sync(conn_service.secret_values_for, _secrets, row)
         url, state = await outbound_apps.start(
             conn, connection={**row, "config": config}, secret=secret,
             user_id=access.auth.user_id, return_to=body.return_to,

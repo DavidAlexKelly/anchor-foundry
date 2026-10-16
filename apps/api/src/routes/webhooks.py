@@ -19,6 +19,7 @@ custom-role mechanism here to hang off.
 """
 from __future__ import annotations
 
+import anyio
 from datetime import datetime
 from typing import Any
 from uuid import UUID
@@ -316,9 +317,8 @@ async def test_webhook(
         connection = await webhook_store.connection_for(
             conn, access.project_id, UUID(str(webhook["connection_id"]))
         )
-    secret = conn_service.secret_values_for(
-        connection_routes.secrets_gateway(), connection
-    )
+    secret = await anyio.to_thread.run_sync(
+        conn_service.secret_values_for, connection_routes.secrets_gateway(), connection)
     async with user_connection(access.auth.user_id) as conn:
         # §263. A test call reaches out exactly as an action's would, so it is
         # scoped exactly as an action's is — a source's allowlist that the test
