@@ -50,6 +50,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Protocol
 from uuid import UUID, uuid5
 
+from ..lib import aws
 from ..lib.db import fetch_all
 # Stdlib-only, so importing it does not undo this module's care about staying
 # usable on the OpenSearch-only path.
@@ -1461,9 +1462,7 @@ def gateway_from_env() -> InstanceStoreGateway | None:
 
     import json
 
-    import boto3  # deferred: not installed in local dev
-
-    client = boto3.client("secretsmanager")
+    client = aws.client("secretsmanager")
     secret = json.loads(client.get_secret_value(SecretId=secret_arn)["SecretString"])
     return OpenSearchInstanceStore(endpoint, secret["username"], secret["password"])
 

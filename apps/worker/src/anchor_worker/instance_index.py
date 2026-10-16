@@ -39,7 +39,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID, uuid5
 
-from . import instance_mapping
+from . import aws, instance_mapping
 
 # The API's `instance_store.INSTANCE_NAMESPACE`. Fixed forever: changing it
 # would renumber every instance in every deployment.
@@ -174,8 +174,6 @@ def from_env() -> InstanceIndex | None:
     secret_arn = os.environ.get("OPENSEARCH_SECRET_ARN")
     if not endpoint or not secret_arn:
         return None
-    import boto3
-
-    client = boto3.client("secretsmanager")
+    client = aws.client("secretsmanager")
     secret = json.loads(client.get_secret_value(SecretId=secret_arn)["SecretString"])
     return InstanceIndex(endpoint, secret["username"], secret["password"])

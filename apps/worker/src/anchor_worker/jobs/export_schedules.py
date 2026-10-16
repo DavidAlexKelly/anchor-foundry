@@ -39,7 +39,7 @@ from datetime import datetime, timezone
 from croniter import croniter
 from dagster import OpExecutionContext, job, op
 
-from .. import export_runs, oidc
+from .. import aws, export_runs, oidc
 from ..resources import PlatformDatabase
 from ..storage import StorageKeyError, gateway_from_env
 from .claims import claim_due
@@ -296,9 +296,7 @@ def _advance(context, platform_db, workspace_id, export_id, schedule) -> None:
 def _read_secret(secret_arn):
     if not secret_arn:
         return {}
-    import boto3
-
-    client = boto3.client("secretsmanager")
+    client = aws.client("secretsmanager")
     raw = client.get_secret_value(SecretId=secret_arn)["SecretString"]
     return json.loads(raw)
 
