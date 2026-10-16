@@ -256,3 +256,42 @@ def test_runs_a_stopped_worker_left_running_are_failed_and_say_why(workspace: di
     with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
         conn.execute("UPDATE model_runs SET status='failed', error_message='test' WHERE id=%s",
                      (live_run,))
+
+
+def test_a_sync_the_api_left_running_is_failed_and_says_why(workspace: dict) -> None:
+    """§950 (db 0169): the API opens a sync run and closes it in a later
+    transaction, so a task stopped in between left it 'running' for good, and
+    the connection's health said its last sync was still going."""
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        connection = conn.execute(
+            "INSERT INTO connections (workspace_id, project_id, scope, name, source_type, config,"
+            " created_by) VALUES (%s,%s,'project',%s,'postgres','{}'::jsonb,%s) RETURNING id",
+            (workspace["workspace_id"], workspace["project_id"], f"S {workspace['tag']}",
+             workspace["user_id"])).fetchone()[0]
+
+        def opened(ago: str):
+            return conn.execute(
+                "INSERT INTO sync_runs (connection_id, mode, source_table, started_at)"
+                " VALUES (%s, 'full', 'public.t', now() - CAST(%s AS interval)) RETURNING id",
+                (connection, ago)).fetchone()[0]
+
+        old, live = opened("2 hours"), opened("5 minutes")
+
+    model_runs.run_model_runs(_ctx())
+
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        def run(run_id):
+            return conn.execute("SELECT status, error, finished_at IS NOT NULL FROM sync_runs"
+                                " WHERE id=%s", (run_id,)).fetchone()
+        assert run(old) == ("failed", "the platform stopped while this sync ran; run it again",
+                            True)
+        assert run(live) == ("running", None, False)
+
+
+def test_a_worker_from_before_0169_still_calls_it_with_three() -> None:
+    """A rollout runs the migration while the old worker is still up: its
+    three-interval call must still resolve, and fail syncs at the default."""
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        assert conn.execute(
+            "SELECT fail_abandoned_runs(CAST('100 years' AS interval), CAST('100 years' AS interval),"
+            " CAST('100 years' AS interval)) >= 0").fetchone()[0] is True
