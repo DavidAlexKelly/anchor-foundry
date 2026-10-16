@@ -18,6 +18,7 @@ from .jobs.cleanup import workspace_cleanup
 from .jobs.code_preview_runs import scheduled_preview_runs
 from .jobs.code_test_runs import scheduled_test_runs
 from .jobs.dagster_runs import dagster_run_pruning
+from .jobs.code_run_pruning import code_run_pruning
 from .jobs.dataset_retention import dataset_retention
 from .jobs.export_schedules import scheduled_exports
 from .jobs.instance_syncs import scheduled_instance_syncs
@@ -92,6 +93,7 @@ defs = Definitions(
         dagster_run_pruning,
         workspace_cleanup,
         dataset_retention,
+        code_run_pruning,
         scheduled_model_runs,
         scheduled_connection_syncs,
         scheduled_instance_syncs,
@@ -123,6 +125,15 @@ defs = Definitions(
             # the bill, which a day either way does not change.
             cron_schedule="35 3 * * *",
             name="nightly_dataset_retention",
+        ),
+        ScheduleDefinition(
+            default_status=RUNNING,
+            job=code_run_pruning,
+            should_execute=one_at_a_time(code_run_pruning.name),
+            # Nightly, after the retention sweep (§972): what it frees is
+            # database space, which a day either way does not change.
+            cron_schedule="55 3 * * *",
+            name="nightly_code_run_pruning",
         ),
         ScheduleDefinition(
             default_status=RUNNING,

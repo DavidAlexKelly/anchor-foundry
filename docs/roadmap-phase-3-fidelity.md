@@ -413,6 +413,8 @@ The sync pays for it: the trigger, one more index and the `ANALYZE` add about 17
 
 **E.38 — A person's query could hold a DuckDB slot for good. Done (§971), S.** Found while following §969's long runs into DuckDB, which has no statement timeout. A query that joined on the wrong key ran until memory gave out or for ever, after CloudFront's 504, holding a core and one of the API task's DuckDB slots (§911); a stack has two, so two such queries left every dataset operation on the task answering busy. A person's SQL is now stopped at a deadline that starts when its connection is sealed (`lib/duck.py`): 50 seconds for a query or a transform preview, 600 for a SQL model's run, and the stop reads as a sentence rather than DuckDB's "Interrupted!". The slot is given back with the connection. The worker's runs are bounded by Dagster's run monitor (§957).
 
+**E.39 — Every code test and preview run was kept for good. Done (§972), S.** Found while looking for tables nothing empties, after E.30. A test run stores the repository's whole working set, up to 4 MB, and a preview its file and the rows it produced, one row a press, and the panels only ever read a branch's or a file's newest ten. A team running tests all day added hundreds of megabytes a day to the database. A nightly sweep (`jobs/code_run_pruning.py`, db 0173) now deletes a run that has finished, is a month old and is not among the newest ten of its branch or file, a batch at a time.
+
 ## Suggested order
 
 **First, out of band:** E.1.
