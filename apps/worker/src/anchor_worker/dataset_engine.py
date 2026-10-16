@@ -191,7 +191,10 @@ def run_sql_transform(
         try:
             sandbox.execute(f"CREATE TABLE __output AS ({sql})")
         except duckdb.Error as exc:
-            raise DatasetEngineError(_clean(exc)) from exc
+            # §952: a scheduled model whose SQL names a column DuckDB 1.4 made
+            # a keyword says which word, rather than the token after it.
+            hint = duck.keyword_hint(sql) if isinstance(exc, duckdb.ParserException) else ""
+            raise DatasetEngineError(_clean(exc) + hint) from exc
 
         described = sandbox.execute("DESCRIBE __output").fetchall()
         if not described:
