@@ -23,12 +23,13 @@ from typing import Any
 from uuid import UUID
 
 import anyio
-from fastapi import APIRouter, Depends, Query, Request, status
+from fastapi import APIRouter, Depends, Query, Request, Response, status
 from pydantic import BaseModel, Field
 
 from ..lib.proxy import client_address
 from ..lib.cron import next_run_after
 from ..lib.db import user_connection
+from ..lib.long_work import answer_within
 from ..lib.errors import ConflictError, NotFoundError
 from ..middleware.permissions import ProjectAccess, require_project_role
 from ..services import audit
@@ -272,6 +273,7 @@ async def set_schedule(
 async def run_export(
     export_id: UUID,
     request: Request,
+    response: Response,
     access: ProjectAccess = Depends(require_project_role("editor")),
 ) -> RunOut:
     """p.205: "Manually run the export."
@@ -302,6 +304,44 @@ async def run_export(
             f"{dataset['name']} has no versions yet, so there is nothing to export"
         )
 
+    # Open before it starts (§968), so a run that outlasts its request answers
+    # with this row, running, and carries on to complete it.
+    async with user_connection(access.auth.user_id) as conn:
+        opened = await export_store.open_run(
+            conn, export_id=export_id, dataset_version=version, run_by=access.auth.user_id)
+    run_id = UUID(str(opened["id"]))
+    finished = await answer_within(_export_and_record(
+        export_id, run_id, export, connection, dataset, version, policies, access,
+        client_address(request), request.headers.get("user-agent")))
+    if finished is None:
+        response.status_code = status.HTTP_202_ACCEPTED
+        return RunOut(**opened)
+    return finished
+
+
+async def _export_and_record(
+    export_id: UUID, run_id: UUID, export: Any, connection: Any, dataset: Any, version: int,
+    policies: Any, access: ProjectAccess, ip_address: str | None, user_agent: str | None,
+) -> RunOut:
+    """The run itself, once it is open; it is completed whatever happens, so
+    a fault here is a failed run in the history rather than one running for
+    ever."""
+    try:
+        return await _export(export_id, run_id, export, connection, dataset, version,
+                             policies, access, ip_address, user_agent)
+    except Exception:
+        async with user_connection(access.auth.user_id) as conn:
+            await export_store.record(
+                conn, export_id=export_id, run_id=run_id, run_by=access.auth.user_id,
+                result={"ok": False, "dataset_version": version,
+                        "error": "the export stopped unexpectedly; run it again"})
+        raise
+
+
+async def _export(
+    export_id: UUID, run_id: UUID, export: Any, connection: Any, dataset: Any, version: int,
+    policies: Any, access: ProjectAccess, ip_address: str | None, user_agent: str | None,
+) -> RunOut:
     secret = await anyio.to_thread.run_sync(
         conn_service.secret_values_for, connection_routes.secrets_gateway(), connection)
     # The bytes of the current version. Resolved before the call so a missing
@@ -357,7 +397,8 @@ async def run_export(
 
     async with user_connection(access.auth.user_id) as conn:
         run = await export_store.record(
-            conn, export_id=export_id, result=outcome, run_by=access.auth.user_id
+            conn, export_id=export_id, result=outcome, run_by=access.auth.user_id,
+            run_id=run_id,
         )
         await audit.record(
             conn,
@@ -372,8 +413,8 @@ async def run_export(
                 "ok": outcome["ok"], "skipped": outcome["skipped"],
                 "rows": outcome["rows_written"], "version": version,
             },
-            ip_address=client_address(request),
-            user_agent=request.headers.get("user-agent"),
+            ip_address=ip_address,
+            user_agent=user_agent,
         )
         await conn.commit()
     return RunOut(**run)
