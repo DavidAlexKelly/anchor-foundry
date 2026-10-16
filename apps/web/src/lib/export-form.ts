@@ -280,7 +280,27 @@ export function runLabel(run: {
   rows_written: number;
   dataset_version: number | null;
 }): string {
+  if (run.status === "running") return "running";
   if (run.status === "failed") return "failed";
   if (run.skipped) return `nothing new (v${run.dataset_version ?? "?"})`;
   return `${run.rows_written.toLocaleString()} row${run.rows_written === 1 ? "" : "s"}`;
 }
+
+/** How often a run that outlasted its request is looked for in the history. */
+export const FOLLOW_EVERY_MS = 2000;
+
+/** A run that outlasted its request (§968): answered 202 with its row,
+ * running, and followed in the export's history until that row has ended.
+ * Still going until the history says otherwise, including while it has not
+ * been read yet. */
+export function stillGoing(
+  runs: { id: string; status: string }[] | undefined,
+  runId: string,
+): boolean {
+  const run = runs?.find((r) => r.id === runId);
+  return !run || run.status === "running";
+}
+
+export const EXPORT_RUNNING_TEXT =
+  "Still running - this export is taking a while. It carries on if you leave, " +
+  "and its history has it.";

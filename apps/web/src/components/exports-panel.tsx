@@ -22,12 +22,13 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { Dialog, Field } from "@/components/dialog";
 import { ApiError, exports_ as api, datasets as datasetApi } from "@/lib/api";
 import {
-  MODES, MODE_LABELS, blankExport, destinations, freshness, kindOf, problem,
+  EXPORT_RUNNING_TEXT, FOLLOW_EVERY_MS, MODES, MODE_LABELS, blankExport, destinations, freshness,
+  kindOf, problem, stillGoing,
   runLabel, summarise, toPayload, type ExportDraft, type ExportMode,
 } from "@/lib/export-form";
 import type { Connection, Export } from "@/lib/types";
@@ -59,9 +60,32 @@ export function ExportsPanel({
 
   const refresh = () => client.invalidateQueries({ queryKey: ["exports", projectId] });
 
+  // A run that outlasted its request (§968), followed until it ends.
+  const [following, setFollowing] = useState<{ exportId: string; runId: string } | null>(null);
+  const followed = useQuery({
+    queryKey: ["export-runs", following?.exportId],
+    queryFn: () => api.runs(workspaceId, projectId, following!.exportId),
+    enabled: following !== null,
+    refetchInterval: (query) =>
+      following && stillGoing(query.state.data?.runs, following.runId) ? FOLLOW_EVERY_MS : false,
+  });
+  useEffect(() => {
+    if (!following || stillGoing(followed.data?.runs, following.runId)) return;
+    const ended = followed.data?.runs.find((r) => r.id === following.runId);
+    setFailed(ended?.status === "failed" ? ended.error : null);
+    setFollowing(null);
+    void refresh();
+    // Once, when the followed run is seen to end.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [followed.data, following]);
+
   const run = useMutation({
     mutationFn: (id: string) => api.run(workspaceId, projectId, id),
-    onSuccess: async (result) => {
+    onSuccess: async (result, id) => {
+      if (result.status === "running") {
+        setFollowing({ exportId: id, runId: result.id });
+        return;
+      }
       setFailed(result.status === "failed" ? result.error : null);
       await refresh();
     },
@@ -140,6 +164,9 @@ export function ExportsPanel({
       {failed && (
         <p className="field-hint" data-testid="export-failed">{failed}</p>
       )}
+      {following && (
+        <p className="field-hint" data-testid="export-running">{EXPORT_RUNNING_TEXT}</p>
+      )}
 
       {rows.length > 0 && (
         <table className="table" data-testid="exports-table">
@@ -179,10 +206,10 @@ export function ExportsPanel({
                       className="btn quiet"
                       style={{ padding: "3px 9px", fontSize: 12 }}
                       data-testid={`run-export-${row.name}`}
-                      disabled={run.isPending}
+                      disabled={run.isPending || following?.exportId === row.id}
                       onClick={() => { setFailed(null); run.mutate(row.id); }}
                     >
-                      {run.isPending ? "Running…" : "Run"}
+                      {run.isPending || following?.exportId === row.id ? "Running…" : "Run"}
                     </button>
                     <button
                       className="btn quiet"
