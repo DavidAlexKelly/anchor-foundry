@@ -946,11 +946,19 @@ export const datasets = {
       `/workspaces/${wid}/projects/${pid}/datasets/${did}/profile` +
         (version ? `?version=${version}` : ""),
     ),
-  /** What keeping every version of this dataset costs. Time travel is only
-   * possible because nothing deletes one (docs/decisions/0005). */
-  retention: (wid: string, pid: string, did: string) =>
+  /** What keeping this dataset's versions costs, and what its retention
+   * policy removes (§964; docs/decisions/0005). With `keepVersions`, what a
+   * policy of that many would remove, before it is saved. */
+  retention: (wid: string, pid: string, did: string, keepVersions?: number) =>
+    request<import("./types").DatasetRetention>(
+      `/workspaces/${wid}/projects/${pid}/datasets/${did}/retention` +
+        (keepVersions ? `?keep_versions=${keepVersions}` : ""),
+    ),
+  /** Keep the newest `keepVersions` versions, or every one with null. */
+  setRetention: (wid: string, pid: string, did: string, keepVersions: number | null) =>
     request<import("./types").DatasetRetention>(
       `/workspaces/${wid}/projects/${pid}/datasets/${did}/retention`,
+      { method: "PUT", body: JSON.stringify({ keep_versions: keepVersions }) },
     ),
   health: (wid: string, pid: string, did: string) =>
     request<import("./types").DatasetHealth>(

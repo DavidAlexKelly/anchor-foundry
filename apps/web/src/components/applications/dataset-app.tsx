@@ -29,6 +29,7 @@ import { branchName, whyNotBranchable } from "@/lib/branch-from-version";
 import { nextSyncNote, rollbackSummary, whyNotRollbackable } from "@/lib/dataset-rollback";
 import { madeByText, originHref } from "@/lib/dataset-origin";
 import { bytesText } from "@/lib/bytes";
+import { parseKeep, previewText, retentionText, tonightText, whyExpired } from "@/lib/dataset-retention";
 import { uploadIntent, uploadedText } from "@/lib/dataset-files";
 import { TRANSACTION_MEANING, currentViewText, olderPage } from "@/lib/dataset-transactions";
 import { NO_SCHEDULES, scheduleName, scheduleWhen } from "@/lib/dataset-schedules";
@@ -57,7 +58,7 @@ import {
 import { PipelineGraphView } from "@/components/pipeline-graph";
 import { Table } from "@/components/tabular";
 import { nodePath } from "@/lib/pipeline-graph";
-import type { DatasetReference, ResolvedResource, TabularResult } from "@/lib/types";
+import type { DatasetReference, DatasetRetention, ResolvedResource, TabularResult } from "@/lib/types";
 
 const TABS = ["preview", "schema", "history", "lineage", "details"] as const;
 type Tab = (typeof TABS)[number];
@@ -975,7 +976,14 @@ function HistoryTab({
                     )}
                   </td>
                   <td>
-                    {v.size_bytes == null ? (
+                    {v.expired_at ? (
+                      // Removed on purpose by the retention policy (§966),
+                      // which is not the accident "not stored" describes.
+                      <span className="ds-gone" data-testid="expired-version"
+                            title={`removed ${new Date(v.expired_at).toLocaleString()}`}>
+                        removed by policy
+                      </span>
+                    ) : v.size_bytes == null ? (
                       // Not the same as "small": the object is not where the
                       // row says it is, so this version cannot be read.
                       <span className="ds-gone">not stored</span>
@@ -988,7 +996,8 @@ function HistoryTab({
                     <button
                       type="button"
                       className="ds-view-version"
-                      disabled={viewing === v.version_number || v.size_bytes == null}
+                      disabled={viewing === v.version_number || v.size_bytes == null || !!v.expired_at}
+                      title={whyExpired(v) || undefined}
                       onClick={() => onView(v.version_number)}
                     >
                       {viewing === v.version_number ? "Viewing" : "View"}
@@ -1078,19 +1087,91 @@ function HistoryTab({
       {detail.data?.origin === "sync" && detail.data.connection_id && (
         <NextSync wid={wid} pid={pid} did={did} connectionId={detail.data.connection_id} />
       )}
-      {retention.data && (
-        <p className="ds-retention">
-          Keeping {retention.data.versions} version
-          {retention.data.versions === 1 ? "" : "s"} of this dataset costs{" "}
-          <strong>{bytesText(retention.data.total_bytes)}</strong>. Nothing is deleted
-          automatically — old versions are what makes the rows above readable.
-          {retention.data.unmeasured > 0 &&
-            ` ${retention.data.unmeasured} version${
-              retention.data.unmeasured === 1 ? " is" : "s are"
-            } no longer in storage and not counted here.`}
-        </p>
-      )}
+      {retention.data && <RetentionPanel wid={wid} pid={pid} did={did} report={retention.data} />}
     </>
+  );
+}
+
+/** A dataset's retention policy (§966; decision 0005): what keeping its
+ * versions costs, what the policy is and will remove tonight, and for an
+ * editor the policy itself - with what a new one would remove said before it
+ * is saved, which is the decision's order. */
+function RetentionPanel({ wid, pid, did, report }: {
+  wid: string;
+  pid: string;
+  did: string;
+  report: DatasetRetention;
+}) {
+  const qc = useQueryClient();
+  const project = useQuery({
+    queryKey: ["project", wid, pid],
+    queryFn: () => platformApi.project(wid, pid),
+  });
+  const editor = canEditProject(project.data?.effective_role ?? "viewer");
+  const [draft, setDraft] = useState("");
+  const keep = parseKeep(draft);
+  const preview = useQuery({
+    queryKey: ["ds-retention-preview", did, keep],
+    queryFn: () => datasetApi.retention(wid, pid, did, keep ?? undefined),
+    enabled: editor && keep !== null && keep !== report.keep_versions,
+  });
+  const save = useMutation({
+    mutationFn: (value: number | null) => datasetApi.setRetention(wid, pid, did, value),
+    onSuccess: (updated) => {
+      qc.setQueryData(["ds-retention", did], updated);
+      void qc.invalidateQueries({ queryKey: ["ds-retention-preview", did] });
+      void qc.invalidateQueries({ queryKey: ["ds-detail", did] });
+      setDraft("");
+    },
+  });
+  const tonight = tonightText(report);
+  return (
+    <div className="ds-retention" data-testid="retention">
+      <p data-testid="retention-text">{retentionText(report)}</p>
+      {tonight && <p className="ds-note" data-testid="retention-tonight">{tonight}</p>}
+      {editor && (
+        <form
+          className="ds-retention-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (keep !== null) save.mutate(keep);
+          }}
+        >
+          <label>
+            Keep the newest{" "}
+            <input
+              type="number"
+              min={1}
+              inputMode="numeric"
+              data-testid="retention-keep"
+              value={draft}
+              placeholder={report.keep_versions == null ? "all" : String(report.keep_versions)}
+              onChange={(e) => setDraft(e.target.value)}
+            />{" "}
+            versions
+          </label>{" "}
+          <button type="submit" className="btn" data-testid="retention-save"
+                  disabled={keep === null || save.isPending || !preview.data}>
+            Save
+          </button>
+          {report.keep_versions != null && (
+            <>
+              {" "}
+              <button type="button" className="btn quiet" data-testid="retention-clear"
+                      disabled={save.isPending} onClick={() => save.mutate(null)}>
+                Keep every version
+              </button>
+            </>
+          )}
+          {keep !== null && preview.data && (
+            <p className="soft" data-testid="retention-preview">{previewText(preview.data, keep)}</p>
+          )}
+          {save.isError && (
+            <p className="form-error" data-testid="retention-error">{(save.error as Error).message}</p>
+          )}
+        </form>
+      )}
+    </div>
   );
 }
 
