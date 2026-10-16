@@ -359,7 +359,7 @@ async def compare_branches(
             )
         except ValueError as exc:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
             ) from exc
     return CompareOut(**result)
 
@@ -385,7 +385,7 @@ async def merge_branch(
             )
         except ValueError as exc:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
             ) from exc
         if result["merged"]:
             await audit.record(
@@ -749,7 +749,7 @@ async def insert_reference(
         # is the request body and it is the thing that is wrong. The message is
         # already phrased for whoever wrote it.
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
         ) from exc
     return ReferenceOut(content=content)
 
@@ -1073,7 +1073,7 @@ async def create_tag(
             # 422: the name is the request body and it is the thing that is
             # wrong. The message is the repository's own where it set one.
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
             ) from exc
         await audit.record(
             conn,
@@ -1137,7 +1137,7 @@ async def create_commit(
             # the request body and it is the thing that is wrong. The
             # repository's own sentence where it set one.
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
             ) from exc
         row = await repo_service.commit(
             conn,
@@ -1353,7 +1353,7 @@ async def plan_publish(
             )
         except publish_service.PublishError as exc:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
             ) from exc
         left = await publish_service.orphaned(
             conn, project_id=access.project_id, repo_id=repo_id,
@@ -1388,7 +1388,7 @@ async def publish_transforms(
             )
         except publish_service.PublishError as exc:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
             ) from exc
         left = await publish_service.orphaned(
             conn, project_id=access.project_id, repo_id=repo_id,
@@ -1464,7 +1464,7 @@ async def run_scratchpad(
         rewritten, found = scratchpad.bind(body.sql)
     except scratchpad.ScratchpadError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
         ) from exc
 
     async with user_connection(access.auth.user_id) as conn:
@@ -1477,7 +1477,7 @@ async def run_scratchpad(
     missing = scratchpad.unresolved(found, set(by_name))
     if missing:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=(
                 "this query reads "
                 + ", ".join(missing)
@@ -1490,7 +1490,7 @@ async def run_scratchpad(
         # no inputs is almost always a query whose references did not parse -
         # and returning 1 teaches somebody their backticks worked.
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=(
                 "this query names no dataset. A scratchpad query reads one "
                 "between backticks, as in SELECT * FROM `/path/to/dataset`"
@@ -1512,7 +1512,7 @@ async def run_scratchpad(
         )
     except DatasetEngineError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
         ) from exc
     except FileNotFoundError as exc:
         raise ConflictError(
@@ -1689,11 +1689,11 @@ async def preview_transform(
             # 422: the file is the request body and it is the thing that is
             # wrong. The message is already phrased for whoever wrote it.
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
             ) from exc
         if declaration is None:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=(
                     f"{body.path} does not declare a transform, so there is nothing to "
                     "preview - a transform declares the dataset it produces"
@@ -1708,7 +1708,7 @@ async def preview_transform(
         ]
         if missing:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=(
                     "this transform reads "
                     + ", ".join(sorted(set(missing)))
@@ -1756,7 +1756,7 @@ async def preview_transform(
                 # already an `HTTPException` and says 409 - a different
                 # answer because it is about timing rather than the file.
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
                 ) from exc
             return PreviewOut(
                 output=declaration.output,
@@ -1779,7 +1779,7 @@ async def preview_transform(
         )
     except DatasetEngineError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
         ) from exc
     except FileNotFoundError as exc:
         # A dataset row with no bytes behind it. Not the author's fault, and
