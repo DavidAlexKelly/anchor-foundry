@@ -47,6 +47,14 @@ class Settings(BaseSettings):
     # for the rest of its work inside CloudFront's sixty. The operator CLIs
     # that share this engine turn it off.
     statement_timeout_ms: int = 30_000
+    # How long a connection may sit inside an open transaction doing nothing,
+    # in milliseconds; 0 for no limit (§946). A request that stalls between
+    # statements - a hung call out, a task stopped mid-request - kept its
+    # transaction, and the row locks in it, until TCP gave up on the socket.
+    # Ten minutes is far past any request's legitimate pause (a minute's wait
+    # for a DuckDB slot, an interactive sync's fetch, all inside CloudFront's
+    # sixty seconds) and still bounds the locks. The operator CLIs turn it off.
+    idle_in_transaction_timeout_ms: int = 600_000
 
     @model_validator(mode="after")
     def _assemble_database_url(self) -> "Settings":

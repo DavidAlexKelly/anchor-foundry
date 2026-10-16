@@ -44,20 +44,27 @@ def get_engine() -> AsyncEngine:
             pool_size=10,
             max_overflow=20,
             pool_pre_ping=True,
-            connect_args=connect_args(settings.statement_timeout_ms),
+            connect_args=connect_args(settings.statement_timeout_ms,
+                                      settings.idle_in_transaction_timeout_ms),
         )
     return _engine
 
 
-def connect_args(statement_timeout_ms: int) -> dict[str, str]:
-    """Session settings every pooled connection starts with (§833).
+def connect_args(statement_timeout_ms: int, idle_in_transaction_timeout_ms: int = 0) -> dict[str, str]:
+    """Session settings every pooled connection starts with (§833, §946).
 
     Set when the connection is made rather than per transaction, so it costs
     no round trip and no request can forget it. A cancelled statement is
-    answered as a 503 (`main.database_constraint_error`)."""
-    if statement_timeout_ms <= 0:
-        return {}
-    return {"options": f"-c statement_timeout={int(statement_timeout_ms)}"}
+    answered as a 503 (`main.database_constraint_error`); a transaction left
+    idle past its limit is ended by Postgres, which rolls it back and closes
+    the connection, and the pool's pre-ping replaces it."""
+    options = []
+    if statement_timeout_ms > 0:
+        options.append(f"-c statement_timeout={int(statement_timeout_ms)}")
+    if idle_in_transaction_timeout_ms > 0:
+        options.append(
+            f"-c idle_in_transaction_session_timeout={int(idle_in_transaction_timeout_ms)}")
+    return {"options": " ".join(options)} if options else {}
 
 
 async def dispose_engine() -> None:
