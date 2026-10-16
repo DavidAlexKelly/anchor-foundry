@@ -11,7 +11,7 @@
 # `macosx_11_0` across cp39-cp313. The failure mode either way is a version
 # list that silently omits the pinned version, which reads as "that release
 # does not exist" rather than "not for this machine".
-fastapi==0.142.2
+fastapi==0.142.4
 # Pinned beside fastapi rather than left to it (§837): the advisories that
 # moved this file were Starlette's, and a range would let a rebuild pick up a
 # version nobody ran the suite against.
@@ -22,7 +22,7 @@ pydantic==2.13.5
 pydantic-settings==2.15.0
 PyJWT[crypto]==2.15.1
 psycopg[binary]==3.2.13
-PyMySQL==1.1.1
+PyMySQL==1.1.3
 email-validator==2.2.0
 # 3.1.1 rather than 3.1.0: a patch release, and the lowest version the
 # browser suite's playwright accepts. Bumped because `pip install -r
@@ -32,7 +32,7 @@ greenlet==3.1.1
 duckdb==1.1.3
 pytz==2024.1
 python-multipart==0.0.32
-boto3==1.34.144
+boto3==1.34.162
 croniter==2.0.5
 # The [async] extra pulls aiohttp, which AsyncOpenSearch needs - without it
 # `from opensearchpy import AsyncOpenSearch` raises ImportError, which is how
