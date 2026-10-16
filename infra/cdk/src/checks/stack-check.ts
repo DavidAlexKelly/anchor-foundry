@@ -392,6 +392,25 @@ check("a task leaving the load balancer keeps its requests as long as one can ru
   }
 });
 
+check("a database's moment of absence does not have ECS replace every API task (§980)", () => {
+  const groups = Object.values(plain.findResources("AWS::ElasticLoadBalancingV2::TargetGroup")) as any[];
+  const api = groups.find((g) => g.Properties.HealthCheckPath === "/api/health");
+  if (!api) throw new Error("no target group checks /api/health");
+  const p = api.Properties;
+  const tolerated = p.HealthCheckIntervalSeconds * p.UnhealthyThresholdCount;
+  // A Multi-AZ failover takes one to two minutes and a single-AZ reboot a few.
+  if (tolerated < 300) throw new Error(`replaced after ${tolerated} s of failed checks`);
+  if (p.HealthyThresholdCount > 2) throw new Error(`back after ${p.HealthyThresholdCount} passes`);
+  if (p.HealthCheckTimeoutSeconds >= p.HealthCheckIntervalSeconds) throw new Error("timeout past interval");
+  // The health check gives the database less than the load balancer waits.
+  const db = fs.readFileSync(
+    path.join(__dirname, "..", "..", "..", "..", "apps", "api", "src", "lib", "db.py"), "utf8");
+  const HEALTH_DEADLINE_S = Number(/^HEALTH_DEADLINE_S = (\d+)$/m.exec(db)?.[1]);
+  if (!(HEALTH_DEADLINE_S < p.HealthCheckTimeoutSeconds)) {
+    throw new Error(`the API waits ${HEALTH_DEADLINE_S} s, the load balancer ${p.HealthCheckTimeoutSeconds}`);
+  }
+});
+
 check("the API does not name its server (§923)", () => {
   if (envOf(plain, "api").UVICORN_SERVER_HEADER !== "false") throw new Error("uvicorn sends server: uvicorn");
 });
