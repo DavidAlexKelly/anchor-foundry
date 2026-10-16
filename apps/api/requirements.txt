@@ -17,11 +17,11 @@ fastapi==0.142.2
 # version nobody ran the suite against.
 starlette==1.7.0
 uvicorn[standard]==0.30.3
-sqlalchemy==2.0.31
+sqlalchemy==2.0.54
 pydantic==2.13.5
 pydantic-settings==2.15.0
 PyJWT[crypto]==2.15.1
-psycopg[binary]==3.2.4
+psycopg[binary]==3.2.13
 PyMySQL==1.1.1
 email-validator==2.2.0
 # 3.1.1 rather than 3.1.0: a patch release, and the lowest version the
