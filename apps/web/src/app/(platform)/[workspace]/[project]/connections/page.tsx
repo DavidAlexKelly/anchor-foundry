@@ -26,6 +26,7 @@ import {
 import { useProjectBySlug, useWorkspaceBySlug } from "@/components/use-workspace";
 import { WebhooksPanel } from "@/components/webhooks-panel";
 import { ListenersPanel } from "@/components/listeners-panel";
+import { SyncFollow } from "@/components/sync-follow";
 import type {
   Connection,
   DiscoveredTable,
@@ -587,7 +588,14 @@ function SyncDialog({
     <Dialog open title={`Sync from ${connection.name}`} onClose={onClose}>
       {result ? (
         <div>
-          {result.ok && result.dataset ? (
+          {result.running ? (
+            <SyncFollow
+              workspaceId={workspaceId}
+              projectId={projectId}
+              connectionId={connection.id}
+              result={result}
+            />
+          ) : result.ok && result.dataset ? (
             <p>
               Synced <strong>{result.rows_synced.toLocaleString()}</strong> rows into the
               dataset <strong>{result.dataset.name}</strong>
@@ -884,6 +892,10 @@ function ScheduledSyncDialog({
 
   const configured = !!schedule.data?.sync_source_table || schedule.data?.sync_mode === "files";
   const result = runNow.data;
+  // A run that outlasted its request (§967) is still going until it is seen
+  // to end: running it again meanwhile would start a second one.
+  const [ended, setEnded] = useState<string | null>(null);
+  const following = !!result?.running && ended !== result.run_id;
 
   return (
     <Dialog open wide title={`Scheduled sync - ${connection.name}`} onClose={onClose}>
@@ -916,7 +928,18 @@ function ScheduledSyncDialog({
               )}
               {result && (
                 <div style={{ marginTop: 8 }}>
-                  {result.ok ? (
+                  {result.running ? (
+                    <SyncFollow
+                      workspaceId={workspaceId}
+                      projectId={projectId}
+                      connectionId={connection.id}
+                      result={result}
+                      onEnded={() => {
+                        setEnded(result.run_id);
+                        void invalidate();
+                      }}
+                    />
+                  ) : result.ok ? (
                     <p className="login-note" style={{ margin: 0 }} data-testid="sync-result">
                       {schedule.data.sync_mode === "files" && `${tookText(result.files_taken ?? [])} `}
                       Synced {result.rows_synced.toLocaleString()} rows
@@ -931,10 +954,11 @@ function ScheduledSyncDialog({
                 <button
                   type="button"
                   className="btn quiet"
-                  disabled={runNow.isPending}
+                  disabled={runNow.isPending || following}
                   onClick={() => runNow.mutate()}
+                  data-testid="sync-run-now"
                 >
-                  {runNow.isPending ? "Running…" : "Run now"}
+                  {runNow.isPending || following ? "Running…" : "Run now"}
                 </button>
                 <button
                   type="button"

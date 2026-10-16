@@ -29,6 +29,7 @@ from test_api import Fixture, LocalVerifier, hdr  # noqa: E402
 from test_s3_connector import (  # noqa: E402,F401 (fixtures)
     ACCESS_KEY, BUCKET, PREFIX, REGION, SECRET_KEY, s3, s3_endpoint,
 )
+from src.lib import long_work  # noqa: E402
 from src.main import create_app  # noqa: E402
 from src.middleware import auth as auth_mw  # noqa: E402
 from src.routes import connections as conn_routes  # noqa: E402
@@ -240,6 +241,27 @@ def test_batch_mirror_takes_every_nested_file_each_run(folder: Folder) -> None:
     assert folder.rows() == [[1, "a"], [2, "b"], [3, "c"]]
     assert folder.types() == ["SNAPSHOT", "SNAPSHOT"]
     assert folder.files() == ["a.csv", "c.csv", "deeper/b.csv"]
+
+
+def test_a_file_sync_that_outlasts_its_request_carries_on(folder: Folder, monkeypatch) -> None:
+    """§967: answered at once with its run, which goes on to take the files."""
+    monkeypatch.setattr(long_work, "ANSWER_WITHIN_S", 0)
+    folder.put("a.csv", b"id,v\n1,a\n")
+    assert folder.configure().status_code == 200
+    r = folder.client.post(f"{cbase(folder.fx)}/{folder.id}/scheduled-sync/run",
+                           headers=hdr(folder.fx.editor_sub))
+    assert r.status_code == 202, r.text
+    assert r.json()["running"] is True and r.json()["files_taken"] == []
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        runs = folder.client.get(f"{cbase(folder.fx)}/{folder.id}/sync-runs",
+                                 headers=hdr(folder.fx.viewer_sub)).json()
+        run = next(x for x in runs if x["id"] == r.json()["run_id"])
+        if run["status"] != "running":
+            break
+        time.sleep(0.1)
+    assert run["status"] == "succeeded", run
+    assert folder.files() == ["a.csv"]
 
 
 def test_incremental_append_takes_only_new_files(folder: Folder) -> None:
