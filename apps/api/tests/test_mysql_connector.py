@@ -636,3 +636,40 @@ def test_tls_is_actually_negotiated_where_the_server_has_it(
             cur.execute("SHOW STATUS LIKE 'Ssl_cipher'")
             plain_cipher = (cur.fetchone() or ("", ""))[1]
     assert not plain_cipher
+
+
+# ---- a source that stops answering (§947) -------------------------------------
+def test_a_source_that_does_not_answer_is_stopped_at_the_deadline(
+    source_database: dict, monkeypatch
+) -> None:
+    """A table write-locked by another session: the connection succeeds and
+    the read waits, which before §947 it did for as long as the lock was held.
+    `read_timeout` ends it, and the message says what happened."""
+    import threading
+    import time
+
+    from src.services import connectors
+
+    monkeypatch.setattr(connectors, "SOURCE_DEADLINE_S", 1)
+    locked, release = threading.Event(), threading.Event()
+
+    def hold() -> None:
+        with _admin_connect(SOURCE_DB) as conn, conn.cursor() as cur:
+            cur.execute("LOCK TABLES orders WRITE")
+            locked.set()
+            release.wait(30)
+            cur.execute("UNLOCK TABLES")
+
+    holder = threading.Thread(target=hold, daemon=True)
+    holder.start()
+    assert locked.wait(10)
+    started = time.monotonic()
+    try:
+        with pytest.raises(connectors.ConnectorOperationError,
+                           match="did not finish within 1 seconds"):
+            MySQLConnector().preview(source_database, {"password": SOURCE_PASSWORD},
+                                     source_schema=SOURCE_DB, source_table="orders")
+    finally:
+        release.set()
+        holder.join(10)
+    assert time.monotonic() - started < 10
