@@ -2206,9 +2206,8 @@ async def _run_webhooks(
                 UUID(str(webhook["project_id"])),
                 UUID(str(webhook["connection_id"])),
             )
-            secret = conn_service.secret_values_for(
-                connection_routes.secrets_gateway(), connection
-            )
+            secret = await anyio.to_thread.run_sync(
+                conn_service.secret_values_for, connection_routes.secrets_gateway(), connection)
             # §263: the connection's own allowlist. Read here rather than left
             # ambient, because this caller already has the connection in hand
             # and an argument cannot be forgotten.

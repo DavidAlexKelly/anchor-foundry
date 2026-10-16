@@ -17,6 +17,7 @@ import json
 from typing import Any
 from uuid import UUID
 
+import anyio
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from ..lib.db import fetch_all, fetch_one
@@ -93,7 +94,8 @@ async def create(
     # connection - this ordering fails toward the harmless side.
     secret_arn: str | None = None
     if secret_values:
-        secret_arn = secrets.put_secret(str(connection_id), secret_values)
+        secret_arn = await anyio.to_thread.run_sync(
+            secrets.put_secret, str(connection_id), secret_values)
 
     row = await fetch_one(
         conn,
@@ -142,7 +144,8 @@ async def update(
 
     secret_arn = existing["secret_arn"]
     if secret_values:
-        secret_arn = secrets.put_secret(str(connection_id), secret_values)
+        secret_arn = await anyio.to_thread.run_sync(
+            secrets.put_secret, str(connection_id), secret_values)
     if oidc_source:
         # A source moved to OpenID Connect keeps no credentials it had (§599).
         secret_arn = None
@@ -185,7 +188,7 @@ async def delete(
     if existing["secret_arn"]:
         # After the row delete in the same transaction; gateway delete is not
         # transactional, but the 7-day recovery window covers a crashed commit.
-        secrets.delete_secret(str(existing["secret_arn"]))
+        await anyio.to_thread.run_sync(secrets.delete_secret, str(existing["secret_arn"]))
 
 
 async def set_exports_enabled(

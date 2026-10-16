@@ -645,7 +645,8 @@ async def create(conn: AsyncConnection, gateway: SecretsGateway, *, workspace_id
     traffic from the moment it existed would take it before it was set up)."""
     verification, header = resolve(listener_type, verification, header, secret)
     lid = uuid4()
-    arn = gateway.put_secret(f"listener-{lid}", {"secret": secret}) if secret else None
+    arn = await anyio.to_thread.run_sync(
+        gateway.put_secret, f"listener-{lid}", {"secret": secret}) if secret else None
     await conn.execute(text("""
         INSERT INTO listeners (id, workspace_id, project_id, display_name, listener_type,
                                verification, verification_header, secret_arn, created_by)
@@ -666,7 +667,8 @@ async def configure(conn: AsyncConnection, gateway: SecretsGateway, project_id: 
     secret is replaced whole, and a listener moved to `none` forgets it."""
     current = await get(conn, project_id, listener_id)
     verification, header = resolve(current["listener_type"], verification, header, secret)
-    arn = (gateway.put_secret(f"listener-{listener_id}", {"secret": secret})
+    arn = (await anyio.to_thread.run_sync(
+        gateway.put_secret, f"listener-{listener_id}", {"secret": secret})
            if secret else None)
     # Its old value is no longer the one to verify against (§867).
     forget_secret(current.get("secret_arn"))
@@ -676,7 +678,7 @@ async def configure(conn: AsyncConnection, gateway: SecretsGateway, project_id: 
          WHERE id = :id
     """), {"id": str(listener_id), "v": verification, "h": header, "arn": arn})
     if arn is None and current["secret_arn"]:
-        gateway.delete_secret(current["secret_arn"])
+        await anyio.to_thread.run_sync(gateway.delete_secret, current["secret_arn"])
     return await get(conn, project_id, listener_id)
 
 
@@ -701,7 +703,7 @@ async def delete(conn: AsyncConnection, gateway: SecretsGateway, project_id: UUI
     current = await get(conn, project_id, listener_id)
     await conn.execute(text("DELETE FROM listeners WHERE id = :id"), {"id": str(listener_id)})
     if current["secret_arn"]:
-        gateway.delete_secret(current["secret_arn"])
+        await anyio.to_thread.run_sync(gateway.delete_secret, current["secret_arn"])
 
 
 def _preview(body: bytes) -> tuple[str | None, bool]:

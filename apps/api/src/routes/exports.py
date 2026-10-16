@@ -301,9 +301,8 @@ async def run_export(
             f"{dataset['name']} has no versions yet, so there is nothing to export"
         )
 
-    secret = conn_service.secret_values_for(
-        connection_routes.secrets_gateway(), connection
-    )
+    secret = await anyio.to_thread.run_sync(
+        conn_service.secret_values_for, connection_routes.secrets_gateway(), connection)
     # The bytes of the current version. Resolved before the call so a missing
     # file is a recorded failure with a sentence rather than an exception from
     # inside a worker thread.
