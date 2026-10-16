@@ -16,7 +16,7 @@ fastapi==0.142.2
 # moved this file were Starlette's, and a range would let a rebuild pick up a
 # version nobody ran the suite against.
 starlette==1.7.0
-uvicorn[standard]==0.30.3
+uvicorn[standard]==0.30.6
 sqlalchemy==2.0.54
 pydantic==2.13.5
 pydantic-settings==2.15.0
