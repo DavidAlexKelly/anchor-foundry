@@ -68,9 +68,10 @@ def test_a_profile_fits_in_a_connection_that_all_its_counts_at_once_would_not(
 ) -> None:
     """The three exact counts in one aggregate need every column's values at
     once; under this limit DuckDB refuses that. Counted one column at a time,
-    the same profile fits. (§875 swept the limit: the counts at once failed up
-    to 256 MB here, and the profile passed from 128.)"""
-    monkeypatch.setenv("DUCKDB_MEMORY_LIMIT", "128MB")
+    the same profile fits. (§875 swept the limit on DuckDB 1.1: the counts at
+    once failed up to 256 MB here, and the profile passed from 128. On 1.4
+    they fail up to 320 and it passes from 160, so the limit sits between.)"""
+    monkeypatch.setenv("DUCKDB_MEMORY_LIMIT", "192MB")
     monkeypatch.setenv("DUCKDB_THREADS", "2")
     con = duck.connect()
     try:
