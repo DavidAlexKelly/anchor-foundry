@@ -900,7 +900,11 @@ class OpenSearchInstanceStore:
         await self._client.update(
             index=index,
             id=instance_id,
-            body={"doc": {"properties": merged, "updated_at": datetime.utcnow().isoformat()}},
+            # Aware, as a sync writes it (§944). `utcnow()` wrote the same
+            # instant with no offset, which a browser's `new Date` reads as
+            # its own local time: an edited object showed "updated" hours off.
+            body={"doc": {"properties": merged,
+                          "updated_at": datetime.now(timezone.utc).isoformat()}},
             refresh=True,
         )
 
