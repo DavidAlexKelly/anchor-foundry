@@ -383,3 +383,22 @@ def test_every_ci_job_has_a_ceiling() -> None:
             limit = re.search(r"^    timeout-minutes: (\d+)$", block, re.M)
             assert limit and 0 < int(limit.group(1)) <= 60, (
                 f"{os.path.relpath(path, ROOT)} job {name}: no timeout-minutes of an hour or less")
+
+
+#: The first major of each action that runs on Node 24 (§935). GitHub is
+#: retiring Node 20 for actions and was already forcing these onto 24 with a
+#: warning on every job; a workflow copied from an older one would bring the
+#: older major back.
+NODE24_ACTIONS = {"checkout": 5, "setup-node": 5, "setup-python": 6, "upload-artifact": 5}
+
+
+def test_every_action_is_a_node24_release() -> None:
+    import glob
+
+    for path in sorted(glob.glob(os.path.join(ROOT, ".github", "workflows", "*.yml"))):
+        for action, major in re.findall(r"uses:\s*actions/([\w-]+)@v(\d+)",
+                                        open(path, encoding="utf-8").read()):
+            assert action in NODE24_ACTIONS, f"{action} is not one this test knows; add its Node 24 major"
+            assert int(major) >= NODE24_ACTIONS[action], (
+                f"{os.path.relpath(path, ROOT)} uses actions/{action}@v{major}, "
+                f"a Node 20 release; v{NODE24_ACTIONS[action]} runs on Node 24")
