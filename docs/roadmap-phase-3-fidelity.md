@@ -411,6 +411,8 @@ The sync pays for it: the trigger, one more index and the `ANALYZE` add about 17
 
 **E.37 — The platform's own AWS calls could wait minutes. Done (§970), S.** Found by reading what every boto3 client is made with. Each used botocore's defaults: a minute to connect, a minute for each read, and legacy retries. So while an AWS endpoint stalled, a request that asked Secrets Manager for a source's password or Cognito to invite somebody waited minutes, long after CloudFront had answered 504, holding one of the threads every blocking call shares (§954). The API's and the worker's clients are now made in one place each (`apps/api/src/lib/aws.py`, `apps/worker/src/anchor_worker/aws.py`): 3 seconds to connect, 5 a read for Secrets Manager, Cognito and ECS, 30 a read for the data bucket, three tries in botocore's standard mode. A test refuses a client made any other way. A source's own S3 bucket was already held to its connector's limits.
 
+**E.38 — A person's query could hold a DuckDB slot for good. Done (§971), S.** Found while following §969's long runs into DuckDB, which has no statement timeout. A query that joined on the wrong key ran until memory gave out or for ever, after CloudFront's 504, holding a core and one of the API task's DuckDB slots (§911); a stack has two, so two such queries left every dataset operation on the task answering busy. A person's SQL is now stopped at a deadline that starts when its connection is sealed (`lib/duck.py`): 50 seconds for a query or a transform preview, 600 for a SQL model's run, and the stop reads as a sentence rather than DuckDB's "Interrupted!". The slot is given back with the connection. The worker's runs are bounded by Dagster's run monitor (§957).
+
 ## Suggested order
 
 **First, out of band:** E.1.
