@@ -25,6 +25,8 @@ import os
 import re
 import tempfile
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 
 import duckdb
@@ -107,6 +109,24 @@ class _Slotted:
         self._con = con
         self._slot = slot
         self._open = True
+        self._timer: threading.Timer | None = None
+        #: Seconds a person's SQL may run, once `seal` set them (§971), and
+        #: whether it was stopped for running past them.
+        self.deadline_s: float | None = None
+        self.stopped = False
+
+    def stop_after(self, seconds: float) -> None:
+        def stop() -> None:
+            self.stopped = True
+            try:
+                self._con.interrupt()
+            except duckdb.Error:
+                pass  # closed in the meantime: nothing left to stop
+
+        self.deadline_s = seconds
+        self._timer = threading.Timer(seconds, stop)
+        self._timer.daemon = True
+        self._timer.start()
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._con, name)
@@ -114,6 +134,8 @@ class _Slotted:
     def close(self) -> None:
         if self._open:
             self._open = False
+            if self._timer is not None:
+                self._timer.cancel()
             try:
                 self._con.close()
             finally:
@@ -157,9 +179,26 @@ def connect() -> duckdb.DuckDBPyConnection:
     return held  # type: ignore[return-value]
 
 
-def seal(con: duckdb.DuckDBPyConnection) -> None:
+#: How long a person's query may run on a request's path (§971): inside
+#: CloudFront's sixty seconds, so it is stopped with a sentence rather than
+#: carrying on after the 504 holding a slot and a core.
+QUERY_DEADLINE_S = float(os.environ.get("DUCKDB_QUERY_DEADLINE_S", "50"))
+
+#: How long a SQL model's run from the API may run: it may outlast its request
+#: (§969), but not hold a slot for good.
+TRANSFORM_DEADLINE_S = float(os.environ.get("DUCKDB_TRANSFORM_DEADLINE_S", "600"))
+
+
+def seal(con: duckdb.DuckDBPyConnection, deadline_s: float | None = None) -> None:
     """Close a connection to everything but its own tables, before it runs a
     person's SQL, and lock its settings (§891).
+
+    With `deadline_s`, what runs on it from here is stopped once that many
+    seconds have passed (§971). DuckDB has no statement timeout, and a
+    person's SQL - a join on the wrong key, a cross join - can run until
+    memory gives out or for good, holding one of the task's slots (§911) all
+    the while; a few of those and every dataset operation on the task waits.
+    `deadline` turns what the stop raises into a sentence.
 
     `enable_external_access` has been how a sandbox shuts the filesystem and
     the network since the first query route. But the SQL is placed inside a
@@ -171,6 +210,28 @@ def seal(con: duckdb.DuckDBPyConnection) -> None:
     """
     con.execute("SET enable_external_access=false")
     con.execute("SET lock_configuration=true")
+    if deadline_s is not None and isinstance(con, _Slotted):
+        con.stop_after(deadline_s)
+
+
+def stopped_message(seconds: float) -> str:
+    whole = int(seconds)
+    span = f"{whole // 60} minutes" if whole >= 120 and whole % 60 == 0 else f"{whole} seconds"
+    return (f"stopped after {span}: this ran longer than a query may here - narrow it, "
+            "or join on a key that matches fewer rows")
+
+
+@contextmanager
+def deadline(con: Any, error: type[Exception]) -> Iterator[None]:
+    """Inside, an error from a connection `seal` stopped is raised as `error`
+    saying so, rather than as DuckDB's "Interrupted!" or whatever the caller
+    made of it."""
+    try:
+        yield
+    except (duckdb.Error, error) as exc:
+        if getattr(con, "stopped", False):
+            raise error(stopped_message(con.deadline_s)) from exc
+        raise
 
 
 # ---- words DuckDB 1.4 took (§952) ---------------------------------------------

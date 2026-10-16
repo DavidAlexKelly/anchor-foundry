@@ -1086,16 +1086,18 @@ def query(
         con.execute(f"CREATE TABLE dataset AS SELECT * FROM read_parquet('{parquet_path}')")
         for name, path in extra.items():
             con.execute(f"CREATE TABLE {name} AS SELECT * FROM read_parquet('{path}')")
-        # Sandbox boundary: from here on, no filesystem or network access.
-        duck.seal(con)
-        try:
-            cursor = con.execute(sql)
-        except duckdb.Error as exc:
-            raise DatasetEngineError(_clean_sql(exc, sql)) from exc
-        if cursor.description is None:
-            raise DatasetEngineError("only queries that return rows are supported here")
-        columns = [ColumnSchema(name=d[0], data_type=str(d[1])) for d in cursor.description]
-        rows_raw = cursor.fetchmany(max_rows + 1)
+        # Sandbox boundary: from here on, no filesystem or network access,
+        # and no longer than a request can wait (§971).
+        duck.seal(con, duck.QUERY_DEADLINE_S)
+        with duck.deadline(con, DatasetEngineError):
+            try:
+                cursor = con.execute(sql)
+            except duckdb.Error as exc:
+                raise DatasetEngineError(_clean_sql(exc, sql)) from exc
+            if cursor.description is None:
+                raise DatasetEngineError("only queries that return rows are supported here")
+            columns = [ColumnSchema(name=d[0], data_type=str(d[1])) for d in cursor.description]
+            rows_raw = cursor.fetchmany(max_rows + 1)
         truncated = len(rows_raw) > max_rows
         rows = [[json_safe(v) for v in row] for row in rows_raw[:max_rows]]
         return TabularResult(columns=columns, rows=rows, total_rows=len(rows), truncated=truncated)
@@ -1622,38 +1624,40 @@ def run_transform(
             sandbox.execute(
                 f'CREATE TABLE "{alias}" AS SELECT * FROM read_parquet({path!r})'
             )
-        # Sandbox boundary: user SQL sees only the input tables.
-        duck.seal(sandbox)
-        try:
-            sandbox.execute(f"CREATE TABLE __model_output AS ({sql})")
-        except duckdb.Error as exc:
-            raise DatasetEngineError(_clean_sql(exc, sql)) from exc
+        # Sandbox boundary: user SQL sees only the input tables, and runs no
+        # longer than a run from the API may (§971).
+        duck.seal(sandbox, duck.TRANSFORM_DEADLINE_S)
+        with duck.deadline(sandbox, DatasetEngineError):
+            try:
+                sandbox.execute(f"CREATE TABLE __model_output AS ({sql})")
+            except duckdb.Error as exc:
+                raise DatasetEngineError(_clean_sql(exc, sql)) from exc
 
-        described = sandbox.execute("DESCRIBE __model_output").fetchall()
-        if not described:
-            raise DatasetEngineError("the transform produced no columns")
-        schema = [ColumnSchema(name=row[0], data_type=row[1]) for row in described]
-        row_count = int(sandbox.execute("SELECT count(*) FROM __model_output").fetchone()[0])
-        if row_count > MAX_TRANSFORM_OUTPUT_ROWS:
-            raise DatasetEngineError(
-                f"the transform produced {row_count:,} rows - above this build's "
-                f"{MAX_TRANSFORM_OUTPUT_ROWS:,} row limit"
-            )
+            described = sandbox.execute("DESCRIBE __model_output").fetchall()
+            if not described:
+                raise DatasetEngineError("the transform produced no columns")
+            schema = [ColumnSchema(name=row[0], data_type=row[1]) for row in described]
+            row_count = int(sandbox.execute("SELECT count(*) FROM __model_output").fetchone()[0])
+            if row_count > MAX_TRANSFORM_OUTPUT_ROWS:
+                raise DatasetEngineError(
+                    f"the transform produced {row_count:,} rows - above this build's "
+                    f"{MAX_TRANSFORM_OUTPUT_ROWS:,} row limit"
+                )
 
-        columns_ddl = ", ".join(f'"{c.name}" {c.data_type}' for c in schema)
-        writer.execute(f"CREATE TABLE __model_output ({columns_ddl})")
-        placeholders = ", ".join("?" for _ in schema)
-        cursor = sandbox.execute("SELECT * FROM __model_output")
-        while True:
-            batch = cursor.fetchmany(TRANSFORM_BATCH_ROWS)
-            if not batch:
-                break
-            writer.executemany(
-                f"INSERT INTO __model_output VALUES ({placeholders})", batch
-            )
-        os.makedirs(os.path.dirname(dest_parquet), exist_ok=True)
-        writer.execute(f"COPY __model_output TO '{dest_parquet}' (FORMAT parquet)")
-        return schema, row_count
+            columns_ddl = ", ".join(f'"{c.name}" {c.data_type}' for c in schema)
+            writer.execute(f"CREATE TABLE __model_output ({columns_ddl})")
+            placeholders = ", ".join("?" for _ in schema)
+            cursor = sandbox.execute("SELECT * FROM __model_output")
+            while True:
+                batch = cursor.fetchmany(TRANSFORM_BATCH_ROWS)
+                if not batch:
+                    break
+                writer.executemany(
+                    f"INSERT INTO __model_output VALUES ({placeholders})", batch
+                )
+            os.makedirs(os.path.dirname(dest_parquet), exist_ok=True)
+            writer.execute(f"COPY __model_output TO '{dest_parquet}' (FORMAT parquet)")
+            return schema, row_count
     finally:
         sandbox.close()
         writer.close()
@@ -1740,52 +1744,54 @@ def preview_transform(
 
         # Sandbox boundary: user SQL sees only the sampled input tables, and
         # unlike run_transform nothing after this point needs it reopened.
-        duck.seal(sandbox)
-        try:
-            sandbox.execute(f"CREATE TABLE __model_output AS ({sql})")
-        except duckdb.Error as exc:
-            raise DatasetEngineError(_clean_sql(exc, sql)) from exc
-
-        described = sandbox.execute("DESCRIBE __model_output").fetchall()
-        if not described:
-            raise DatasetEngineError("the transform produced no columns")
-        columns = [ColumnSchema(name=row[0], data_type=row[1]) for row in described]
-        produced = int(sandbox.execute("SELECT count(*) FROM __model_output").fetchone()[0])
-        if spill_to is not None:
-            # The writer never sees user SQL — only this DDL and these inserts,
-            # which is `run_transform`'s bargain made for the same reason.
-            writer = duck.connect()
+        # A preview is asked for on a request, so it has a request's time.
+        duck.seal(sandbox, duck.QUERY_DEADLINE_S)
+        with duck.deadline(sandbox, DatasetEngineError):
             try:
-                columns_ddl = ", ".join(f'"{c.name}" {c.data_type}' for c in columns)
-                writer.execute(f"CREATE TABLE __spill ({columns_ddl})")
-                placeholders = ", ".join("?" for _ in columns)
-                cursor = sandbox.execute("SELECT * FROM __model_output")
-                while True:
-                    batch = cursor.fetchmany(TRANSFORM_BATCH_ROWS)
-                    if not batch:
-                        break
-                    writer.executemany(
-                        f"INSERT INTO __spill VALUES ({placeholders})", batch
-                    )
-                os.makedirs(os.path.dirname(spill_to), exist_ok=True)
-                writer.execute(f"COPY __spill TO '{spill_to}' (FORMAT parquet)")
-            finally:
-                writer.close()
+                sandbox.execute(f"CREATE TABLE __model_output AS ({sql})")
+            except duckdb.Error as exc:
+                raise DatasetEngineError(_clean_sql(exc, sql)) from exc
 
-        rows = sandbox.execute(
-            f"SELECT * FROM __model_output LIMIT {limit}"
-        ).fetchall()
-        return (
-            TabularResult(
-                columns=columns,
-                rows=[[json_safe(value) for value in row] for row in rows],
-                # Rows the transform produced *from the sample*, not from the
-                # datasets. Named total_rows only because every other tabular
-                # response is; the caller has to make the difference visible.
-                total_rows=produced,
-                truncated=len(rows) < produced,
-            ),
-            previewed,
-        )
+            described = sandbox.execute("DESCRIBE __model_output").fetchall()
+            if not described:
+                raise DatasetEngineError("the transform produced no columns")
+            columns = [ColumnSchema(name=row[0], data_type=row[1]) for row in described]
+            produced = int(sandbox.execute("SELECT count(*) FROM __model_output").fetchone()[0])
+            if spill_to is not None:
+                # The writer never sees user SQL — only this DDL and these inserts,
+                # which is `run_transform`'s bargain made for the same reason.
+                writer = duck.connect()
+                try:
+                    columns_ddl = ", ".join(f'"{c.name}" {c.data_type}' for c in columns)
+                    writer.execute(f"CREATE TABLE __spill ({columns_ddl})")
+                    placeholders = ", ".join("?" for _ in columns)
+                    cursor = sandbox.execute("SELECT * FROM __model_output")
+                    while True:
+                        batch = cursor.fetchmany(TRANSFORM_BATCH_ROWS)
+                        if not batch:
+                            break
+                        writer.executemany(
+                            f"INSERT INTO __spill VALUES ({placeholders})", batch
+                        )
+                    os.makedirs(os.path.dirname(spill_to), exist_ok=True)
+                    writer.execute(f"COPY __spill TO '{spill_to}' (FORMAT parquet)")
+                finally:
+                    writer.close()
+
+            rows = sandbox.execute(
+                f"SELECT * FROM __model_output LIMIT {limit}"
+            ).fetchall()
+            return (
+                TabularResult(
+                    columns=columns,
+                    rows=[[json_safe(value) for value in row] for row in rows],
+                    # Rows the transform produced *from the sample*, not from the
+                    # datasets. Named total_rows only because every other tabular
+                    # response is; the caller has to make the difference visible.
+                    total_rows=produced,
+                    truncated=len(rows) < produced,
+                ),
+                previewed,
+            )
     finally:
         sandbox.close()
