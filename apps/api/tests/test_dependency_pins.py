@@ -402,3 +402,23 @@ def test_every_action_is_a_node24_release() -> None:
             assert int(major) >= NODE24_ACTIONS[action], (
                 f"{os.path.relpath(path, ROOT)} uses actions/{action}@v{major}, "
                 f"a Node 20 release; v{NODE24_ACTIONS[action]} runs on Node 24")
+
+
+def test_the_web_app_has_one_react() -> None:
+    """§940: a React bump once left the root's hoisted copy behind, so Craft.js,
+    Monaco and styled-jsx resolved React 19.3.0 beside the app's 19.3.1 - two
+    Reacts in one bundle, and every hook across the boundary breaks. The root
+    pins both through `overrides`, which have to say what the app says, and
+    the lockfile holds exactly one of each."""
+    import json
+
+    root = json.load(open(os.path.join(ROOT, "package.json"), encoding="utf-8"))
+    web = json.load(open(os.path.join(ROOT, "apps", "web", "package.json"), encoding="utf-8"))
+    lock = json.load(open(os.path.join(ROOT, "package-lock.json"), encoding="utf-8"))["packages"]
+    for name in ("react", "react-dom"):
+        assert root["overrides"].get(name) == web["dependencies"][name], (
+            f"package.json overrides {name} to {root['overrides'].get(name)!r}; "
+            f"apps/web pins {web['dependencies'][name]!r}")
+        versions = {entry.get("version") for path, entry in lock.items()
+                    if path.endswith(f"node_modules/{name}")}
+        assert versions == {web["dependencies"][name]}, f"package-lock.json has {name} {sorted(versions)}"

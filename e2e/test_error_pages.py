@@ -46,13 +46,16 @@ def test_a_page_that_fails_tells_the_operators_itself(page) -> None:
     `map`."""
     page.route("**/api/workspaces", lambda route: route.fulfill(
         status=200, content_type="application/json", body='{"length": 1}'))
-    with page.expect_request(
-        lambda r: r.url.endswith("/api/client-errors") and r.method == "POST", timeout=30000
-    ) as sent:
+    # **The first report taken, not the first sent.** `next dev` renders in
+    # Strict Mode, so the error page's effect runs twice and sends two; one
+    # can be cut short by the dev server's own reload, and a test that read
+    # the first request's response flaked on it (§940).
+    with page.expect_response(
+        lambda r: r.url.endswith("/api/client-errors") and r.request.method == "POST"
+        and r.status == 204, timeout=30000
+    ) as taken:
         page.goto(f"{WEB_BASE}/home")
     expect(page.get_by_test_id("page-error")).to_be_visible(timeout=30000)
-    report = sent.value.post_data_json
+    report = taken.value.request.post_data_json
     assert report["kind"] == "fault" and report["path"] == "/home", report
     assert "map" in report["message"], report
-    response = sent.value.response()
-    assert response is not None and response.status == 204
