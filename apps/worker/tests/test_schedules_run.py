@@ -216,3 +216,49 @@ def test_model_runs_keep_a_second_pass_free(instance: DagsterInstance, monkeypat
     assert schedule._should_execute(context)
     _run_of(instance, "scheduled_model_runs", DagsterRunStatus.STARTED)
     assert not may(context) and not schedule._should_execute(context)
+
+
+def test_a_run_whose_process_died_does_not_stop_its_schedule(
+    instance: DagsterInstance, monkeypatch
+) -> None:
+    """§957: a run killed outright stays STARTED, and `one_at_a_time` then
+    skipped its job for good. The daemon's run monitoring, with the image's
+    limit, fails it, and the next tick runs."""
+    import logging
+    from datetime import datetime, timedelta, timezone
+
+    from dagster import DagsterRunStatus, build_schedule_context
+    from dagster._daemon.monitoring.run_monitoring import check_run_timeout
+
+    monkeypatch.setenv("WORKER_DATABASE_URL", "postgresql://unused@localhost/unused")
+    from anchor_worker.definitions import one_at_a_time
+
+    assert instance.run_monitoring_enabled
+    assert instance.run_monitoring_max_runtime_seconds == 6 * 3600
+
+    _run_of(instance, "scheduled_connection_syncs", DagsterRunStatus.STARTED)
+    may = one_at_a_time("scheduled_connection_syncs")
+    context = build_schedule_context(instance=instance)
+    assert not may(context)
+
+    (record,) = instance.get_run_records()
+    started = (datetime.now(timezone.utc) - timedelta(hours=7)).timestamp()
+    check_run_timeout(instance, record._replace(start_time=started), logging.getLogger("t"),
+                      float(instance.run_monitoring_max_runtime_seconds))
+    assert instance.get_run_by_id(record.dagster_run.run_id).status == DagsterRunStatus.FAILURE
+    assert may(context)
+
+
+def test_a_run_inside_the_limit_is_left_alone(instance: DagsterInstance) -> None:
+    import logging
+    from datetime import datetime, timedelta, timezone
+
+    from dagster import DagsterRunStatus
+    from dagster._daemon.monitoring.run_monitoring import check_run_timeout
+
+    _run_of(instance, "scheduled_model_runs", DagsterRunStatus.STARTED)
+    (record,) = instance.get_run_records()
+    started = (datetime.now(timezone.utc) - timedelta(hours=5)).timestamp()
+    check_run_timeout(instance, record._replace(start_time=started), logging.getLogger("t"),
+                      float(instance.run_monitoring_max_runtime_seconds))
+    assert instance.get_run_by_id(record.dagster_run.run_id).status == DagsterRunStatus.STARTED
