@@ -30,6 +30,12 @@ email-validator==2.2.0
 # made to actually run the install.
 greenlet==3.1.1
 duckdb==1.4.5
+# **DuckDB 1.4 needs numpy for a Python UDF** (§942). The functions engine
+# registers `read_attachment` with `create_function`, which on 1.1 needed
+# nothing and on 1.4 refuses with "'numpy' is required for this operation".
+# The worker had it through pandas, so the shared development virtualenv never
+# showed it; the API's own install did, in CI, on every function.
+numpy==2.5.3
 pytz==2024.1
 python-multipart==0.0.32
 boto3==1.34.162

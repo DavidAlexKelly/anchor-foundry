@@ -422,3 +422,17 @@ def test_the_web_app_has_one_react() -> None:
         versions = {entry.get("version") for path, entry in lock.items()
                     if path.endswith(f"node_modules/{name}")}
         assert versions == {web["dependencies"][name]}, f"package-lock.json has {name} {sorted(versions)}"
+
+
+def test_the_api_installs_what_duckdbs_python_functions_need() -> None:
+    """§942: DuckDB 1.4's `create_function` needs numpy at run time, and the
+    API registers one. Without the pin the API image could not run any
+    function, and the shared virtualenv - which has numpy through the
+    worker's pandas - would never show it locally."""
+    import glob
+
+    uses_udf = any("create_function(" in open(path, encoding="utf-8").read()
+                   for path in glob.glob(os.path.join(ROOT, "apps", "api", "src", "**", "*.py"),
+                                         recursive=True))
+    assert uses_udf, "the API no longer registers a DuckDB function; this pin may go"
+    assert "numpy" in pins("apps/api/requirements.txt")
