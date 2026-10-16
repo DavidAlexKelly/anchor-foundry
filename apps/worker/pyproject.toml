@@ -3,16 +3,10 @@ name = "anchor-worker"
 version = "0.1.0"
 description = "Anchor background worker: Dagster jobs for cleanup, sync, and pipelines."
 requires-python = ">=3.12"   # 3.12 and 3.13; see requirements.txt
-dependencies = [
-    "dagster==1.11.16",
-    "psycopg[binary]==3.2.4",
-    "PyMySQL==1.1.1",
-    "duckdb==1.1.1",
-    "pandas==2.2.3",
-    "pytz==2024.1",
-    "boto3==1.34.144",
-    "croniter==2.0.5",
-]
+# **No `dependencies` here (§943).** The image installs `requirements.txt`
+# and nothing installs this file, so a second list only drifted: by §942 it
+# still said dagster 1.11.16 and duckdb 1.1.1, two upgrades behind what runs.
+# `test_dependency_pins.py` keeps it empty.
 
 [tool.dagster]
 module_name = "anchor_worker.definitions"
