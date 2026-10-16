@@ -43,11 +43,56 @@ def test_the_limit_is_a_connection_option() -> None:
     assert db.connect_args(0) == {}
     assert db.connect_args(-1) == {}
     assert db.connect_args(30_000) == {"options": "-c statement_timeout=30000"}
+    assert db.connect_args(30_000, 600_000) == {
+        "options": "-c statement_timeout=30000 -c idle_in_transaction_session_timeout=600000"}
+    assert db.connect_args(0, 600_000) == {
+        "options": "-c idle_in_transaction_session_timeout=600000"}
+    assert db.connect_args(0, 0) == {}
 
 
 def test_the_default_is_cloudfronts_thirty_seconds(monkeypatch) -> None:
     monkeypatch.delenv("STATEMENT_TIMEOUT_MS", raising=False)
     assert config.Settings(database_url="postgresql://x/y").statement_timeout_ms == 30_000
+
+
+def test_an_idle_transaction_is_held_for_ten_minutes_at_most(monkeypatch) -> None:
+    monkeypatch.delenv("IDLE_IN_TRANSACTION_TIMEOUT_MS", raising=False)
+    settings = config.Settings(database_url="postgresql://x/y")
+    assert settings.idle_in_transaction_timeout_ms == 600_000
+
+
+@pytest.fixture
+def short_idle(monkeypatch):
+    monkeypatch.setenv("IDLE_IN_TRANSACTION_TIMEOUT_MS", "300")
+    fresh_engine()
+    yield
+    monkeypatch.delenv("IDLE_IN_TRANSACTION_TIMEOUT_MS")
+    fresh_engine()
+
+
+def test_a_transaction_left_idle_is_ended_and_the_pool_recovers(short_idle) -> None:
+    """§946: a request that stalls between statements no longer keeps its
+    transaction, and the locks in it, until TCP notices. Postgres ends it,
+    and the next request gets a working connection."""
+    from sqlalchemy.exc import DBAPIError
+
+    async def scenario() -> tuple[str, str]:
+        try:
+            async with db.user_connection(__import__("uuid").uuid4()) as conn:
+                shown = (await conn.execute(
+                    text("SHOW idle_in_transaction_session_timeout"))).scalar_one()
+            with pytest.raises(DBAPIError):
+                async with db.user_connection(__import__("uuid").uuid4()) as conn:
+                    await conn.execute(text("SELECT 1"))
+                    await asyncio.sleep(1.5)
+                    await conn.execute(text("SELECT 1"))
+            async with db.user_connection(__import__("uuid").uuid4()) as conn:
+                after = str((await conn.execute(text("SELECT 'usable'"))).scalar_one())
+            return shown, after
+        finally:
+            await db.dispose_engine()
+
+    assert asyncio.run(scenario()) == ("300ms", "usable")
 
 
 def test_every_pooled_connection_has_it(short_timeout) -> None:
@@ -97,6 +142,7 @@ def test_the_operator_commands_run_without_it(module, monkeypatch) -> None:
 
     cli = importlib.import_module(f"src.services.{module}")
     monkeypatch.delenv("STATEMENT_TIMEOUT_MS", raising=False)
+    monkeypatch.delenv("IDLE_IN_TRANSACTION_TIMEOUT_MS", raising=False)
     seen = {}
 
     class Stop(Exception):
@@ -104,6 +150,7 @@ def test_the_operator_commands_run_without_it(module, monkeypatch) -> None:
 
     def no_engine():
         seen["limit"] = os.environ.get("STATEMENT_TIMEOUT_MS")
+        seen["idle"] = os.environ.get("IDLE_IN_TRANSACTION_TIMEOUT_MS")
         raise Stop
 
     monkeypatch.setattr(db, "get_engine", no_engine)
@@ -121,4 +168,5 @@ def test_the_operator_commands_run_without_it(module, monkeypatch) -> None:
             asyncio.run(cli._main([]))
     finally:
         os.environ.pop("STATEMENT_TIMEOUT_MS", None)
-    assert seen["limit"] == "0"
+        os.environ.pop("IDLE_IN_TRANSACTION_TIMEOUT_MS", None)
+    assert seen == {"limit": "0", "idle": "0"}

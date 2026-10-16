@@ -65,8 +65,10 @@ async def _main(argv: list[str]) -> int:
     import argparse
 
     # An operator's run over a whole deployment, not a request: no
-    # statement limit unless one is asked for (§833).
+    # statement limit, and no limit on a transaction's pauses while it writes
+    # elsewhere, unless one is asked for (§833, §946).
     os.environ.setdefault("STATEMENT_TIMEOUT_MS", "0")
+    os.environ.setdefault("IDLE_IN_TRANSACTION_TIMEOUT_MS", "0")
 
     from ..lib.db import get_engine
 
