@@ -105,6 +105,26 @@ export const TARGET_KEEP_ALIVE_S = 90;
  */
 export const DRAIN_S = ORIGIN_READ_TIMEOUT_S;
 
+/**
+ * **How long the API may fail its health check before ECS replaces it**
+ * (§980). `/api/health` asks the database (§956), so a database that does
+ * not answer fails every task's check at once. With the load balancer's
+ * defaults - unhealthy after two misses thirty seconds apart, healthy after
+ * five passes - a failover or a single-AZ reboot of a minute or two had ECS
+ * replace every API task, and the replacements then needed two and a half
+ * minutes of passes once the database was back: an outage made longer by the
+ * thing meant to end it, while each request was already answering 503 on
+ * its own (§951). Ten misses is five minutes, past a failover; two passes
+ * bring a task back. A process that dies is replaced at once regardless, as
+ * its container exits.
+ */
+export const API_HEALTH = {
+  intervalS: 30,
+  timeoutS: 5,
+  unhealthyAfter: 10,
+  healthyAfter: 2,
+} as const;
+
 export interface ServicesProps {
   readonly vpc: ec2.IVpc;
   readonly dataBucket: s3.IBucket;
@@ -670,7 +690,14 @@ export class ServicesConstruct extends Construct {
       port: 8000,
       protocol: elbv2.ApplicationProtocol.HTTP,
       targets: [this.apiService],
-      healthCheck: { path: "/api/health", healthyHttpCodes: "200" },
+      healthCheck: {
+        path: "/api/health",
+        healthyHttpCodes: "200",
+        interval: Duration.seconds(API_HEALTH.intervalS),
+        timeout: Duration.seconds(API_HEALTH.timeoutS),
+        unhealthyThresholdCount: API_HEALTH.unhealthyAfter,
+        healthyThresholdCount: API_HEALTH.healthyAfter,
+      },
       deregistrationDelay: Duration.seconds(DRAIN_S),
     });
   }
