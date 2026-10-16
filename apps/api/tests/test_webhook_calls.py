@@ -533,3 +533,25 @@ def test_the_send_time_destination_guard_refuses_link_local(
         {"config": {"base_url": target, "allow_insecure_http": True}}, {}, {},
     )
     assert ok["ok"] is True
+
+
+def test_a_webhook_saved_under_the_old_minute_runs_to_todays_bound(
+    target: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§975: a timeout saved when a minute was allowed is held to the bound a
+    request can wait for when it runs, not only when it is saved. The bound is
+    made a second here so the fixture's two-second `slow` outlasts it."""
+    import time as _time
+
+    import anyio
+
+    from src.services import webhook_calls
+
+    monkeypatch.setattr(webhook_calls, "MAX_TIMEOUT_S", 1)
+    hook = {"method": "GET", "path": "slow", "query": {}, "headers": {}, "body": None,
+            "inputs": [], "outputs": [], "timeout_seconds": 60}
+    started = _time.monotonic()
+    run = anyio.run(webhook_calls.perform, hook,
+                    {"config": {"base_url": target, "allow_insecure_http": True}}, {}, {})
+    assert run["ok"] is False and run["status"] is None
+    assert _time.monotonic() - started < 2
