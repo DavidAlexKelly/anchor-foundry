@@ -14,8 +14,10 @@ Nothing downstream of step 4 differs between the two.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Protocol
 from uuid import UUID
@@ -126,6 +128,21 @@ def get_verifier() -> TokenVerifier:
     return _verifier
 
 
+#: **Where a token is verified: off the event loop** (§953). Verifying is
+#: microseconds, except when PyJWKClient refreshes Cognito's keys - hourly,
+#: and on a key id it has not seen - which is a blocking HTTP fetch of up to
+#: 30 seconds. Called on the loop, that fetch stopped every request on the
+#: task, health checks included, for as long as Cognito took to answer. Its
+#: own few threads rather than anyio's shared forty, so a login never queues
+#: behind DuckDB work or a source extract holding those.
+_verify_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="verify")
+
+
+async def _verified(token: str) -> dict[str, Any]:
+    verifier = get_verifier()
+    return await asyncio.get_running_loop().run_in_executor(_verify_pool, verifier.verify, token)
+
+
 # The browser session (STATUS.md §55). The token in this cookie is identical
 # to the one an Authorization header would carry; what differs is that no
 # script can read it, which is the entire point - an XSS on this origin can
@@ -185,7 +202,7 @@ async def authenticate_token(token: str) -> AuthContext:
     """
     if token.startswith(kiosk.PREFIX):
         return await _authenticate_kiosk(token)
-    claims = get_verifier().verify(token)  # steps 1-3
+    claims = await _verified(token)  # steps 1-3
     sub = str(claims["sub"])  # step 4
 
     cached = _identity_cache.get(sub)
