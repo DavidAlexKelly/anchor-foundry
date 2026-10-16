@@ -491,3 +491,60 @@ def test_the_service_publishes_no_schema_of_itself(client) -> None:
     """§887: the operator's routes mint credentials, and the schema named
     every one of them for anyone who asked."""
     assert client.get("/openapi.json").status_code == 404
+
+
+def _age(registry: StackRegistry, org_slug: str, hours: float) -> None:
+    """The status as last written this long ago."""
+    import psycopg
+
+    with psycopg.connect(DSN) as conn:
+        conn.execute("UPDATE customer_stacks SET updated_at = now() - make_interval(secs => %s)"
+                     " WHERE org_slug = %s", (hours * 3600, org_slug))
+
+
+def test_a_deploy_the_control_plane_stopped_during_can_be_started_again(
+    client: TestClient, aws: FakeAws, provisioner: FakeProvisioner, registry: StackRegistry
+) -> None:
+    """§963: the job lived in the process, so a restart mid-deploy left the
+    status PROVISIONING with nothing behind it, and the button refused for
+    good. Past the longest a deploy can run, it is said and allowed."""
+    session = connected(client, aws)
+    org = client.get("/api/onboarding", headers=session["headers"]).json()["org_slug"]  # type: ignore[arg-type]
+    registry.set_status(org, StackStatus.PROVISIONING)  # as a process that then stopped left it
+
+    _age(registry, org, 1)  # recent: may still be running somewhere
+    assert client.post("/api/onboarding/provision",
+                       headers=session["headers"]).json()["started"] is False  # type: ignore[arg-type]
+    status = client.get("/api/onboarding", headers=session["headers"]).json()  # type: ignore[arg-type]
+    assert status["retryable"] is False and status["error"] is None
+
+    _age(registry, org, 3)  # past any deploy's end
+    status = client.get("/api/onboarding", headers=session["headers"]).json()  # type: ignore[arg-type]
+    assert status["retryable"] is True
+    assert "stopped while this deployment ran" in status["error"]
+    again = client.post("/api/onboarding/provision", headers=session["headers"])  # type: ignore[arg-type]
+    assert again.json()["started"] is True
+    assert client.get("/api/onboarding",
+                      headers=session["headers"]).json()["stack_status"] == "ready"  # type: ignore[arg-type]
+
+
+def test_a_deploy_still_running_here_is_never_called_abandoned(
+    registry: StackRegistry, aws: FakeAws, provisioner: FakeProvisioner
+) -> None:
+    from src.onboarding import service as service_module
+
+    svc = OnboardingService(
+        registry, aws, provisioner,  # type: ignore[arg-type]
+        OnboardingConfig(template_url="https://vendor.example/bootstrap.yaml",
+                         control_plane_role_arn="arn:aws:iam::999999999999:role/control-plane"),
+        runner=lambda run: None,  # started, and never finishes
+    )
+    org = slug()
+    record, _token = registry.register_customer(org)
+    svc._jobs[org] = service_module._Job()
+    registry.set_status(org, StackStatus.PROVISIONING)
+    _age(registry, org, 3)
+    assert svc._abandoned(registry.get(org)) is False
+    svc._jobs[org].done = True
+    assert svc._abandoned(registry.get(org)) is True
+    assert record.org_slug == org
