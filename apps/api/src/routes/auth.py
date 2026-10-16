@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from ..lib.proxy import client_address
 from ..lib.config import get_settings
 from ..lib.db import user_connection
 from ..lib.errors import UnauthorizedError
@@ -212,6 +213,6 @@ async def logout(
             action="auth.logout",
             resource_type="user",
             resource_id=auth.user_id,
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )

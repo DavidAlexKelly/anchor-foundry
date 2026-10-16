@@ -19,6 +19,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Request, status
 from pydantic import BaseModel, Field
 
+from ..lib.proxy import client_address
 from ..lib.db import user_connection
 from ..middleware.permissions import ProjectAccess, WorkspaceAccess, require_project_role, require_workspace_role
 from ..services import audit
@@ -108,7 +109,7 @@ def _record(conn, access: ProjectAccess, request: Request, action: str, row: dic
         workspace_id=access.workspace_id,
         project_id=access.project_id,
         metadata={"name": row["name"], "visibility": row["visibility"]},
-        ip_address=request.client.host if request.client else None,
+        ip_address=client_address(request),
         user_agent=request.headers.get("user-agent"),
     )
 

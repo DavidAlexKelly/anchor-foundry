@@ -27,6 +27,7 @@ from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 
+from ..lib.proxy import client_address
 from ..lib.db import user_connection
 from ..lib.errors import ConflictError
 from ..middleware.permissions import ProjectAccess, require_project_role
@@ -353,7 +354,7 @@ async def upload_dataset(
             project_id=access.project_id,
             metadata={"name": name, "filename": original_name, "rows": row_count,
                       "bytes": len(data)},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return _out(row)
@@ -530,7 +531,7 @@ async def upload_file_into(
                 project_id=access.project_id,
                 metadata={"filename": name, "mode": mode, "rows": rows, "bytes": len(data),
                           "new_version": row["current_version"]},
-                ip_address=request.client.host if request.client else None,
+                ip_address=client_address(request),
                 user_agent=request.headers.get("user-agent"),
             )
             # Last, inside the transaction: a refusal above leaves the file it
@@ -686,7 +687,7 @@ async def update_dataset(
             workspace_id=access.workspace_id,
             project_id=access.project_id,
             metadata=body.model_dump(exclude_none=True),
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return _out(row)
@@ -736,7 +737,7 @@ async def generate_join_table(
             workspace_id=access.workspace_id,
             project_id=access.project_id,
             metadata={"from_type_id": str(body.from_type_id), "to_type_id": str(body.to_type_id)},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return JoinTableOut(dataset=_out(row), from_column=made["from_column"],
@@ -782,7 +783,7 @@ async def fork_dataset(
             workspace_id=access.workspace_id,
             project_id=access.project_id,
             metadata={"source": str(dataset_id), "version": row["forked_from_version"]},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return _out(row)
@@ -811,7 +812,7 @@ async def delete_dataset(
             resource_id=dataset_id,
             workspace_id=access.workspace_id,
             project_id=access.project_id,
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
 
@@ -950,7 +951,7 @@ async def create_expectation(
             project_id=access.project_id,
             metadata={"rule_type": body.rule_type, "column": body.column_name,
                       "severity": body.severity},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return ExpectationOut(**_rule_out(row))
@@ -978,7 +979,7 @@ async def delete_expectation(
             resource_id=dataset_id,
             workspace_id=access.workspace_id,
             project_id=access.project_id,
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
 
@@ -1048,7 +1049,7 @@ async def query_dataset(
             project_id=access.project_id,
             metadata={"sql": body.sql[:200], "rows_returned": result.total_rows,
                       "version": body.version},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return _tabular(result)
@@ -1105,7 +1106,7 @@ async def export_dataset(
             workspace_id=access.workspace_id,
             project_id=access.project_id,
             metadata={"format": format, "bytes": os.path.getsize(sent)},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return FileResponse(sent, media_type=media, filename=filename, background=cleanup,
@@ -1384,7 +1385,7 @@ async def parse_again(
                 # options it is read with now, the entry what was chosen when.
                 metadata={"options": body.model_dump(), "rows": rows,
                           "new_version": row["current_version"]},
-                ip_address=request.client.host if request.client else None,
+                ip_address=client_address(request),
                 user_agent=request.headers.get("user-agent"),
             )
             return _out(await ds_service.get(conn, access.project_id, dataset_id))
@@ -1430,7 +1431,7 @@ async def roll_back_dataset(
                           "connection_id": str(rolled["sync_cursor"]["connection_id"]),
                           "value": rolled["sync_cursor"]["value"],
                       }} if rolled["sync_cursor"] else {})},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
         # Read back rather than shaping `rolled` into a DatasetOut: the row a

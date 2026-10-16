@@ -27,6 +27,7 @@ import anyio
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
+from ..lib.proxy import client_address
 from ..lib.db import user_connection
 from ..lib.errors import ConflictError, NotFoundError
 from ..middleware.permissions import ProjectAccess, require_project_role
@@ -275,7 +276,7 @@ async def create_repository(
             resource_id=row["id"],
             workspace_id=access.workspace_id,
             project_id=access.project_id,
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return RepositoryOut(**row)
@@ -403,7 +404,7 @@ async def merge_branch(
                     "to_commit": str(result["head_commit_id"]),
                     "commits": result["ahead_by"],
                 },
-                ip_address=request.client.host if request.client else None,
+                ip_address=client_address(request),
                 user_agent=request.headers.get("user-agent"),
             )
     return MergeOut(**result)
@@ -1085,7 +1086,7 @@ async def create_tag(
             workspace_id=access.workspace_id,
             project_id=access.project_id,
             metadata={"tag": body.name, "commit_id": str(ref)},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return TagOut(**row, created_by_email=None, commit_message=None)
@@ -1159,7 +1160,7 @@ async def create_commit(
             project_id=access.project_id,
             metadata={"commit_id": str(row["id"]), "branch": body.branch,
                       "files": len(body.files)},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return CommitOut(**{k: row[k] for k in
@@ -1410,7 +1411,7 @@ async def publish_transforms(
                     for s in steps
                 ],
             },
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return PublishPlanOut(

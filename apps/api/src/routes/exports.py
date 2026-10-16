@@ -26,6 +26,7 @@ import anyio
 from fastapi import APIRouter, Depends, Query, Request, status
 from pydantic import BaseModel, Field
 
+from ..lib.proxy import client_address
 from ..lib.cron import next_run_after
 from ..lib.db import user_connection
 from ..lib.errors import ConflictError, NotFoundError
@@ -177,7 +178,7 @@ async def create_export(
             project_id=access.project_id,
             metadata={"name": config["name"], "kind": config["kind"],
                       "mode": config["mode"], "dataset": str(body.dataset_id)},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
         await conn.commit()
@@ -203,7 +204,7 @@ async def delete_export(
             workspace_id=access.workspace_id,
             project_id=access.project_id,
             metadata={"name": existing["name"]},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
         await conn.commit()
@@ -260,7 +261,7 @@ async def set_schedule(
             workspace_id=access.workspace_id,
             project_id=access.project_id,
             metadata={"name": existing["name"], "schedule": cron},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
         await conn.commit()
@@ -371,7 +372,7 @@ async def run_export(
                 "ok": outcome["ok"], "skipped": outcome["skipped"],
                 "rows": outcome["rows_written"], "version": version,
             },
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
         await conn.commit()
