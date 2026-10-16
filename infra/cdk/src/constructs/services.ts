@@ -93,6 +93,18 @@ export const ORIGIN_READ_TIMEOUT_S = 60;
 export const ALB_IDLE_TIMEOUT_S = 75;
 export const TARGET_KEEP_ALIVE_S = 90;
 
+/**
+ * **How long a task leaving the load balancer keeps the requests it has**
+ * (§949). A deploy or a scale-in deregisters a task, and the load balancer
+ * waits this long for its requests to finish before closing them; only then
+ * does ECS stop the task. The API's was 15 seconds, with no reason recorded,
+ * while a request may legitimately run for CloudFront's whole 60 - a sync, a
+ * large preview - so every deploy cut those off with a 502. The web's was
+ * the 300-second default, which only made each deploy wait four minutes more
+ * than any request can last. Both now wait exactly as long as a request can.
+ */
+export const DRAIN_S = ORIGIN_READ_TIMEOUT_S;
+
 export interface ServicesProps {
   readonly vpc: ec2.IVpc;
   readonly dataBucket: s3.IBucket;
@@ -650,6 +662,7 @@ export class ServicesConstruct extends Construct {
       protocol: elbv2.ApplicationProtocol.HTTP,
       targets: [this.webService],
       healthCheck: { path: "/", healthyHttpCodes: "200-399" },
+      deregistrationDelay: Duration.seconds(DRAIN_S),
     });
     this.apiTargetGroup = listener.addTargets("Api", {
       priority: 10,
@@ -658,7 +671,7 @@ export class ServicesConstruct extends Construct {
       protocol: elbv2.ApplicationProtocol.HTTP,
       targets: [this.apiService],
       healthCheck: { path: "/api/health", healthyHttpCodes: "200" },
-      deregistrationDelay: Duration.seconds(15),
+      deregistrationDelay: Duration.seconds(DRAIN_S),
     });
   }
 }
