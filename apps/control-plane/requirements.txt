@@ -14,4 +14,4 @@ starlette==1.7.0
 # own, so it was never listed; 0.142 does not, and the app stopped importing
 # (§837). The version apps/api pins.
 email-validator==2.2.0
-uvicorn[standard]==0.30.3
+uvicorn[standard]==0.30.6
