@@ -51,7 +51,9 @@ from __future__ import annotations
 import csv
 import os
 import re
-from collections.abc import Iterable, Sequence
+import threading
+from collections.abc import Iterable, Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol
 
@@ -166,6 +168,33 @@ class Extract:
     path: str
     extension: str
     empty: bool = False
+
+
+#: **How long one operation on a customer's database may take** (§947). A
+#: connect timeout bounded reaching the source and nothing bounded what came
+#: after: a source that took the connection and then never answered - a table
+#: locked on its side, a view that never finishes, a peer that vanished behind
+#: a NAT - held its API thread until TCP gave up, two hours and more by
+#: default. The API runs these on anyio's forty worker threads, which its
+#: DuckDB work and its storage writes share, so a few such sources stopped the
+#: task. Five minutes is past anything an interactive operation should need -
+#: a snapshot here is capped at 200 MB - and a table that needs longer belongs
+#: on a scheduled sync, which runs on the worker. It is enforced by the client,
+#: not by a server setting, because a source behind PgBouncer refuses the
+#: startup option that would carry `statement_timeout`.
+SOURCE_DEADLINE_S = 300
+
+#: TCP keepalives on every Postgres source connection, so a peer that has gone
+#: is found in about a minute (30 s idle, then three probes ten seconds apart):
+#: the case a cancel cannot help with, since nothing is there to receive it.
+#: These are libpq's own settings and never reach the server.
+_KEEPALIVES = {"keepalives": 1, "keepalives_idle": 30, "keepalives_interval": 10,
+               "keepalives_count": 3}
+
+
+def _deadline_message() -> str:
+    return (f"the source did not finish within {SOURCE_DEADLINE_S} seconds, so this "
+            "operation was stopped - for a table that takes longer, use a scheduled sync")
 
 
 # ---- source preview (decision 0015; `data-connection` p.142-143) -------------
@@ -432,7 +461,38 @@ class PostgresConnector:
             "password": secret.get("password", ""),
             "sslmode": cfg.sslmode,
             "connect_timeout": self._CONNECT_TIMEOUT_S,
+            **_KEEPALIVES,
         }
+
+    @contextmanager
+    def _connect(self, config: dict[str, Any], secret: dict[str, str]) -> Iterator[Any]:
+        """A connection to the source that is cancelled at `SOURCE_DEADLINE_S`
+        (§947). The cancel is a request the server acts on, so a statement
+        waiting on a lock or still computing stops there, and the call in
+        progress raises `QueryCanceled` - worded as the deadline only when it
+        was this watchdog that asked, not someone on the source's side."""
+        import psycopg
+
+        fired = threading.Event()
+        with psycopg.connect(**self._conninfo(config, secret)) as conn:
+            def stop() -> None:
+                fired.set()
+                try:
+                    conn.cancel_safe(timeout=self._CONNECT_TIMEOUT_S)
+                except Exception:  # noqa: BLE001 - a source we cannot reach to
+                    pass           # cancel is what the keepalives are for
+
+            timer = threading.Timer(SOURCE_DEADLINE_S, stop)
+            timer.daemon = True
+            timer.start()
+            try:
+                yield conn
+            except psycopg.errors.QueryCanceled as exc:
+                if fired.is_set():
+                    raise ConnectorOperationError(_deadline_message()) from exc
+                raise
+            finally:
+                timer.cancel()
 
     @staticmethod
     def _operational(exc: Exception) -> ConnectorOperationError:
@@ -449,7 +509,7 @@ class PostgresConnector:
         import psycopg
 
         try:
-            with psycopg.connect(**self._conninfo(config, secret)) as conn:
+            with self._connect(config, secret) as conn:
                 conn.execute("SELECT 1")
         except psycopg.OperationalError as exc:
             raise self._operational(exc) from exc
@@ -478,7 +538,7 @@ class PostgresConnector:
              ORDER BY c.table_schema, c.table_name, c.ordinal_position
         """
         try:
-            with psycopg.connect(**self._conninfo(config, secret)) as conn:
+            with self._connect(config, secret) as conn:
                 rows = conn.execute(sql).fetchall()
                 references = _references(conn.execute(self._FOREIGN_KEYS).fetchall())
         except psycopg.OperationalError as exc:
@@ -553,7 +613,7 @@ class PostgresConnector:
             sql.Literal(PREVIEW_ROWS + 1),
         )
         try:
-            with psycopg.connect(**self._conninfo(config, secret)) as conn:
+            with self._connect(config, secret) as conn:
                 with conn.cursor() as cur:
                     cur.execute(query)
                     columns = [d.name for d in cur.description or []]
@@ -609,7 +669,7 @@ class PostgresConnector:
 
         written = 0
         try:
-            with psycopg.connect(**self._conninfo(config, secret)) as conn:
+            with self._connect(config, secret) as conn:
                 with conn.cursor() as cur, open(dest_csv, "wb") as out:
                     with cur.copy(query) as copy:
                         for chunk in copy:
@@ -655,7 +715,7 @@ class PostgresConnector:
             sql.Identifier(check_identifier(source_table)),
         )
         try:
-            with psycopg.connect(**self._conninfo(config, secret)) as conn:
+            with self._connect(config, secret) as conn:
                 with conn.cursor() as cur:
                     cur.execute(query)
                     row = cur.fetchone()
@@ -685,7 +745,7 @@ class PostgresConnector:
         from psycopg import sql
 
         try:
-            with psycopg.connect(**self._conninfo(config, secret)) as conn:
+            with self._connect(config, secret) as conn:
                 with conn.cursor() as cur:
                     cur.execute(
                         "SELECT column_name FROM information_schema.columns"
@@ -739,7 +799,7 @@ class PostgresConnector:
         )
         written = 0
         try:
-            with psycopg.connect(**self._conninfo(config, secret)) as conn:
+            with self._connect(config, secret) as conn:
                 with conn.cursor() as cur:
                     if truncate:
                         cur.execute(sql.SQL("TRUNCATE TABLE {}").format(target))
@@ -848,6 +908,11 @@ class MySQLConnector:
             "user": cfg.user,
             "password": secret.get("password", ""),
             "connect_timeout": self._CONNECT_TIMEOUT_S,
+            # §947: no reply for this long ends the call. Per read rather than
+            # per operation, which for a stalled source is the same thing, and
+            # a large table still arriving keeps going.
+            "read_timeout": SOURCE_DEADLINE_S,
+            "write_timeout": SOURCE_DEADLINE_S,
             "charset": "utf8mb4",
         }
         if cfg.ssl_mode == "required":
@@ -906,6 +971,8 @@ class MySQLConnector:
             return SourceReadError(f"the connection's user cannot read {qualified}")
         if code == 1054:  # ER_BAD_FIELD_ERROR - a cursor/pk column that isn't there
             return SourceReadError(str(exc.args[1]) if len(exc.args) > 1 else str(exc))
+        if code == 2013 and "timed out" in str(exc):  # CR_SERVER_LOST, by read_timeout
+            return ConnectorOperationError(_deadline_message())
         # Message carries host/user/error code but never the password.
         reason = str(exc).strip().splitlines()[0] if str(exc).strip() else "connection failed"
         return ConnectorOperationError(reason)
