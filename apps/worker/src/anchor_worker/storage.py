@@ -17,6 +17,8 @@ import time
 from pathlib import Path
 from typing import Protocol
 
+from . import aws
+
 # Kept in step with the API's copy (roadmap Objects item 4 widened it to
 # cover object attachments; §358 added `runs` for a model run's log). The
 # worker never reads an attachment today, but a validator that is *narrower*
@@ -169,10 +171,8 @@ class S3StorageGateway:
     bucket's workspaces/* prefix, same as the API's."""
 
     def __init__(self, bucket: str, region: str) -> None:
-        import boto3  # deferred: not installed in local dev
-
         self._bucket = bucket
-        self._client = boto3.client("s3", region_name=region)
+        self._client = aws.client("s3", aws.STORAGE, region_name=region)
 
     def put(self, key: str, data: bytes) -> None:
         validate_key(key)

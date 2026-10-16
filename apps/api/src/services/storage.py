@@ -22,6 +22,8 @@ import time
 from pathlib import Path
 from typing import Protocol
 
+from ..lib import aws
+
 # Three shapes, all anchored to a workspace's own prefix (§16's isolation
 # anchor): dataset bytes, object attachments (roadmap Objects item 4), and a
 # model run's log (§358). Widening this grammar is the only way to store a new
@@ -207,10 +209,8 @@ class S3StorageGateway:
     bucket's workspaces/* prefix (CDK services construct)."""
 
     def __init__(self, bucket: str, region: str) -> None:
-        import boto3  # deferred: not installed in local dev
-
         self._bucket = bucket
-        self._client = boto3.client("s3", region_name=region)
+        self._client = aws.client("s3", aws.STORAGE, region_name=region)
 
     def put(self, key: str, data: bytes) -> None:
         validate_key(key)

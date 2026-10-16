@@ -19,6 +19,7 @@ from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection
 
+from ..lib import aws
 from ..lib.db import fetch_all, fetch_one
 from ..lib.errors import ConflictError, NotFoundError
 
@@ -85,9 +86,7 @@ class Boto3CognitoGateway:
     identifier admin_disable_user needs."""
 
     def __init__(self, user_pool_id: str, region: str) -> None:
-        import boto3
-
-        self._client = boto3.client("cognito-idp", region_name=region)
+        self._client = aws.client("cognito-idp", region_name=region)
         self._user_pool_id = user_pool_id
 
     def admin_create_user(self, email: str, display_name: str) -> str:
