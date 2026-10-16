@@ -417,6 +417,8 @@ The sync pays for it: the trigger, one more index and the `ANALYZE` add about 17
 
 **E.40 — A slow webhook made an action apply twice. Done (§975), S.** Found by setting each in-request limit beside CloudFront's minute (E.31). A webhook fires inside the request of the action it belongs to, and could be given the whole sixty seconds, so one that used them was answered with a 504 while the action went on and applied - and pressing it again sent the call, and its effect on the far end, a second time. A webhook may now take at most 50 seconds, leaving the action its ten; one saved under the old minute is held to 50 when it runs.
 
+**E.41 — A run stopped by the unexpected stayed running. Done (§976), S.** Found while checking what §967 does with a failure nobody waits for. A sync and a SQL model's run from the API close their run for the failures they know - the source refused, the SQL was wrong - but the close came after the work, so anything else left the run running until the abandoned-run sweep, half an hour or an hour later: every DuckDB slot taken past the wait (§911), a storage fault, a bug. Each is now completed whatever stops it. Busy is the platform's state, not a fault, so it is the run's answer in its own sentence rather than a 503; anything else is recorded as stopped and raised as before. An export's run (§968) says busy the same way.
+
 ## Suggested order
 
 **First, out of band:** E.1.

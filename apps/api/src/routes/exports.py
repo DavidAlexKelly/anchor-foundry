@@ -29,6 +29,7 @@ from pydantic import BaseModel, Field
 from ..lib.proxy import client_address
 from ..lib.cron import next_run_after
 from ..lib.db import user_connection
+from ..lib import duck
 from ..lib.long_work import answer_within
 from ..lib.errors import ConflictError, NotFoundError
 from ..middleware.permissions import ProjectAccess, require_project_role
@@ -329,6 +330,14 @@ async def _export_and_record(
     try:
         return await _export(export_id, run_id, export, connection, dataset, version,
                              policies, access, ip_address, user_agent)
+    except duck.Busy as exc:
+        # The platform's state rather than a fault (§976): the run's answer,
+        # in its own sentence.
+        async with user_connection(access.auth.user_id) as conn:
+            run = await export_store.record(
+                conn, export_id=export_id, run_id=run_id, run_by=access.auth.user_id,
+                result={"ok": False, "dataset_version": version, "error": str(exc)})
+        return RunOut(**run)
     except Exception:
         async with user_connection(access.auth.user_id) as conn:
             await export_store.record(

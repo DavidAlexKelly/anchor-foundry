@@ -123,3 +123,21 @@ def test_a_fault_in_the_run_completes_its_row_as_failed(
     [run] = history(client, fx, export_id)
     assert (run["status"], run["error"]) == (
         "failed", "the export stopped unexpectedly; run it again")
+
+
+def test_a_run_the_platform_is_too_busy_for_says_so_and_ends(
+    client: TestClient, fx: Fixture, export_id: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§976: Busy is the platform's state, not a fault, so it is the run's
+    answer in its own sentence rather than "stopped unexpectedly"."""
+    from src.lib import duck
+
+    async def busy(*args, **kwargs):
+        raise duck.Busy("the platform is busy with other work; try again in a moment")
+
+    monkeypatch.setattr(export_runs, "perform", busy)
+    r = post_run(client, fx, export_id)
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "failed" and "busy" in r.json()["error"]
+    [run] = history(client, fx, export_id)
+    assert run["status"] == "failed" and "busy" in run["error"]

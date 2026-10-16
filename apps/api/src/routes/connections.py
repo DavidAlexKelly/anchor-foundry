@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 
 from ..lib.proxy import client_address
 from ..lib.db import user_connection
+from ..lib import duck
 from ..lib.long_work import answer_within
 from ..lib.errors import ConflictError, ForbiddenError
 from ..middleware.permissions import ProjectAccess, require_project_role
@@ -882,17 +883,49 @@ async def trigger_sync(
     return await _answered(
         _sync_table(connection_id, run_id, row, policies, body, access,
                     client_address(request), request.headers.get("user-agent")),
-        run_id, response)
+        run_id, response, access)
 
 
-async def _answered(work: Any, run_id: UUID, response: Response) -> SyncResult:
+async def _answered(
+    work: Any, run_id: UUID, response: Response, access: ProjectAccess
+) -> SyncResult:
     """A sync's own answer if it finishes while one can still reach the
     browser; otherwise a 202 naming its run, which it carries on under (§967)."""
-    result = await answer_within(work)
+    result = await answer_within(_closing(work, run_id, access))
     if result is None:
         response.status_code = status.HTTP_202_ACCEPTED
         return SyncResult(run_id=run_id, ok=None, running=True)
     return result
+
+
+#: What a sync's run says when something it did not expect stopped it (§976).
+STOPPED = "the sync stopped unexpectedly; run it again"
+
+
+async def _closing(work: Any, run_id: UUID, access: ProjectAccess) -> SyncResult:
+    """`work`, with its run completed whatever happens (§976).
+
+    A sync closes its run for the failures it knows - the source refused, the
+    file did not parse - and anything else left it running, because the close
+    is after the work: every DuckDB slot taken past the wait (`duck.Busy`), a
+    storage fault, a bug. The run then read as in flight for half an hour, and
+    a sync carried on past its request (§967) failed where nobody saw it. Busy
+    is the platform's state rather than a fault, so it is the run's answer, in
+    its own sentence; anything else is recorded and raised as it was."""
+    try:
+        return await work
+    except duck.Busy as exc:
+        await _close_failed(run_id, access, str(exc))
+        return SyncResult(run_id=run_id, ok=False, error=str(exc))
+    except Exception:
+        await _close_failed(run_id, access, STOPPED)
+        raise
+
+
+async def _close_failed(run_id: UUID, access: ProjectAccess, error: str) -> None:
+    async with user_connection(access.auth.user_id) as conn:
+        await sync_service.close_run(conn, run_id, ok=False, rows_synced=0, dataset_id=None,
+                                     error=error)
 
 
 async def _sync_table(
@@ -1298,7 +1331,7 @@ async def run_scheduled_sync(
     return await _answered(
         _sync_scheduled(connection_id, run_id, row, policies, schedule, access,
                         client_address(request), request.headers.get("user-agent")),
-        run_id, response)
+        run_id, response, access)
 
 
 async def _sync_scheduled(
@@ -1442,7 +1475,7 @@ async def _run_file_sync(
         _sync_files(connection_id, run_id, row, policies, already, schedule, folder,
                     transaction, filters, access,
                     client_address(request), request.headers.get("user-agent")),
-        run_id, response)
+        run_id, response, access)
 
 
 async def _sync_files(

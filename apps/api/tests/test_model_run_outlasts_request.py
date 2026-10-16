@@ -74,3 +74,43 @@ def test_a_run_that_finishes_in_time_answers_as_it_always_did(
     r = client.post(f"{base(fx)}/models/{model_id}/run", headers=hdr(fx.editor_sub))
     assert r.status_code == 200, r.text
     assert r.json()["status"] == "succeeded" and r.json()["output_dataset"]
+
+
+# ---- a run completed whatever stops it (§976) -------------------------------
+def latest_run(client: TestClient, fx: Fixture, model_id: str) -> dict:
+    return client.get(f"{base(fx)}/models/{model_id}/runs", headers=hdr(fx.viewer_sub)).json()[0]
+
+
+def test_a_run_the_platform_is_too_busy_for_says_so_and_ends(
+    client: TestClient, fx: Fixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from src.lib import duck
+    from src.routes import models as model_routes
+
+    def busy(*args, **kwargs):
+        raise duck.Busy("the platform is busy with other work; try again in a moment")
+
+    model_id = a_model(client, fx)
+    monkeypatch.setattr(model_routes.engine, "run_transform", busy)
+    r = client.post(f"{base(fx)}/models/{model_id}/run", headers=hdr(fx.editor_sub))
+    assert r.status_code == 200, r.text
+    assert (r.json()["status"], r.json()["ok"]) == ("failed", False)
+    run = latest_run(client, fx, model_id)
+    assert run["status"] == "failed" and "busy" in run["error_message"]
+
+
+def test_a_run_something_unexpected_stopped_is_not_left_running(
+    client: TestClient, fx: Fixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from src.routes import models as model_routes
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("a bug in the run")
+
+    model_id = a_model(client, fx)
+    monkeypatch.setattr(model_routes.engine, "run_transform", broken)
+    with pytest.raises(RuntimeError, match="a bug in the run"):
+        client.post(f"{base(fx)}/models/{model_id}/run", headers=hdr(fx.editor_sub))
+    run = latest_run(client, fx, model_id)
+    assert (run["status"], run["error_message"]) == (
+        "failed", "the run stopped unexpectedly; run it again")
