@@ -423,6 +423,8 @@ The sync pays for it: the trigger, one more index and the `ANALYZE` add about 17
 
 **E.43 — A database failover had ECS replace every API task. Done (§980), S.** Found by reading the load balancer's health check beside §956's. `/api/health` asks the database, so a database that does not answer fails every task's check at once, and with the load balancer's defaults - unhealthy after two misses thirty seconds apart, healthy after five passes - a failover or a single-AZ reboot of a minute or two had ECS replace every API task, whose replacements then needed two and a half minutes of passes once the database was back. The API's check may now miss ten times, five minutes, before a task is replaced, and two passes bring it back; `stack-check.ts` holds both and that the API's own wait for the database stays inside the load balancer's. A process that dies is replaced at once, as before.
 
+**E.44 — Nothing held the services' connections under the database's limit. Done (§981), S.** Each API task's pool may hold thirty connections, a deploy runs old and new tasks side by side, and the database's `max_connections` is set by its class's memory: at the six tasks a stack may scale to, a deploy at a busy hour can hold 385 connections against the 402 a `db.t4g.medium` takes. That fits, with little to spare, and nothing said so: `scaling-check.ts` now sums every connection the services can hold at once - pools, health checks, the worker's runs, the migration - against the class's limit, so raising `API_TASKS.max` or a pool past it fails the build. Past it, the remedy is a larger class or RDS Proxy, not a larger number.
+
 ## Suggested order
 
 **First, out of band:** E.1.
