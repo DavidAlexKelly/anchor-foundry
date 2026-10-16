@@ -25,6 +25,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ..lib.proxy import client_address
 from ..lib.db import user_connection
+from ..lib import duck
 from ..lib.long_work import answer_within
 from ..lib.errors import ForbiddenError
 from ..middleware.permissions import (
@@ -395,14 +396,37 @@ async def run_model(
             input_paths[str(item["input_alias"])] = path
         run_id = await model_service.open_run(conn, model_id, access.auth.user_id, seen)
 
-    finished = await answer_within(_run_sql(
+    finished = await answer_within(_closing(_run_sql(
         model_id, run_id, model, input_paths, storage, access,
-        client_address(request), request.headers.get("user-agent")))
+        client_address(request), request.headers.get("user-agent")), run_id, access))
     if finished is None:
         response.status_code = status.HTTP_202_ACCEPTED
         return RunResult(run_id=run_id, status="running", ok=True, error=None,
                          rows_produced=0, output_dataset=None)
     return finished
+
+
+async def _closing(work: Any, run_id: UUID, access: ProjectAccess) -> RunResult:
+    """`work`, with its run completed whatever happens (§976): a run closes
+    itself for the failures it knows, and anything else - every DuckDB slot
+    taken past the wait, a storage fault - left it running for an hour.
+    Busy is the platform's state, so it is the run's answer, in its own
+    sentence; anything else is recorded and raised as it was."""
+    try:
+        return await work
+    except duck.Busy as exc:
+        await _close_failed(run_id, access, str(exc))
+        return RunResult(run_id=run_id, status="failed", ok=False, error=str(exc),
+                         rows_produced=0, output_dataset=None)
+    except Exception:
+        await _close_failed(run_id, access, "the run stopped unexpectedly; run it again")
+        raise
+
+
+async def _close_failed(run_id: UUID, access: ProjectAccess, error: str) -> None:
+    async with user_connection(access.auth.user_id) as conn:
+        await model_service.close_run(conn, run_id, ok=False, rows_produced=None,
+                                      output_version_id=None, error=error)
 
 
 async def _run_sql(

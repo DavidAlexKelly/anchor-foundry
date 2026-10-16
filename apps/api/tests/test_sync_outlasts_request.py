@@ -167,3 +167,43 @@ def test_a_failure_nobody_is_waiting_for_is_logged(caplog: pytest.LogCaptureFixt
     asyncio.run(request_then_shutdown())
     assert "outlasted its request failed" in caplog.text
     assert "the source went away" in caplog.text
+
+
+# ---- a run completed whatever stops it (§976) -------------------------------
+def latest_run(client: TestClient, fx: Fixture, connection_id: str) -> dict:
+    return client.get(f"{cbase(fx)}/{connection_id}/sync-runs", headers=hdr(fx.viewer_sub)).json()[0]
+
+
+def test_a_sync_the_platform_is_too_busy_for_says_so_and_ends(
+    client: TestClient, fx: Fixture, connection_id: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from src.lib import duck
+    from src.services import sync as sync_service
+
+    def busy(*args, **kwargs):
+        raise duck.Busy("the platform is busy with other work; try again in a moment")
+
+    monkeypatch.setattr(sync_service, "snapshot_source_table", busy)
+    r = client.post(f"{cbase(fx)}/{connection_id}/sync", headers=hdr(fx.editor_sub),
+                    json={"source_table": "orders"})
+    assert r.status_code == 200, r.text
+    assert r.json()["ok"] is False and "busy" in r.json()["error"]
+    run = latest_run(client, fx, connection_id)
+    assert (run["id"], run["status"]) == (r.json()["run_id"], "failed")
+    assert "busy" in run["error"]
+
+
+def test_a_sync_something_unexpected_stopped_is_not_left_running(
+    client: TestClient, fx: Fixture, connection_id: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from src.services import sync as sync_service
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("a bug in the sync")
+
+    monkeypatch.setattr(sync_service, "snapshot_source_table", broken)
+    with pytest.raises(RuntimeError, match="a bug in the sync"):
+        client.post(f"{cbase(fx)}/{connection_id}/sync", headers=hdr(fx.editor_sub),
+                    json={"source_table": "orders"})
+    run = latest_run(client, fx, connection_id)
+    assert (run["status"], run["error"]) == ("failed", "the sync stopped unexpectedly; run it again")
