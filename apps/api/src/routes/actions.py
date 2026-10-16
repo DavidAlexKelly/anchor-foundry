@@ -28,6 +28,7 @@ import anyio
 from fastapi import APIRouter, Depends, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ..lib.proxy import client_address
 from ..lib.db import fetch_one, user_connection
 from ..middleware.permissions import ProjectAccess, WorkspaceAccess, require_project_role, require_workspace_role
 from ..services import action_metrics, property_reducers
@@ -627,7 +628,7 @@ async def create_action_type(
                 **({"interface_id": str(body.interface_id)}
                    if body.interface_id else {}),
             },
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     fields = await _struct_fields_by_action(access, [row])
@@ -688,7 +689,7 @@ async def update_action_type(
                 resource_id=action_type_id,
                 workspace_id=access.workspace_id,
                 metadata={"display_name": body.display_name},
-                ip_address=request.client.host if request.client else None,
+                ip_address=client_address(request),
                 user_agent=request.headers.get("user-agent"),
             )
         # **Always called, even when only the name changed**, because it is also
@@ -713,7 +714,7 @@ async def update_action_type(
                 resource_id=action_type_id,
                 workspace_id=access.workspace_id,
                 metadata={"status": row["status"]},
-                ip_address=request.client.host if request.client else None,
+                ip_address=client_address(request),
                 user_agent=request.headers.get("user-agent"),
             )
     fields = await _struct_fields_by_action(access, [row])
@@ -738,7 +739,7 @@ async def delete_action_type(
             resource_type="action_type",
             resource_id=action_type_id,
             workspace_id=access.workspace_id,
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
 
@@ -853,7 +854,7 @@ async def set_action_definition(
                 "rules": len(body.rules),
                 "criteria": len(body.criteria),
             },
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     fields = await _struct_fields_by_action(access, [row])
@@ -1423,7 +1424,7 @@ async def set_action_sections(
             resource_id=action_type_id,
             workspace_id=access.workspace_id,
             metadata={"sections": len(body.sections)},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return [SectionOut(**row) for row in rows]
@@ -1716,7 +1717,7 @@ async def enable_action_log(
             workspace_id=access.workspace_id,
             project_id=access.project_id,
             metadata={"log_object_type_id": str(made["log_object_type_id"])},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return ActionLogOut(**made)
@@ -1747,7 +1748,7 @@ async def set_action_log_summary(
             resource_type="action_type",
             resource_id=action_type_id,
             workspace_id=access.workspace_id,
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return ActionLogSummaryIn(summary=summary)
@@ -2064,7 +2065,7 @@ async def undo_action(
             workspace_id=access.workspace_id,
             project_id=access.project_id,
             metadata={"run_id": str(run_id), "undo_run_id": str(undo_run_id), "ok": ok},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     if not ok:
@@ -3935,7 +3936,7 @@ async def _finish_row(
                     "instance_id": str(instance_id), "ok": ok,
                     "properties": list(submitted.keys()),
                 },
-                ip_address=request.client.host if request.client else None,
+                ip_address=client_address(request),
                 user_agent=request.headers.get("user-agent"),
             )
             # **p.32's write, counted once for the submission** (§320): "one write
@@ -4544,7 +4545,7 @@ async def execute_batch(
             metadata={
                 "batch_id": str(batch_id), "rows": len(planned), "ok": ok,
             },
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return BatchResult(
@@ -4706,7 +4707,7 @@ async def execute_rows(
                 workspace_id=access.workspace_id,
                 project_id=access.project_id,
                 metadata={"batch_id": str(batch_id), "rows": len(prepared), "ok": ok},
-                ip_address=request.client.host if request.client else None,
+                ip_address=client_address(request),
                 user_agent=request.headers.get("user-agent"),
             )
         return RowsResult(ok=ok, error=error, batch_id=batch_id,

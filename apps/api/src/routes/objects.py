@@ -35,6 +35,7 @@ from fastapi import status as status_codes
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field
 
+from ..lib.proxy import client_address
 from ..lib.cron import next_run_after
 from ..lib.db import user_connection
 from ..middleware.permissions import ProjectAccess, WorkspaceAccess, require_project_role, require_workspace_role
@@ -796,7 +797,7 @@ async def create_object_type(
             resource_id=row["id"],
             workspace_id=access.workspace_id,
             metadata={"api_name": body.api_name, "properties": len(body.properties)},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return ObjectTypeDetail(**row, properties=[PropertyOut(**p) for p in props])
@@ -943,7 +944,7 @@ async def update_object_type(
             workspace_id=access.workspace_id,
             metadata={"properties": len(body.properties),
                       "acknowledged_breaking": body.acknowledge_breaking},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return detail
@@ -995,7 +996,7 @@ async def restore_object_type_version(
             workspace_id=access.workspace_id,
             metadata={"restored_from": version_number,
                       "acknowledged_breaking": body.acknowledge_breaking},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return detail
@@ -1029,7 +1030,7 @@ async def delete_object_type(
             resource_type="object_type",
             resource_id=type_id,
             workspace_id=access.workspace_id,
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
 
@@ -1144,7 +1145,7 @@ async def set_edit_history_setting(
             resource_id=type_id,
             workspace_id=access.workspace_id,
             metadata={"enabled": body.enabled},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return EditHistorySetting(since=since)
@@ -1244,7 +1245,7 @@ async def set_object_view(
                 "canvas_app_id": str(body.canvas_app_id),
                 "form_factor": body.form_factor,
             },
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return ObjectViewOut(**row)
@@ -1275,7 +1276,7 @@ async def set_object_view_tabs(
             resource_id=type_id,
             workspace_id=access.workspace_id,
             metadata={"canvas_app_ids": [str(tab.canvas_app_id) for tab in body.tabs]},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return ObjectViewOut(**row)
@@ -1309,7 +1310,7 @@ async def clear_object_view(
             resource_id=type_id,
             workspace_id=access.workspace_id,
             metadata={"form_factor": form_factor},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
 
@@ -1486,7 +1487,7 @@ async def apply_ontology_import(
             metadata={key: len(report[key]) for key in (
                 "added", "updated", "links_added", "links_updated",
                 "actions_added", "actions_updated")},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return report
@@ -2324,7 +2325,7 @@ async def upload_attachment(
             resource_id=None,
             workspace_id=access.workspace_id,
             metadata={"filename": safe_name, "size": len(data)},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return AttachmentOut(
@@ -2705,7 +2706,7 @@ async def create_value_type(
             resource_id=row["id"],
             workspace_id=access.workspace_id,
             metadata={"api_name": body.api_name, "base_type": body.base_type},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return ValueTypeOut(**row)
@@ -2765,7 +2766,7 @@ async def update_value_type(
             resource_id=value_type_id,
             workspace_id=access.workspace_id,
             metadata={"api_name": row["api_name"], "status": row["status"]},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return ValueTypeOut(**row)
@@ -2803,7 +2804,7 @@ async def add_value_type_version(
             workspace_id=access.workspace_id,
             metadata={"version_number": row["version_number"],
                       "usage_count": row["usage_count"]},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return ValueTypeOut(**row)
@@ -2832,7 +2833,7 @@ async def delete_value_type(
             # The number that answers "what did that delete do" - these
             # properties are no longer constrained by anything.
             metadata={"unconstrained_properties": len(users)},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -3139,7 +3140,7 @@ async def set_interface_action_control(
             resource_id=type_id,
             workspace_id=access.workspace_id,
             metadata={"disabled": [str(d) for d in body.disabled]},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return [InheritedActionOut(**r) for r in rows]
@@ -3211,7 +3212,7 @@ async def request_promotion(
             resource_id=row["object_type_id"],
             workspace_id=access.workspace_id,
             metadata={"request_id": str(row["id"]), "api_name": row["object_type_api_name"]},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return PromotionRequestOut(**row)
@@ -3240,7 +3241,7 @@ async def approve_promotion(
             resource_id=row["object_type_id"],
             workspace_id=access.workspace_id,
             metadata={"request_id": str(row["id"]), "api_name": row["object_type_api_name"]},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return PromotionRequestOut(**row)
@@ -3268,7 +3269,7 @@ async def reject_promotion(
             resource_id=row["object_type_id"],
             workspace_id=access.workspace_id,
             metadata={"request_id": str(row["id"]), "api_name": row["object_type_api_name"]},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return PromotionRequestOut(**row)
@@ -3295,7 +3296,7 @@ async def withdraw_promotion(
             resource_id=row["object_type_id"],
             workspace_id=access.workspace_id,
             metadata={"request_id": str(row["id"]), "api_name": row["object_type_api_name"]},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return PromotionRequestOut(**row)
@@ -3359,7 +3360,7 @@ async def create_interface(
             resource_id=row["id"],
             workspace_id=access.workspace_id,
             metadata={"api_name": body.api_name},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return InterfaceDetail(**row)
@@ -3391,7 +3392,7 @@ async def update_interface(
             resource_id=interface_id,
             workspace_id=access.workspace_id,
             metadata={"api_name": row["api_name"], "properties": len(body.properties)},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return InterfaceDetail(**row)
@@ -3422,7 +3423,7 @@ async def delete_interface(
             resource_id=interface_id,
             workspace_id=access.workspace_id,
             metadata={"api_name": gone["api_name"]},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
 
@@ -3475,7 +3476,7 @@ async def set_implementations(
             resource_id=type_id,
             workspace_id=access.workspace_id,
             metadata={"interfaces": len(body)},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return [ImplementationOut(**r) for r in rows]
@@ -3629,7 +3630,7 @@ async def create_shared_property(
             resource_id=row["id"],
             workspace_id=access.workspace_id,
             metadata={"api_name": body.api_name, "data_type": body.data_type},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return SharedPropertyOut(**row)
@@ -3680,7 +3681,7 @@ async def update_shared_property(
             resource_id=shared_id,
             workspace_id=access.workspace_id,
             metadata={"usage_count": row["usage_count"]},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return SharedPropertyOut(**row)
@@ -3717,7 +3718,7 @@ async def delete_shared_property(
             resource_id=shared_id,
             workspace_id=access.workspace_id,
             metadata={"reverted_properties": len(users)},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -3811,7 +3812,7 @@ async def create_object_type_group(
             resource_id=row["id"],
             workspace_id=access.workspace_id,
             metadata={"api_name": body.api_name},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return ObjectTypeGroupOut(**row)
@@ -3843,7 +3844,7 @@ async def update_object_type_group(
             resource_id=group_id,
             workspace_id=access.workspace_id,
             metadata={"member_count": row["member_count"]},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return ObjectTypeGroupOut(**row)
@@ -3879,7 +3880,7 @@ async def delete_object_type_group(
             resource_id=group_id,
             workspace_id=access.workspace_id,
             metadata={"unclassified_object_types": current["member_count"]},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -3927,7 +3928,7 @@ async def set_object_type_group_members(
             resource_id=group_id,
             workspace_id=access.workspace_id,
             metadata={"member_count": len(rows)},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return [ObjectTypeGroupMemberOut(**r) for r in rows]
@@ -3997,7 +3998,7 @@ async def bulk_set_object_type_status(
                 "status": body.status,
                 "apply_to_properties": body.apply_to_properties,
             },
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     wanted = {str(t) for t in body.object_type_ids}
@@ -4036,7 +4037,7 @@ async def bulk_set_property_status(
             resource_id=type_id,
             workspace_id=access.workspace_id,
             metadata={"count": len(set(body.api_names)), "status": body.status},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return detail.properties
@@ -4093,7 +4094,7 @@ async def set_groups_for_object_type(
             resource_id=type_id,
             workspace_id=access.workspace_id,
             metadata={"group_count": len(rows)},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return [ObjectTypeGroupRef(**r) for r in rows]
@@ -4150,7 +4151,7 @@ async def create_link_type(
             resource_id=row["id"],
             workspace_id=access.workspace_id,
             metadata={"api_name": body.api_name, "cardinality": body.cardinality},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return LinkTypeOut(
@@ -4200,7 +4201,7 @@ async def update_link_join(
             resource_id=link_id,
             workspace_id=access.workspace_id,
             metadata={"from_property": row["from_property"], "to_property": row["to_property"]},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return LinkTypeOut(**row)
@@ -4572,7 +4573,7 @@ async def delete_link_type(
             resource_type="link_type",
             resource_id=link_id,
             workspace_id=access.workspace_id,
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
 
@@ -4618,7 +4619,7 @@ async def create_source(
             workspace_id=access.workspace_id,
             project_id=access.project_id,
             metadata={"object_type_id": str(body.object_type_id), "dataset_id": str(body.dataset_id)},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return _source_out(
@@ -4643,7 +4644,7 @@ async def delete_source(
             resource_id=source_id,
             workspace_id=access.workspace_id,
             project_id=access.project_id,
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
 
@@ -4793,7 +4794,7 @@ async def sync_source(
                 **({"missing_required": missing} if missing else {}),
                 **({"constraint_violations": violations} if violations else {}),
             },
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return SyncResult(
@@ -4944,7 +4945,7 @@ async def set_series(
             project_id=access.project_id,
             metadata={"property": body.property_api_name,
                       "dataset_id": str(body.dataset_id)},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
         return SeriesOut(**{**row, "dataset_name": dataset["name"]})
@@ -4974,7 +4975,7 @@ async def clear_series(
             workspace_id=access.workspace_id,
             project_id=access.project_id,
             metadata={"property": property_api_name},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
 
@@ -5371,7 +5372,7 @@ async def set_source_schedule(
             workspace_id=access.workspace_id,
             project_id=access.project_id,
             metadata={"cron_schedule": body.cron_schedule},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return SourceScheduleOut(**row)
@@ -5394,7 +5395,7 @@ async def clear_source_schedule(
             resource_id=source_id,
             workspace_id=access.workspace_id,
             project_id=access.project_id,
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return SourceScheduleOut(**row)

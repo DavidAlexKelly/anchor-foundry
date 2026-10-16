@@ -13,6 +13,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Request, Response, status
 from pydantic import BaseModel, Field
 
+from ..lib.proxy import client_address
 from ..lib.db import user_connection
 from ..middleware.permissions import WorkspaceAccess, require_workspace_role
 from ..services import audit
@@ -144,7 +145,7 @@ async def create_function(
             resource_id=row["id"],
             workspace_id=access.workspace_id,
             metadata={"api_name": body.api_name, "version": body.version.version},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return FunctionOut(**row)
@@ -172,7 +173,7 @@ async def add_function_version(
             resource_id=function_id,
             workspace_id=access.workspace_id,
             metadata={"version": body.version},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return FunctionOut(**row)
@@ -198,7 +199,7 @@ async def update_function(
             resource_id=function_id,
             workspace_id=access.workspace_id,
             metadata={"api_name": row["api_name"]},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return FunctionOut(**row)
@@ -222,7 +223,7 @@ async def delete_function(
             resource_id=function_id,
             workspace_id=access.workspace_id,
             metadata={},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return Response(status_code=status.HTTP_204_NO_CONTENT)

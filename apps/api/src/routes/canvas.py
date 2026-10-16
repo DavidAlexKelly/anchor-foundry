@@ -23,6 +23,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
+from ..lib.proxy import client_address
 from ..lib.db import user_connection
 from ..lib.errors import ForbiddenError, NotFoundError
 from ..middleware.permissions import (
@@ -343,7 +344,7 @@ async def create_app(
             workspace_id=access.workspace_id,
             project_id=access.project_id,
             metadata={"name": body.name},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return _out(row)
@@ -380,7 +381,7 @@ async def update_app(
             workspace_id=access.workspace_id,
             project_id=access.project_id,
             metadata={"name": body.name},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return _out(row)
@@ -403,7 +404,7 @@ async def delete_app(
             resource_id=app_id,
             workspace_id=access.workspace_id,
             project_id=access.project_id,
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
 
@@ -674,7 +675,7 @@ async def save_definition(
             workspace_id=access.workspace_id,
             project_id=access.project_id,
             metadata={"version": row["current_version"]},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return _out(row)
@@ -753,7 +754,7 @@ async def publish_version(
             workspace_id=access.workspace_id,
             project_id=access.project_id,
             metadata={"version": version_number},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return _out(row)
@@ -782,7 +783,7 @@ async def revert_to_version(
             workspace_id=access.workspace_id,
             project_id=access.project_id,
             metadata={"reverted_to": version_number},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return _out(row)
@@ -837,7 +838,7 @@ async def create_branch(
             workspace_id=access.workspace_id,
             project_id=access.project_id,
             metadata={"branch": body.name, "base_version": row["base_version"]},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return _branch(row, access)
@@ -913,7 +914,7 @@ async def merge_branch(
             workspace_id=access.workspace_id,
             project_id=access.project_id,
             metadata={"branch": name, "version": row["current_version"]},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return _out(row)
@@ -989,7 +990,7 @@ async def _audit_branch(conn, access: ProjectAccess, request: Request, app_id: U
         workspace_id=access.workspace_id,
         project_id=access.project_id,
         metadata={"branch": name},
-        ip_address=request.client.host if request.client else None,
+        ip_address=client_address(request),
         user_agent=request.headers.get("user-agent"),
     )
 
@@ -1020,7 +1021,7 @@ async def set_protection(
             workspace_id=access.workspace_id,
             project_id=access.project_id,
             metadata={"protected": body.protected},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return _out(row)
@@ -1403,7 +1404,7 @@ async def set_publish_scope(
             workspace_id=access.workspace_id,
             project_id=access.project_id,
             metadata={"scope": body.scope, "groups": len(body.group_ids)},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return _out(row)

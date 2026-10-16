@@ -15,6 +15,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Request, status
 from pydantic import BaseModel, Field
 
+from ..lib.proxy import client_address
 from ..lib.db import user_connection
 from ..middleware.auth import AuthContext, get_current_user
 from ..middleware.permissions import (
@@ -131,7 +132,7 @@ async def create_workspace(
             resource_id=row["id"],
             workspace_id=row["id"],
             metadata={"name": body.name, "slug": row["slug"]},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return WorkspaceDetail(**{**row, "effective_role": "admin"})
@@ -174,7 +175,7 @@ async def update_workspace(
             resource_id=access.workspace_id,
             workspace_id=access.workspace_id,
             metadata=body.model_dump(exclude_none=True),
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return WorkspaceDetail(**{**row, "effective_role": access.role})
@@ -196,7 +197,7 @@ async def delete_workspace(
             resource_type="workspace",
             resource_id=workspace_id,
             workspace_id=workspace_id,
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
 
@@ -266,7 +267,7 @@ async def add_member(
             workspace_id=access.workspace_id,
             metadata={"role": body.role, "user_id": str(body.user_id) if body.user_id else None,
                       "group_id": str(body.group_id) if body.group_id else None},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     row.setdefault("email", None)
@@ -293,7 +294,7 @@ async def update_member(
             resource_id=member_id,
             workspace_id=access.workspace_id,
             metadata={"role": body.role},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     row.setdefault("email", None)
@@ -318,6 +319,6 @@ async def remove_member(
             resource_type="workspace_member",
             resource_id=member_id,
             workspace_id=access.workspace_id,
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )

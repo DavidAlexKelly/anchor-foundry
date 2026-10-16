@@ -29,6 +29,7 @@ import anyio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
+from ..lib import proxy as _proxy
 from ..lib.db import fetch_all, fetch_one
 from ..lib.errors import NotFoundError
 from .secrets import SecretsGateway
@@ -433,18 +434,9 @@ def address_allowed(address: str | None, allowlist: list[str]) -> bool:
     return any(ip in ipaddress.ip_network(entry) for entry in allowlist)
 
 
-def sender_address(peer: str | None, forwarded_for: str | None, hops: int) -> str | None:
-    """The address that sent the request, behind `hops` proxies.
-
-    Each proxy appends the address it heard from to X-Forwarded-For, so the
-    entry `hops` from the right is the one the nearest trusted proxy wrote;
-    everything to its left came from the sender and proves nothing. With no
-    proxies it is the peer itself. Fewer entries than hops is an address
-    nobody vouched for."""
-    if hops <= 0:
-        return peer
-    entries = [e.strip() for e in (forwarded_for or "").split(",") if e.strip()]
-    return entries[-hops] if len(entries) >= hops else None
+#: The address a request came from, behind its proxies: `lib/proxy.py`, since
+#: the audit log reads it too (§955).
+sender_address = _proxy.sender_address
 
 
 async def set_allowlist(conn: AsyncConnection, project_id: UUID, listener_id: UUID,

@@ -289,7 +289,7 @@ cdk deploy -c originAccess=vpc ...
 - The distribution's origin becomes that VPC origin.
 - `LISTENER_PROXY_HOPS` goes from 1 to 2. A listener's allowlist then sees the
   sender's own address, the one CloudFront writes, instead of the CloudFront
-  edge's (§850).
+  edge's (§850), and so does the audit log's address for each action (§955).
 
 Without the flag a stack synthesizes exactly as before. The construct check
 compares the two (`src/checks/stack-check.ts`). **This has not been deployed
@@ -397,6 +397,7 @@ missing files.
 | `OIDC_ISSUER`, `OIDC_SIGNING_KEY`, `OIDC_SIGNING_KEY_SECRET` | platform API and worker | The platform as an OIDC identity provider for source systems (§599): the issuer URL (`https://<host>/api/oidc`), and the signing key, the same for every task. A stack sets the issuer to its distribution's address and `OIDC_SIGNING_KEY_SECRET` to a secret under `anchor/connections/` (§871). The first API task to need a key makes an RSA key and stores it there, and every other task and the worker sign with that one. `OIDC_SIGNING_KEY`, an RSA private key in PEM, takes precedence when given. With neither, a source configured for OIDC is refused with a sentence naming them |
 | `LOG_LEVEL` | platform API | Level for the API's structured `anchor.*` log lines; defaults to `INFO` (§802) |
 | `OPENSEARCH_ENDPOINT`, `OPENSEARCH_SECRET_ARN` | platform API and worker | Both set: objects are read and written in OpenSearch, the secret holding `{"username", "password"}`. Either unset: Postgres. The two services read the pair the same way, so they cannot disagree about where objects live (§811). A stack sets the endpoint always, and the secret only when deployed with `-c objectStore=opensearch` (§814) |
+| `LISTENER_PROXY_HOPS` | platform API | How many proxies stand in front of the API: 1 behind a public load balancer, 2 behind CloudFront's VPC origin, unset (0) in development. The address a request is taken to come from is the `X-Forwarded-For` entry that many from the right, the one the nearest trusted proxy wrote: a listener's allowlist checks it (§850) and the audit log records it (§955). The stack sets it from the load balancer's scheme |
 | `STATEMENT_TIMEOUT_MS` | platform API | The longest one SQL statement may run before Postgres cancels it and the request gets a 503; defaults to `30000`, half of CloudFront's 60-second origin timeout, and `0` turns it off. The operator commands (`instance_cutover`, `restore_check`) default it to `0` themselves (§833) |
 | `IDLE_IN_TRANSACTION_TIMEOUT_MS` | platform API | How long a connection may sit in an open transaction between statements before Postgres ends the transaction, rolling it back and releasing its locks; defaults to `600000` (ten minutes), and `0` turns it off. The operator commands default it to `0` themselves (§946) |
 | `UVICORN_TIMEOUT_KEEP_ALIVE`, `KEEP_ALIVE_TIMEOUT` | platform API, web | How long the API (seconds) and the web server (milliseconds) keep an idle connection: 90 s on a stack, past the load balancer's 75, which is past CloudFront's 60-second wait for an answer (§918; `stack-check.ts` holds the order). Their default of 5 s let the load balancer send a request down a connection the server had just closed, a 502 for nothing |

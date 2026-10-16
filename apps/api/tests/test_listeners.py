@@ -1032,15 +1032,15 @@ def test_the_sender_is_the_entry_the_nearest_trusted_proxy_wrote() -> None:
 
 
 def test_the_proxy_count_is_read_from_the_environment(monkeypatch) -> None:
-    from src.routes import listeners as listener_routes
+    from src.lib import proxy
     monkeypatch.delenv("LISTENER_PROXY_HOPS", raising=False)
-    assert listener_routes._proxy_hops() == 0
+    assert proxy.proxy_hops() == 0
     monkeypatch.setenv("LISTENER_PROXY_HOPS", "2")
-    assert listener_routes._proxy_hops() == 2
+    assert proxy.proxy_hops() == 2
     # A value that is not a count is no proxies, not a failed request.
     for raw in ("", "one", "-1", "1.5"):
         monkeypatch.setenv("LISTENER_PROXY_HOPS", raw)
-        assert listener_routes._proxy_hops() == 0, raw
+        assert proxy.proxy_hops() == 0, raw
 
 
 # ---- §521: the rate limit (p.261) ----------------------------------------------
