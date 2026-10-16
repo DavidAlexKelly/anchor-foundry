@@ -380,17 +380,23 @@ def _limits(config: dict[str, Any]) -> dict[str, Any]:
     return {"max_concurrent": concurrent, "rate_limit": rate, "rate_window": window}
 
 
+#: The longest a webhook may take (§975). Ours, not the document's: a webhook
+#: fires inside a request somebody is waiting on (decision 0012 §3), and
+#: CloudFront gives that request sixty seconds (E.31). A minute was the bound
+#: until the action around the call was counted: a webhook allowed the whole
+#: minute was answered with a 504 while the action went on and applied, and
+#: the obvious retry sent the call - and its effect on the far end - twice.
+#: Fifty leaves the action its ten.
+MAX_TIMEOUT_S = 50
+
+
 def _timeout(raw: Any) -> int:
     try:
         seconds = int(raw)
     except (TypeError, ValueError):
         raise WebhookError("the timeout must be a whole number of seconds") from None
-    if not 1 <= seconds <= 60:
-        # The upper bound is the one that matters and it is ours, not the
-        # document's: a webhook fires inside a request somebody is waiting on
-        # (decision 0012 §3), so a timeout longer than a minute is a way to
-        # make an action look hung.
-        raise WebhookError("the timeout must be between 1 and 60 seconds")
+    if not 1 <= seconds <= MAX_TIMEOUT_S:
+        raise WebhookError(f"the timeout must be between 1 and {MAX_TIMEOUT_S} seconds")
     return seconds
 
 

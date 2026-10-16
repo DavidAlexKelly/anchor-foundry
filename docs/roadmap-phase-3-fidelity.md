@@ -415,6 +415,8 @@ The sync pays for it: the trigger, one more index and the `ANALYZE` add about 17
 
 **E.39 — Every code test and preview run was kept for good. Done (§972), S.** Found while looking for tables nothing empties, after E.30. A test run stores the repository's whole working set, up to 4 MB, and a preview its file and the rows it produced, one row a press, and the panels only ever read a branch's or a file's newest ten. A team running tests all day added hundreds of megabytes a day to the database. A nightly sweep (`jobs/code_run_pruning.py`, db 0173) now deletes a run that has finished, is a month old and is not among the newest ten of its branch or file, a batch at a time.
 
+**E.40 — A slow webhook made an action apply twice. Done (§975), S.** Found by setting each in-request limit beside CloudFront's minute (E.31). A webhook fires inside the request of the action it belongs to, and could be given the whole sixty seconds, so one that used them was answered with a 504 while the action went on and applied - and pressing it again sent the call, and its effect on the far end, a second time. A webhook may now take at most 50 seconds, leaving the action its ten; one saved under the old minute is held to 50 when it runs.
+
 ## Suggested order
 
 **First, out of band:** E.1.

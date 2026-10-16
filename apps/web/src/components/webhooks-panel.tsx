@@ -320,7 +320,7 @@ function WebhookDialog({
       <div className="row" style={{ gap: 8, alignItems: "flex-end" }}>
         <Field label="Timeout (seconds)">
           <input
-            type="number" min={1} max={60}
+            type="number" min={1} max={50}
             data-testid="webhook-timeout"
             value={draft.timeout_seconds}
             onChange={(e) => patch({ timeout_seconds: Number(e.target.value) })}
