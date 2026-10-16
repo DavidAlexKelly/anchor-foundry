@@ -317,6 +317,25 @@ def test_update_rotates_secret_and_resets_status(
     assert gateway.get_secret(arn)["password"] == SOURCE_PASSWORD
 
 
+def test_a_corrected_password_is_used_at_once(
+    client: TestClient, fx: Fixture, source_database: dict[str, object]
+) -> None:
+    """§960: credentials are kept for thirty seconds after they are read, so
+    the edit that fixes them has to be what this task uses next - not the
+    wrong ones a failed test just read."""
+    r = client.post(
+        base(fx), headers=hdr(fx.editor_sub),
+        json={"name": "Fixed Creds", "source_type": "postgres",
+              "config": source_database, "secret": {"password": "wrong"}},
+    )
+    cid = r.json()["id"]
+    assert client.post(f"{base(fx)}/{cid}/test", headers=hdr(fx.editor_sub)).json()["ok"] is False
+    assert client.patch(f"{base(fx)}/{cid}", headers=hdr(fx.editor_sub),
+                        json={"secret": {"password": SOURCE_PASSWORD}}).status_code == 200
+    assert client.post(f"{base(fx)}/{cid}/test", headers=hdr(fx.editor_sub)).json()["ok"] is True
+    assert client.delete(f"{base(fx)}/{cid}", headers=hdr(fx.editor_sub)).status_code == 204
+
+
 # ---- workspace scope ---------------------------------------------------------
 def test_workspace_scope_requires_workspace_admin(client: TestClient, fx: Fixture) -> None:
     payload = {
