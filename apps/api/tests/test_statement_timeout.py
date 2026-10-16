@@ -1,8 +1,9 @@
 """One SQL statement may run for so long, and no longer (§833).
 
-CloudFront gives up on the API after 30 seconds, so a request whose query runs
-past that has no one waiting for it - but the query ran on, holding a pooled
-connection, and enough of them at once stalled every request on the task.
+CloudFront gives up on the API after a minute (§918; 30 seconds when this was
+written), so a request whose query runs past that has no one waiting for it -
+but the query ran on, holding a pooled connection, and enough of them at once
+stalled every request on the task.
 """
 from __future__ import annotations
 
