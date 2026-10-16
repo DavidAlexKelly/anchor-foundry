@@ -10,6 +10,7 @@ import os
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
 
+import psycopg
 from fastapi import FastAPI
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
@@ -84,8 +85,11 @@ def database_unavailable(exc: DBAPIError) -> bool:
     sqlstate = getattr(original, "sqlstate", None)
     if sqlstate in DATABASE_RESTARTING_SQLSTATES or (sqlstate or "").startswith("08"):
         return True
+    # Any OperationalError, its subclasses included: a connect that timed out
+    # is psycopg's ConnectionTimeout (§958), which matching the class by name
+    # missed.
     return exc.connection_invalidated or (
-        sqlstate is None and type(original).__name__ == "OperationalError")
+        sqlstate is None and isinstance(original, psycopg.OperationalError))
 
 
 def _unavailable(reason: str) -> JSONResponse:

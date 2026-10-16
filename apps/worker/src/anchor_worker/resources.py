@@ -13,6 +13,21 @@ import psycopg
 from dagster import ConfigurableResource
 
 
+#: **How a connection to the platform database notices it has gone** (§958),
+#: libpq's own settings, which never reach the server. Unset, a database that
+#: did not answer the connect - a failover, a host that went away - held the
+#: run until the kernel gave up, minutes; and a connection whose host vanished
+#: mid-run waited on TCP retransmission, a quarter of an hour by default.
+#: Keepalives find an idle connection's dead peer in about a minute;
+#: `tcp_user_timeout` ends a call whose data went unacknowledged for 30
+#: seconds, which a slow query never does (TCP acknowledges while it runs).
+CONNECTION_SETTINGS = {
+    "connect_timeout": 10,
+    "keepalives": 1, "keepalives_idle": 30, "keepalives_interval": 10, "keepalives_count": 3,
+    "tcp_user_timeout": 30_000,
+}
+
+
 class PlatformDatabase(ConfigurableResource):
     """Connection factory for the platform database."""
 
@@ -27,7 +42,7 @@ class PlatformDatabase(ConfigurableResource):
         ...) are invisible through this connection - use `connect_scoped_to`
         for those, one workspace at a time, exactly like `rls_worker_for_workspace`
         (db 0006) requires."""
-        with psycopg.connect(self.dsn) as conn:
+        with psycopg.connect(self.dsn, **CONNECTION_SETTINGS) as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT set_config('app.service', 'worker', false)")
             yield conn
@@ -39,7 +54,7 @@ class PlatformDatabase(ConfigurableResource):
         every workspace via a SECURITY DEFINER function first (never trusted
         for the mutation itself), then open one of these per candidate to
         re-verify and act on it through the normal RLS-scoped path."""
-        with psycopg.connect(self.dsn) as conn:
+        with psycopg.connect(self.dsn, **CONNECTION_SETTINGS) as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT set_config('app.service', 'worker', false)")
                 cur.execute("SELECT set_config('app.workspace_id', %s, false)", (str(workspace_id),))
