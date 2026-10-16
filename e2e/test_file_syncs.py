@@ -111,6 +111,50 @@ def test_an_append_file_sync_is_set_in_the_form_and_takes_only_new_files(
     expect(dialog.get_by_test_id("file-ingestion")).to_have_value("append")
 
 
+def test_a_run_that_outlasts_its_request_is_followed_to_its_end(page, api, module, s3) -> None:
+    """§967. A run the API is still doing when it has to answer comes back as
+    a 202 naming the run; the dialog says it is still going, will not start
+    another, and says what it did once the history has it ended.
+
+    Made to outlast its request in the browser rather than the API: the
+    answer is rewritten into the one a long run gives, and the history holds
+    the run as running until the test lets it end."""
+    client, endpoint = s3
+    folder = f"slow-{uuid.uuid4().hex[:6]}"
+    client.put_object(Bucket=BUCKET, Key=f"in/{folder}/a.csv", Body=b"id,v\n1,a\n")
+    source = a_bucket_source(api, module, endpoint)
+    api.call("PUT", f"{module.base}/connections/{source['id']}/scheduled-sync", {
+        "mode": "files", "folder": folder, "file_transaction": "SNAPSHOT",
+        "dataset_name": f"Slow {folder}"})
+
+    def long_answer(route) -> None:
+        answer = route.fetch().json()
+        route.fulfill(status=202, json={**answer, "ok": None, "running": True,
+                                        "rows_synced": 0, "dataset": None, "files_taken": []})
+
+    released: list[bool] = []
+
+    def history(route) -> None:
+        runs = route.fetch().json()
+        if not released:
+            runs = [{**run, "status": "running", "finished_at": None} for run in runs]
+        route.fulfill(json=runs)
+
+    page.route("**/scheduled-sync/run", long_answer)
+    page.route("**/sync-runs", history)
+    dialog = open_schedule(page, module, source["name"])
+    dialog.get_by_test_id("sync-run-now").click()
+    expect(dialog.get_by_test_id("sync-running")).to_contain_text("Still syncing",
+                                                                  timeout=30000)
+    expect(dialog.get_by_test_id("sync-run-now")).to_be_disabled()
+    expect(dialog.get_by_test_id("sync-run-now")).to_have_text("Running…")
+
+    released.append(True)
+    expect(dialog.get_by_test_id("sync-result")).to_have_text(
+        f"Synced 1 row into the dataset Slow {folder}.", timeout=15000)
+    expect(dialog.get_by_test_id("sync-run-now")).to_be_enabled()
+
+
 def test_an_update_sync_must_be_able_to_see_a_change(page, api, module, s3) -> None:
     _client, endpoint = s3
     source = a_bucket_source(api, module, endpoint)

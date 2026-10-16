@@ -26,6 +26,7 @@ from .lib.body_limit import BodyLimit
 from .lib.security_headers import SecurityHeaders
 from .lib.config import get_settings
 from .lib.db import HEALTH_DEADLINE_S, dispose_engine, get_engine, get_health_engine
+from .lib import long_work
 from .lib.errors import BreakingChangeError
 from .lib import duck, observability
 from .services.connectors import ConnectorConfigError
@@ -148,6 +149,8 @@ def _wire_production_gateways() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     yield
+    # A sync that outlasted its request (§967) gets the time the task has.
+    await long_work.settle()
     await dispose_engine()
 
 
