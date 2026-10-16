@@ -6390,7 +6390,9 @@ async def object_type_freshness(
         for type_id in wanted:
             try:
                 declared = await ontology_service.get_type(conn, access.workspace_id, type_id)
-            except Exception:
+            except NotFoundError:
+                # A deleted type stops refreshing (§961: only that - any other
+                # failure is the request's, and says so).
                 continue
             newest, count = await store.freshness(
                 search_prefix=prefix, object_type_id=type_id
