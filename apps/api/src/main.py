@@ -93,10 +93,21 @@ def database_unavailable(exc: DBAPIError) -> bool:
         sqlstate is None and isinstance(original, psycopg.OperationalError))
 
 
-def _unavailable(reason: str) -> JSONResponse:
-    unavailable_log.warning("database unavailable", extra={"fields": {"reason": reason}})
-    return JSONResponse(status_code=503, content={"detail": UNAVAILABLE_DETAIL},
+def _unavailable(reason: str, detail: str = UNAVAILABLE_DETAIL,
+                 what: str = "database") -> JSONResponse:
+    unavailable_log.warning(f"{what} unavailable", extra={"fields": {"reason": reason}})
+    return JSONResponse(status_code=503, content={"detail": detail},
                         headers={"Retry-After": "5"})
+
+
+#: What a request that needed the object search service says when it did not
+#: answer (§978).
+SEARCH_UNAVAILABLE_DETAIL = "object search is briefly unavailable - try again in a moment"
+
+try:  # the OpenSearch client is optional: a stack without a domain never imports it
+    from opensearchpy.exceptions import ConnectionError as SearchUnreachable
+except ImportError:  # pragma: no cover
+    SearchUnreachable = None
 
 
 #: Set by the ECS agent in every task (it names the task metadata endpoint), and
@@ -243,6 +254,16 @@ def create_app() -> FastAPI:
         # §951: every pooled connection stayed taken for the pool's whole
         # wait. Busy, as `duck.Busy` is, not broken.
         return _unavailable("no pooled connection came free")
+
+    if SearchUnreachable is not None:
+        @app.exception_handler(SearchUnreachable)
+        async def search_unreachable(request: StarletteRequest, exc: Exception) -> JSONResponse:
+            # §978: the search domain refused the connection, or took longer
+            # than the client waits - a domain restarting, a blue/green change
+            # of its nodes. A moment's absence, as a database failover is
+            # (§951), rather than an unhandled error that pages somebody.
+            # Its timeout included (`ConnectionTimeout` is one).
+            return _unavailable(type(exc).__name__, SEARCH_UNAVAILABLE_DETAIL, "object search")
 
     @app.exception_handler(StorageKeyError)
     async def storage_key_error(request: StarletteRequest, exc: StorageKeyError) -> JSONResponse:

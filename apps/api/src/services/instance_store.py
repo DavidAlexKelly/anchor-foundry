@@ -517,6 +517,10 @@ def _query_clause(field: str, node: Any) -> dict[str, Any]:
     return {"bool": {"should": parts}}
 
 
+#: How long one call to the search domain may take on a request's path (§978).
+SEARCH_TIMEOUT_S = 10
+
+
 class OpenSearchInstanceStore:
     """Production gateway. Auth is HTTP basic against the domain's
     fine-grained-access-control master user (CDK: ``data-stores.ts``'s
@@ -538,6 +542,12 @@ class OpenSearchInstanceStore:
             http_auth=(username, password),
             use_ssl=secure,
             verify_certs=secure,
+            # On a request's path (§978): ten seconds a call, as the client's
+            # own default, and one retry of a connection that failed rather
+            # than three, so a domain that is down is said in seconds.
+            timeout=SEARCH_TIMEOUT_S,
+            max_retries=1,
+            retry_on_timeout=False,
         )
 
     async def _ensure_index(
