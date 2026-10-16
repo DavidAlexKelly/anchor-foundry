@@ -508,6 +508,9 @@ ABANDONED_CODE_RUN = "30 minutes"
 #: An action run lives inside one request, which CloudFront gives up on after
 #: thirty seconds.
 ABANDONED_ACTION_RUN = "30 minutes"
+#: A sync the API runs (§950; db 0169): its extract stops at the source
+#: deadline, five minutes (§947), and the rest is one request's ingest.
+ABANDONED_SYNC_RUN = "30 minutes"
 
 
 def _fail_abandoned(context: OpExecutionContext, platform_db: PlatformDatabase) -> int:
@@ -517,8 +520,8 @@ def _fail_abandoned(context: OpExecutionContext, platform_db: PlatformDatabase) 
     with platform_db.connect() as conn:
         failed = conn.execute(
             "SELECT fail_abandoned_runs(CAST(%s AS interval), CAST(%s AS interval),"
-            " CAST(%s AS interval))",
-            (ABANDONED_MODEL_RUN, ABANDONED_CODE_RUN, ABANDONED_ACTION_RUN),
+            " CAST(%s AS interval), CAST(%s AS interval))",
+            (ABANDONED_MODEL_RUN, ABANDONED_CODE_RUN, ABANDONED_ACTION_RUN, ABANDONED_SYNC_RUN),
         ).fetchone()[0]
         conn.commit()
     if failed:
