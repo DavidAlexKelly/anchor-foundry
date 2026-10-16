@@ -317,6 +317,17 @@ Two things worth keeping from this. **The docstring on `sync_app_password` was t
 | Objects: sum a property | 864 ms | 970 ms |
 | Objects: sync (the worker's scheduled sync) | 42 s, once | |
 
+**§962: re-measured on DuckDB 1.4.5 (§942).** The dataset half of the bench, on one 4-CPU machine with each version in turn, 15 runs each:
+
+| At 1,000,000 rows | 1.1.3 p50 / p95 | 1.4.5 p50 / p95 |
+|---|---|---|
+| Dataset preview | 29 / 32 ms | 37 / 41 ms |
+| Dataset profile, cached | 13 / 15 ms | 15 / 16 ms |
+| Grouped query | 133 / 143 ms | 114 / 123 ms |
+| Upload (once) | 0.84 s | 0.77 s |
+
+The preview's eight milliseconds are almost all opening DuckDB: every operation opens its own in-memory database, which takes 9 ms on 1.4.5 against 7 ms on 1.1.3, with or without extension autoloading or a thread limit. Queries that do real work got faster. The memory side was measured with the upgrade: an ingest, a profile and a 3-million-row join all fit the deployed 512 MiB limit, and the join now fits in 256.
+
 **§899: a regression in the sync, found by re-measuring.** At a hundred thousand rows the worker's sync took 39 s, ten times the per-row cost measured above. 0158's trigger (§817), which stamps each object with its type's workspace, read the type under `object_types`' row policies, evaluated afresh for every row: 371 ms of a 427 ms statement of a thousand objects. Migration 0167 makes it `SECURITY DEFINER`. That is a key lookup, 8 ms for the same thousand, and the policy still refuses every object it refused. The sync of a hundred thousand rows is 5.05 s again.
 
 **What measuring found, and fixed.** At 10,000 objects a first page took 0.9 s and a count 0.5 s. Freshly synced rows made the planner check row-level security row by row, calling the SECURITY DEFINER `rls_workspace_ids()` twice per row; migration 0155 makes all 25 policies that call it compute it once per statement. At a million, the first page took 2.9 s at p95 because one sync gives every object the same `updated_at`, and the `primary_key` tie-break sorted every row; migration 0156 puts the key in the index (0.09 ms to read the page). Migration 0157 asks "is this a kiosk?" once per statement in the six policies that ask it per row. The API's interactive sync wrote one statement per object (16 s for 10,000); it now writes a thousand per statement (0.55 s). The worker's sync, the only one for a table past 20,000 rows, did the same per-row writes and also **overwrote edit-only property values on every run** (§805): it merges and batches now.
