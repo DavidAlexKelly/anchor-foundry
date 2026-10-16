@@ -1091,7 +1091,7 @@ def query(
         try:
             cursor = con.execute(sql)
         except duckdb.Error as exc:
-            raise DatasetEngineError(_clean(exc)) from exc
+            raise DatasetEngineError(_clean_sql(exc, sql)) from exc
         if cursor.description is None:
             raise DatasetEngineError("only queries that return rows are supported here")
         columns = [ColumnSchema(name=d[0], data_type=str(d[1])) for d in cursor.description]
@@ -1243,6 +1243,13 @@ def _clean(exc: duckdb.Error) -> str:
     text = str(exc).strip()
     first = text.splitlines()[0] if text else "query failed"
     return first[:500]
+
+
+def _clean_sql(exc: duckdb.Error, sql: str) -> str:
+    """`_clean`, for a person's own SQL: a parse failure over a word DuckDB
+    1.4 made a keyword says so (§952)."""
+    hint = duck.keyword_hint(sql) if isinstance(exc, duckdb.ParserException) else ""
+    return _clean(exc) + hint
 
 
 def _quote_column(name: str) -> str:
@@ -1620,7 +1627,7 @@ def run_transform(
         try:
             sandbox.execute(f"CREATE TABLE __model_output AS ({sql})")
         except duckdb.Error as exc:
-            raise DatasetEngineError(_clean(exc)) from exc
+            raise DatasetEngineError(_clean_sql(exc, sql)) from exc
 
         described = sandbox.execute("DESCRIBE __model_output").fetchall()
         if not described:
@@ -1737,7 +1744,7 @@ def preview_transform(
         try:
             sandbox.execute(f"CREATE TABLE __model_output AS ({sql})")
         except duckdb.Error as exc:
-            raise DatasetEngineError(_clean(exc)) from exc
+            raise DatasetEngineError(_clean_sql(exc, sql)) from exc
 
         described = sandbox.execute("DESCRIBE __model_output").fetchall()
         if not described:

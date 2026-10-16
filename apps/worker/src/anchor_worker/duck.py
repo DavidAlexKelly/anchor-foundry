@@ -22,6 +22,7 @@ memory at about one and a half times the limit at its peak. The task sizes in
 from __future__ import annotations
 
 import os
+import re
 import tempfile
 import threading
 from typing import Any
@@ -170,3 +171,32 @@ def seal(con: duckdb.DuckDBPyConnection) -> None:
     """
     con.execute("SET enable_external_access=false")
     con.execute("SET lock_configuration=true")
+
+
+# ---- words DuckDB 1.4 took (§952) ---------------------------------------------
+#: Column names DuckDB 1.1 read bare and 1.4 does not: `at`, `by` and `unpack`
+#: became keywords that may start a function or type, and `lambda` became
+#: reserved. A person's saved SQL that said `SELECT at FROM dataset` worked
+#: until the upgrade and then failed with "syntax error at or near FROM",
+#: which points at the word after the problem and never names it.
+NEWLY_KEYWORDS = ("at", "by", "lambda", "unpack")
+#: String literals, quoted identifiers and comments: nothing in them is a bare
+#: word.
+_NOT_CODE = re.compile(r"'(?:[^']|'')*'|\"(?:[^\"]|\"\")*\"|--[^\n]*|/\*.*?\*/", re.S)
+#: The uses DuckDB still means by each word, and an alias, which it accepts.
+_STILL_SQL = re.compile(
+    r"\bat\s+time\s+zone\b|\b(?:order|group|partition)\s+by\b|\bunpack\s*\("
+    r"|\blambda\s+\w+(?:\s*,\s*\w+)*\s*:|\bas\s+(?:at|by|lambda|unpack)\b",
+    re.I)
+
+
+def keyword_hint(sql: str) -> str:
+    """What to add to a parser error when the SQL uses one of those words as a
+    bare name: the word, and that quoting it is the fix. Empty otherwise, and
+    a qualified `t.at` is left alone, since DuckDB still reads that."""
+    code = _STILL_SQL.sub(" ", _NOT_CODE.sub(" ", sql))
+    for word in NEWLY_KEYWORDS:
+        if re.search(rf"(?<![\w.]){word}(?!\w)", code, re.I):
+            return (f' - "{word}" is a keyword since DuckDB 1.4, so a column of that '
+                    f'name is written in double quotes: "{word}"')
+    return ""

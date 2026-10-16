@@ -92,7 +92,7 @@ def check_sql(sql: str, declared: list[str]) -> None:
     try:
         statements = duckdb.connect().extract_statements(sql)
     except duckdb.Error as exc:
-        raise FunctionError(_clean(exc)) from exc
+        raise FunctionError(_clean(exc) + duck.keyword_hint(sql)) from exc
     if len(statements) != 1:
         raise FunctionError("a function is one query; this SQL has "
                             f"{len(statements)} statements")
@@ -188,7 +188,8 @@ def run(
                 raise UserFacingError(message.removeprefix("Invalid Input Error: ")) from exc
             raise FunctionError(message) from exc
         except duckdb.Error as exc:
-            raise FunctionError(_clean(exc)) from exc
+            hint = duck.keyword_hint(sql) if isinstance(exc, duckdb.ParserException) else ""
+            raise FunctionError(_clean(exc) + hint) from exc
         finally:
             timer.cancel()
         return _shape(sandbox, output)

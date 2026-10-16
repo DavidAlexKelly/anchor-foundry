@@ -322,6 +322,16 @@ the code stopped reading it. `apps/api/tests/test_migration_deploy_safety.py`
 refuses, from 0169 on, a drop, a rename, a type change or a `SET NOT NULL`
 that has no `-- deploy-safe: <why>` comment just above it.
 
+## DuckDB 1.4 and saved SQL (§942, §952)
+
+The platform moved from DuckDB 1.1 to 1.4, the long-term-support line. One
+change reaches what people have written: `at`, `by`, `lambda` and `unpack`
+are keywords in 1.4, so a saved query, SQL model or function that names a
+column with one of them bare (`SELECT at FROM dataset`) stops parsing after
+the update. Written in double quotes (`"at"`), or qualified (`d.at`), it
+works on both versions. The error says so, naming the word; a scheduled
+model that fails this way shows it in its run's error.
+
 ## Backup and restore (§803)
 
 The stack's three stores are backed up three ways, and a restore is finished
