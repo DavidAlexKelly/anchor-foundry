@@ -61,7 +61,7 @@ def test_the_query_filters_by_the_series_and_orders_by_time() -> None:
         series_id="S1", interval="none", aggregate="avg",
     )
     assert "CAST(\"sensor\" AS VARCHAR) = 'S1'" in sql
-    assert "ORDER BY at" in sql
+    assert "ORDER BY point_at" in sql
     assert "LIMIT" in sql
 
 
@@ -82,7 +82,7 @@ def test_an_interval_buckets_and_aggregates() -> None:
     )
     assert "date_trunc('day', \"at\")" in sql
     assert "max(\"reading\")" in sql
-    assert "GROUP BY at" in sql
+    assert "GROUP BY point_at" in sql
 
 
 def test_last_is_the_value_at_the_greatest_timestamp() -> None:
@@ -167,14 +167,14 @@ def test_the_allowance_is_the_latest_points_but_the_rows_come_back_in_order() ->
     # alias, and pinning either would be a test about quoting.
     for sql in (many(), many(interval="day")):
         assert "DESC) AS rn" in sql
-        assert sql.rstrip().endswith("ORDER BY series, at")
+        assert sql.rstrip().endswith("ORDER BY series, point_at")
 
 
 def test_the_series_is_carried_back_so_rows_can_be_told_apart() -> None:
     """One query for a page of rows is only useful if each point says which
     series it belongs to."""
     assert "AS series" in many()
-    assert many().startswith("SELECT series, at, value")
+    assert many().startswith("SELECT series, point_at, value")
 
 
 def test_a_bucketed_batch_aggregates_before_it_caps() -> None:
@@ -183,8 +183,8 @@ def test_a_bucketed_batch_aggregates_before_it_caps() -> None:
     readings happened to survive the cap."""
     sql = many(interval="day", aggregate="avg")
     assert "date_trunc('day'" in sql
-    assert "GROUP BY series, at" in sql
-    assert sql.index("GROUP BY series, at") < sql.index("rn <=")
+    assert "GROUP BY series, point_at" in sql
+    assert sql.index("GROUP BY series, point_at") < sql.index("rn <=")
 
 
 def test_a_repeated_series_id_is_asked_for_once() -> None:
@@ -693,7 +693,7 @@ def test_a_track_query_reads_positions_in_time_order() -> None:
         series_id="V1",
     )
     assert 'CAST("vehicle" AS VARCHAR) = \'V1\'' in sql
-    assert "ORDER BY at" in sql
+    assert "ORDER BY point_at" in sql
     assert f"LIMIT {ts.MAX_POINTS}" in sql
 
 
@@ -1197,7 +1197,7 @@ def test_each_track_keeps_its_own_latest_positions(tmp_path) -> None:
         "COPY (SELECT * FROM (VALUES "
         "('V1', TIMESTAMP '2026-01-01 00:00', '1,1'), ('V2', TIMESTAMP '2026-01-01 01:00', '5,5'), "
         "('V1', TIMESTAMP '2026-01-01 02:00', '2,2'), ('V2', TIMESTAMP '2026-01-01 03:00', '6,6'), "
-        "('V1', TIMESTAMP '2026-01-01 04:00', '3,3')) t(v, at, p)) "
+        "('V1', TIMESTAMP '2026-01-01 04:00', '3,3')) t(v, \"at\", p)) "
         f"TO '{path}' (FORMAT parquet)")
     result = engine.query(path, ts.tracks_for_many_sql(
         key_column="v", timestamp_column="at", point_column="p",
