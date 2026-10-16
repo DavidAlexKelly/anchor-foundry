@@ -40,10 +40,12 @@ class Settings(BaseSettings):
     # non-Secure cookie in production is a session token on the wire.
     session_cookie_secure: bool = True
     # The longest one SQL statement may run, in milliseconds; 0 for no limit
-    # (§833). CloudFront gives up on an origin after 30 seconds, so a request
-    # whose query runs longer has already lost its client - and without this
-    # the query ran on regardless, holding one of the task's thirty pooled
-    # connections. The operator CLIs that share this engine turn it off.
+    # (§833). A request whose query outlives CloudFront's wait for an answer
+    # - 30 seconds when this was set, 60 since §918 - has no one waiting for
+    # it, and without a limit the query ran on regardless, holding one of the
+    # task's thirty pooled connections. Thirty seconds leaves a request time
+    # for the rest of its work inside CloudFront's sixty. The operator CLIs
+    # that share this engine turn it off.
     statement_timeout_ms: int = 30_000
 
     @model_validator(mode="after")
