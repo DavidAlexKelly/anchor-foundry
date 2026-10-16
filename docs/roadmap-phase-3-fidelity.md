@@ -419,6 +419,8 @@ The sync pays for it: the trigger, one more index and the `ANALYZE` add about 17
 
 **E.41 — A run stopped by the unexpected stayed running. Done (§976), S.** Found while checking what §967 does with a failure nobody waits for. A sync and a SQL model's run from the API close their run for the failures they know - the source refused, the SQL was wrong - but the close came after the work, so anything else left the run running until the abandoned-run sweep, half an hour or an hour later: every DuckDB slot taken past the wait (§911), a storage fault, a bug. Each is now completed whatever stops it. Busy is the platform's state, not a fault, so it is the run's answer in its own sentence rather than a 503; anything else is recorded as stopped and raised as before. An export's run (§968) says busy the same way.
 
+**E.42 — A search domain's moment of absence would have been a fault. Done (§978), S.** Found while preparing for E.2's cutover. Nothing mapped the OpenSearch client's connection errors, so once objects are read from the domain, one restarting or changing its nodes would make every object read an unhandled 500 and page whoever is on call, and the client retried a dead host three times first. It is a 503 with `Retry-After` now, as the database's absence is (§951), and the API's client waits ten seconds a call with one retry of a connection that failed.
+
 ## Suggested order
 
 **First, out of band:** E.1.
