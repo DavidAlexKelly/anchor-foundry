@@ -110,8 +110,8 @@ jobs:
       # suite back to reporting a pass it never earned.
       ANCHOR_MYSQL_REQUIRED: "1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -172,8 +172,8 @@ jobs:
       # placeholder password, and `migrate.py` is what reconciles it.
       PLATFORM_APP_PASSWORD: devpass
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -191,8 +191,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: "22"
           cache: npm
@@ -244,12 +244,12 @@ jobs:
       # A missing stack is the bug here, not a reason to skip.
       ANCHOR_E2E_REQUIRED: "1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: "22"
           cache: npm
@@ -333,7 +333,7 @@ jobs:
       # why the job is red.
       - name: Failing pages on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: e2e-failures-${{ matrix.shard }}
           path: /tmp/anchor-e2e-failures
