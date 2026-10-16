@@ -41,3 +41,18 @@ run_coordinator:
       - key: anchor/weight
         value: heavy
         limit: 2
+# **A run whose process died is ended, so its schedule runs again (§957).**
+# `definitions.one_at_a_time` skips a tick while the job's last run is
+# unfinished. A run's process killed outright - the kernel's out-of-memory
+# killer, which a DuckDB-heavy run is the likeliest to meet - never reports
+# back, so Dagster kept it STARTED, and that job never ran again until the
+# task was replaced. This launcher cannot ask whether a run's process is
+# alive, so the daemon ends any run past six hours instead: longer than a pass
+# legitimately takes (each source operation stops at 30 minutes, §948; a
+# transform at 15) and far shorter than for ever. A run that was in fact
+# working is failed; the claims (§853) and abandoned-run sweep (§870) take
+# its work up again.
+run_monitoring:
+  enabled: true
+  max_runtime_seconds: 21600
+  poll_interval_seconds: 120
