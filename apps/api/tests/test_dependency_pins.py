@@ -436,3 +436,23 @@ def test_the_api_installs_what_duckdbs_python_functions_need() -> None:
                                          recursive=True))
     assert uses_udf, "the API no longer registers a DuckDB function; this pin may go"
     assert "numpy" in pins("apps/api/requirements.txt")
+
+def test_a_requirements_file_is_the_only_list_of_pins() -> None:
+    """§943: the worker's `pyproject.toml` listed its dependencies too, and
+    nothing installs from it - the image runs `pip install -r
+    requirements.txt` - so it drifted unseen to dagster 1.11.16 and duckdb
+    1.1.1 while 1.13.26 and 1.4.5 were what ran. A list nothing reads is one
+    nobody updates; it stays out."""
+    import glob
+    import tomllib
+
+    found = sorted(glob.glob(os.path.join(ROOT, "apps", "*", "pyproject.toml"))
+                   + glob.glob(os.path.join(ROOT, "packages", "*", "pyproject.toml")))
+    assert found, "the worker's pyproject.toml has moved; point this test at it"
+    for path in found:
+        with open(path, "rb") as fh:
+            project = tomllib.load(fh).get("project", {})
+        listed = project.get("dependencies", []) + [
+            pin for group in project.get("optional-dependencies", {}).values() for pin in group]
+        assert not listed, (f"{os.path.relpath(path, ROOT)} lists {listed}; the image installs "
+                            "requirements.txt, so pin there instead")
