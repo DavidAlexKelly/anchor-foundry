@@ -19,12 +19,13 @@ from typing import Any
 from uuid import UUID
 
 import anyio
-from fastapi import APIRouter, Depends, Query, Request, status
+from fastapi import APIRouter, Depends, Query, Request, Response, status
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..lib.proxy import client_address
 from ..lib.db import user_connection
+from ..lib.long_work import answer_within
 from ..lib.errors import ForbiddenError
 from ..middleware.permissions import (
     ProjectAccess, project_rank_at_least, require_project_role,
@@ -168,7 +169,9 @@ class ModelVersionOut(BaseModel):
 
 class RunResult(BaseModel):
     run_id: UUID
-    status: str  # 'queued' | 'succeeded' | 'failed'
+    # 'queued' | 'running' | 'succeeded' | 'failed'. 'running' is a run that
+    # outlasted its request (§969) and carries on; its run says how it ended.
+    status: str
     ok: bool
     error: str | None
     rows_produced: int
@@ -311,6 +314,7 @@ async def delete_model(
 async def run_model(
     model_id: UUID,
     request: Request,
+    response: Response,
     access: ProjectAccess = Depends(require_project_role("editor")),
 ) -> RunResult:
     storage = _dataset_storage()
@@ -391,6 +395,21 @@ async def run_model(
             input_paths[str(item["input_alias"])] = path
         run_id = await model_service.open_run(conn, model_id, access.auth.user_id, seen)
 
+    finished = await answer_within(_run_sql(
+        model_id, run_id, model, input_paths, storage, access,
+        client_address(request), request.headers.get("user-agent")))
+    if finished is None:
+        response.status_code = status.HTTP_202_ACCEPTED
+        return RunResult(run_id=run_id, status="running", ok=True, error=None,
+                         rows_produced=0, output_dataset=None)
+    return finished
+
+
+async def _run_sql(
+    model_id: UUID, run_id: UUID, model: dict[str, Any], input_paths: dict[str, str],
+    storage: Any, access: ProjectAccess, ip_address: str | None, user_agent: str | None,
+) -> RunResult:
+    """A SQL model's run, once it is open: run by `answer_within` (§969)."""
     ok, error, rows_produced = True, None, 0
     output_dataset: dict[str, Any] | None = None
     output_version_id: UUID | None = None
@@ -434,8 +453,8 @@ async def run_model(
             workspace_id=access.workspace_id,
             project_id=access.project_id,
             metadata={"ok": ok, "rows": rows_produced},
-            ip_address=client_address(request),
-            user_agent=request.headers.get("user-agent"),
+            ip_address=ip_address,
+            user_agent=user_agent,
         )
     return RunResult(
         run_id=run_id,

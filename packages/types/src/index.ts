@@ -1836,7 +1836,9 @@ export interface ModelVersion {
 
 export interface ModelRunResult {
   run_id: string;
-  status: "queued" | "succeeded" | "failed";
+  /** "running": a SQL model's run that outlasted its request (§969) and
+   * carries on; `run_id`'s run says how it ended. */
+  status: "queued" | "running" | "succeeded" | "failed";
   ok: boolean;
   error: string | null;
   rows_produced: number;
