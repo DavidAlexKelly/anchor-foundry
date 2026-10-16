@@ -36,6 +36,21 @@ _engine: AsyncEngine | None = None
 kiosk_settings: ContextVar[dict[str, str] | None] = ContextVar("kiosk_settings", default=None)
 
 
+#: **How a pooled connection notices its database has gone** (§958), libpq's
+#: own settings, which never reach the server. Unset, a database that did not
+#: answer the connect held the request until the kernel gave up, minutes; and
+#: a connection whose host vanished - a failover - waited on TCP
+#: retransmission, a quarter of an hour by default, the pool's own pre-ping as
+#: much as any query. Keepalives find an idle connection's dead peer in about
+#: a minute; `tcp_user_timeout` ends a call whose data went unacknowledged for
+#: 30 seconds, which a slow query never does (TCP acknowledges while it runs).
+CONNECTION_SETTINGS: dict[str, int] = {
+    "connect_timeout": 10,
+    "keepalives": 1, "keepalives_idle": 30, "keepalives_interval": 10, "keepalives_count": 3,
+    "tcp_user_timeout": 30_000,
+}
+
+
 def get_engine() -> AsyncEngine:
     global _engine
     if _engine is None:
@@ -45,8 +60,9 @@ def get_engine() -> AsyncEngine:
             pool_size=10,
             max_overflow=20,
             pool_pre_ping=True,
-            connect_args=connect_args(settings.statement_timeout_ms,
-                                      settings.idle_in_transaction_timeout_ms),
+            connect_args={**CONNECTION_SETTINGS,
+                          **connect_args(settings.statement_timeout_ms,
+                                         settings.idle_in_transaction_timeout_ms)},
         )
     return _engine
 
@@ -102,7 +118,7 @@ def get_health_engine() -> AsyncEngine:
         _health_engine = create_async_engine(
             get_settings().database_url,
             poolclass=NullPool,
-            connect_args={"connect_timeout": HEALTH_DEADLINE_S,
+            connect_args={**CONNECTION_SETTINGS, "connect_timeout": HEALTH_DEADLINE_S,
                           **connect_args(HEALTH_DEADLINE_S * 1000)},
         )
     return _health_engine
