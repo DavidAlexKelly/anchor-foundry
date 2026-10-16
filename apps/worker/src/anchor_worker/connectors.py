@@ -17,10 +17,34 @@ to introduce by copy-paste.
 import csv
 import os
 import re
+import threading
 import urllib.parse
+from contextlib import contextmanager
 
 from . import egress, safe_http
 from dataclasses import dataclass
+
+#: **How long one operation on a customer's database may take** (§948; the
+#: API's is §947). Without it, a source that took the connection and then never
+#: answered - a table locked on its side, a peer gone behind a NAT - held the
+#: run until TCP gave up, hours later. Here that is worse than slow: the run
+#: keeps one of Dagster's four slots and one of its two heavy ones, and
+#: `definitions.one_at_a_time` stops the same schedule queueing behind it, so
+#: the sync quietly never runs again until the task restarts. Thirty minutes
+#: for an extract capped at 200 MB is a link of about 0.1 MB/s; the API, where
+#: someone is waiting, allows five.
+SOURCE_DEADLINE_S = 1800
+
+#: TCP keepalives on every Postgres source connection: a peer that has gone is
+#: found in about a minute, the case a cancel cannot reach. libpq's own
+#: settings; they never reach the server.
+_KEEPALIVES = {"keepalives": 1, "keepalives_idle": 30, "keepalives_interval": 10,
+               "keepalives_count": 3}
+
+
+def _deadline_message() -> str:
+    return (f"the source did not finish within {SOURCE_DEADLINE_S} seconds, "
+            "so this run was stopped")
 
 
 class ConnectorError(RuntimeError):
@@ -94,7 +118,36 @@ class PostgresConnector:
             # carries its own, so this is for one written by hand.
             "sslmode": config.get("sslmode", "require"),
             "connect_timeout": 8,
+            **_KEEPALIVES,
         }
+
+    @contextmanager
+    def _connect(self, config: dict, secret: dict):
+        """A connection cancelled at `SOURCE_DEADLINE_S` (§948), as the API's
+        is: the server stops a statement waiting on a lock or still running,
+        and the error is worded as the deadline only when this asked."""
+        import psycopg
+
+        fired = threading.Event()
+        with psycopg.connect(**self.conninfo(config, secret)) as conn:
+            def stop() -> None:
+                fired.set()
+                try:
+                    conn.cancel_safe(timeout=8)
+                except Exception:  # noqa: BLE001 - unreachable: the keepalives' case
+                    pass
+
+            timer = threading.Timer(SOURCE_DEADLINE_S, stop)
+            timer.daemon = True
+            timer.start()
+            try:
+                yield conn
+            except psycopg.errors.QueryCanceled as exc:
+                if fired.is_set():
+                    raise ConnectorError(_deadline_message()) from exc
+                raise
+            finally:
+                timer.cancel()
 
     def snapshot(
         self,
@@ -132,7 +185,7 @@ class PostgresConnector:
 
         written = 0
         try:
-            with psycopg.connect(**self.conninfo(config, secret)) as conn:
+            with self._connect(config, secret) as conn:
                 with conn.cursor() as cur, open(dest_csv, "wb") as out:
                     with cur.copy(query) as copy:
                         for chunk in copy:
@@ -168,7 +221,7 @@ class PostgresConnector:
         import psycopg
 
         try:
-            with psycopg.connect(**self.conninfo(config, secret)) as conn:
+            with self._connect(config, secret) as conn:
                 with conn.cursor() as cur:
                     cur.execute(
                         "SELECT column_name FROM information_schema.columns"
@@ -209,7 +262,7 @@ class PostgresConnector:
         )
         written = 0
         try:
-            with psycopg.connect(**self.conninfo(config, secret)) as conn:
+            with self._connect(config, secret) as conn:
                 with conn.cursor() as cur:
                     if truncate:
                         cur.execute(sql.SQL("TRUNCATE TABLE {}").format(target))
@@ -252,7 +305,7 @@ class PostgresConnector:
             sql.Identifier(check_identifier(source_table)),
         )
         try:
-            with psycopg.connect(**self.conninfo(config, secret)) as conn:
+            with self._connect(config, secret) as conn:
                 with conn.cursor() as cur:
                     cur.execute(query)
                     row = cur.fetchone()
@@ -296,6 +349,10 @@ class MySQLConnector:
             "user": config["user"],
             "password": secret.get("password", ""),
             "connect_timeout": 8,
+            # §948: no reply for this long ends the call, per read, so a large
+            # table that is still arriving keeps going.
+            "read_timeout": SOURCE_DEADLINE_S,
+            "write_timeout": SOURCE_DEADLINE_S,
             "charset": "utf8mb4",
         }
         if config.get("ssl_mode", "required") == "required":
@@ -339,6 +396,8 @@ class MySQLConnector:
             return ConnectorError(f"table {qualified} does not exist")
         if code in (1142, 1143, 1044, 1045):
             return ConnectorError(f"the connection's user cannot read {qualified}")
+        if code == 2013 and "timed out" in str(exc):  # CR_SERVER_LOST, by read_timeout
+            return ConnectorError(_deadline_message())
         reason = str(exc).strip().splitlines()[0] if str(exc).strip() else "connection failed"
         return ConnectorError(reason)
 

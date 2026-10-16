@@ -191,3 +191,38 @@ def _make_due(connection_id: uuid.UUID) -> None:
             "UPDATE connections SET sync_next_run_at = now() - interval '1 minute' WHERE id=%s",
             (connection_id,),
         )
+
+
+def test_a_source_that_does_not_answer_is_stopped_at_the_deadline(
+    mysql_source: dict, tmp_path, monkeypatch
+) -> None:
+    """§948: a table write-locked by another session, which before the
+    deadline held the run for as long as the lock was held."""
+    import threading
+    import time
+
+    from anchor_worker import connectors
+
+    monkeypatch.setattr(connectors, "SOURCE_DEADLINE_S", 1)
+    locked, release = threading.Event(), threading.Event()
+
+    def hold() -> None:
+        with _admin_connect(SOURCE_DB) as conn, conn.cursor() as cur:
+            cur.execute("LOCK TABLES items WRITE")
+            locked.set()
+            release.wait(30)
+            cur.execute("UNLOCK TABLES")
+
+    holder = threading.Thread(target=hold, daemon=True)
+    holder.start()
+    assert locked.wait(10)
+    started = time.monotonic()
+    try:
+        with pytest.raises(ConnectorError, match="did not finish within 1 seconds"):
+            MySQLConnector().snapshot(
+                mysql_source, {"password": SOURCE_PASSWORD}, source_schema=SOURCE_DB,
+                source_table="items", dest_dir=str(tmp_path), max_bytes=1 << 20)
+    finally:
+        release.set()
+        holder.join(10)
+    assert time.monotonic() - started < 10
