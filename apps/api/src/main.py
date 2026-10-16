@@ -4,6 +4,7 @@ requires a validated Cognito JWT via the auth middleware dependencies.
 """
 from __future__ import annotations
 
+import logging
 import os
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
@@ -13,6 +14,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import TimeoutError as PoolTimeout
 
 from fastapi.responses import JSONResponse
 from starlette.middleware.gzip import DEFAULT_EXCLUDED_CONTENT_TYPES, GZipMiddleware
@@ -61,6 +63,34 @@ from .routes import workspaces as workspace_routes
 QUERY_CANCELED_SQLSTATE = "57014"
 #: unique_violation, serialization_failure, deadlock_detected (§862).
 CONCURRENT_CHANGE_SQLSTATES = frozenset({"23505", "40001", "40P01"})
+#: admin_shutdown, crash_shutdown, cannot_connect_now: the database stopping
+#: or starting, as a failover or a maintenance window does (§951).
+DATABASE_RESTARTING_SQLSTATES = frozenset({"57P01", "57P02", "57P03"})
+
+#: **Not `anchor.error`** (§951), whose every line is the unhandled-error
+#: alarm, there for faults in the code. A database that is restarting or a
+#: pool with no connection free is neither; the 5xx-rate alarm is the one for
+#: it lasting.
+unavailable_log = logging.getLogger("anchor.unavailable")
+UNAVAILABLE_DETAIL = "the database is briefly unavailable - try again in a moment"
+
+
+def database_unavailable(exc: DBAPIError) -> bool:
+    """A database the API cannot use right now, rather than a statement it
+    got wrong: restarting, or the connection gone before the server said
+    anything (no SQLSTATE at all)."""
+    original = getattr(exc, "orig", None)
+    sqlstate = getattr(original, "sqlstate", None)
+    if sqlstate in DATABASE_RESTARTING_SQLSTATES or (sqlstate or "").startswith("08"):
+        return True
+    return exc.connection_invalidated or (
+        sqlstate is None and type(original).__name__ == "OperationalError")
+
+
+def _unavailable(reason: str) -> JSONResponse:
+    unavailable_log.warning("database unavailable", extra={"fields": {"reason": reason}})
+    return JSONResponse(status_code=503, content={"detail": UNAVAILABLE_DETAIL},
+                        headers={"Retry-After": "5"})
 
 
 #: Set by the ECS agent in every task (it names the task metadata endpoint), and
@@ -191,6 +221,12 @@ def create_app() -> FastAPI:
         return JSONResponse(status_code=503, content={"detail": str(exc)},
                             headers={"Retry-After": "5"})
 
+    @app.exception_handler(PoolTimeout)
+    async def pool_exhausted(request: StarletteRequest, exc: PoolTimeout) -> JSONResponse:
+        # §951: every pooled connection stayed taken for the pool's whole
+        # wait. Busy, as `duck.Busy` is, not broken.
+        return _unavailable("no pooled connection came free")
+
     @app.exception_handler(StorageKeyError)
     async def storage_key_error(request: StarletteRequest, exc: StorageKeyError) -> JSONResponse:
         return JSONResponse(status_code=422, content={"detail": str(exc)})
@@ -205,6 +241,11 @@ def create_app() -> FastAPI:
         apart from every other constraint on the table; anything else is a
         genuine server fault and is re-raised to the 500 handler unchanged."""
         original = getattr(exc, "orig", None)
+        if database_unavailable(exc):
+            # §951: a failover or a restart. Not a fault in the code, and
+            # what a retry in a moment is for.
+            return _unavailable(str(original).strip().splitlines()[0] if str(original).strip()
+                                else type(original).__name__)
         if getattr(original, "sqlstate", None) == QUERY_CANCELED_SQLSTATE:
             # `statement_timeout` (§833): the request asked for more than one
             # statement may take. Not a fault in the code, and not the
