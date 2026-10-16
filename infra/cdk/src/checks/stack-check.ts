@@ -380,6 +380,18 @@ for (const [name, template] of [["public", plain], ["vpc", viaVpc]] as const) {
   });
 }
 
+check("a task leaving the load balancer keeps its requests as long as one can run (§949)", () => {
+  const groups = Object.values(plain.findResources("AWS::ElasticLoadBalancingV2::TargetGroup"));
+  if (groups.length !== 2) throw new Error(`expected 2 target groups, found ${groups.length}`);
+  for (const group of groups as any[]) {
+    const attrs: { Key: string; Value: string }[] = group.Properties.TargetGroupAttributes ?? [];
+    const drain = Number(attrs.find((a) => a.Key === "deregistration_delay.timeout_seconds")?.Value ?? 300);
+    if (drain !== ORIGIN_READ_TIMEOUT_S) {
+      throw new Error(`port ${group.Properties.Port} drains for ${drain} s, a request may run ${ORIGIN_READ_TIMEOUT_S} s`);
+    }
+  }
+});
+
 check("the API does not name its server (§923)", () => {
   if (envOf(plain, "api").UVICORN_SERVER_HEADER !== "false") throw new Error("uvicorn sends server: uvicorn");
 });
