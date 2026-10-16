@@ -109,6 +109,17 @@ try:  # the OpenSearch client is optional: a stack without a domain never import
 except ImportError:  # pragma: no cover
     SearchUnreachable = None
 
+#: What a request that needed AWS - the data bucket, Secrets Manager,
+#: Cognito - says when it did not answer in time (§979).
+AWS_UNAVAILABLE_DETAIL = ("a service the platform stores its data with is briefly unavailable - "
+                          "try again in a moment")
+
+try:  # boto3 is not installed in every development environment
+    from botocore.exceptions import ConnectionError as AwsUnreachable
+    from botocore.exceptions import ReadTimeoutError as AwsTimedOut
+except ImportError:  # pragma: no cover
+    AwsUnreachable = AwsTimedOut = None
+
 
 #: Set by the ECS agent in every task (it names the task metadata endpoint), and
 #: by nothing in development or tests.
@@ -254,6 +265,18 @@ def create_app() -> FastAPI:
         # §951: every pooled connection stayed taken for the pool's whole
         # wait. Busy, as `duck.Busy` is, not broken.
         return _unavailable("no pooled connection came free")
+
+    if AwsUnreachable is not None:
+        async def aws_unreachable(request: StarletteRequest, exc: Exception) -> JSONResponse:
+            # §979: §970 holds the platform's AWS calls to seconds, so a stall
+            # ends in botocore's connect or read timeout rather than minutes
+            # later - and then reached the person as an unhandled 500. A
+            # moment's absence, as the database's is (§951). An AWS refusal
+            # (`ClientError`) is not this and is left to whoever asked.
+            return _unavailable(type(exc).__name__, AWS_UNAVAILABLE_DETAIL, "aws")
+
+        app.add_exception_handler(AwsUnreachable, aws_unreachable)
+        app.add_exception_handler(AwsTimedOut, aws_unreachable)
 
     if SearchUnreachable is not None:
         @app.exception_handler(SearchUnreachable)
