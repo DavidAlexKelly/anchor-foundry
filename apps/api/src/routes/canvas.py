@@ -589,7 +589,7 @@ async def _validate_definition(
     # (0034), and the browser still renders them.
     if workshop_format.is_v1(definition):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=(
                 "this is a pre-Workshop (v1) layout, and saving one would create an app "
                 "with no variables, events or pages. Every stored app was converted by "
@@ -605,7 +605,7 @@ async def _validate_definition(
     if unknown:
         names = ", ".join(sorted({u["widget"] or "(no name)" for u in unknown}))
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=(
                 f"this layout uses {names}, which is not a widget this builder has - "
                 "a module containing one cannot be opened, so it is refused here "
@@ -639,14 +639,14 @@ async def _validate_definition(
         )
     except variables_service.VariableError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
         ) from exc
 
     try:
         await _check_embeds(conn, access.project_id, app_id, definition)
     except variables_service.VariableError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
         ) from exc
 
 
@@ -1260,7 +1260,7 @@ async def evaluate_variables(
             # dropping them. Blaming the saved app for a bad request would send
             # whoever reads this to the wrong place entirely.
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
             ) from exc
     return EvaluateVariablesOut(
         values=resolved,
@@ -1324,7 +1324,7 @@ async def usage_metrics(
         # clamped: a panel that asked for 45 days and was quietly given 30
         # would label the answer with the number it asked for.
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=(
                 "usage metrics are reported over "
                 + ", ".join(f"{d} days" for d in workshop_metrics.PERIODS)
@@ -1636,7 +1636,7 @@ async def evaluate_published_variables(
         except variables_service.VariableError as exc:
             # The values, not the document - see the note on the project-scoped one.
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
             ) from exc
     return EvaluateVariablesOut(
         values=resolved,

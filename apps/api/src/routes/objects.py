@@ -734,7 +734,7 @@ async def list_object_types(
             )
         except ValueError as exc:
             raise HTTPException(
-                status_code=status_codes.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+                status_code=status_codes.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
             ) from exc
         ids = [str(r["id"]) for r in rows]
         by_type = await groups_service.groups_by_type(
@@ -1646,7 +1646,7 @@ async def save_ontology_cleanup_settings(
                 name_pattern=body.name_pattern, stale_days=body.stale_days)
         except cleanup_service.SettingsError as exc:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
             ) from exc
     return CleanupSettings(**mine)
 
@@ -2119,7 +2119,7 @@ async def _explore_regex(
         await object_set_eval.check_regex(conn, type_id, definition.filters)
     except ValueError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
     return await store.evaluate_object_set(
         search_prefix=prefix, object_type_id=type_id, filters=definition.filters,
         limit=limit, offset=offset)
@@ -3574,7 +3574,7 @@ async def evaluate_interface_set(
             )
         except (interface_sets.InterfaceSetError, ValueError) as exc:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
             ) from exc
     return InterfaceSetOut(
         instances=[InterfaceInstanceOut(**r) for r in result.instances],
@@ -5484,7 +5484,7 @@ async def aggregate_object_set(
             )
         except ValueError as exc:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
             ) from exc
     return ObjectSetAggregateOut(
         value=value, aggregation=aggregation.name, property=aggregation.property
@@ -5563,7 +5563,7 @@ async def group_object_set(
             await ontology_service.check_selectable(conn, type_id, [body.property])
         except ValueError as exc:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
             ) from exc
         prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
         store = instance_store.store_for(conn)
@@ -5655,7 +5655,7 @@ async def distribution_object_set(
             )
         except ValueError as exc:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
             ) from exc
         prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
         store = instance_store.store_for(conn)
@@ -5751,7 +5751,7 @@ async def cross_tab_object_set(
         )
     except ValueError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
         ) from exc
 
     async with user_connection(access.auth.user_id) as conn:
@@ -5762,7 +5762,7 @@ async def cross_tab_object_set(
                 conn, definition.object_type_id, [row_property, column_property])
         except ValueError as exc:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
             ) from exc
         prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
         store = instance_store.store_for(conn)
@@ -5885,7 +5885,7 @@ async def time_series_object_set(
                 body.property, object_sets.datable_type(body.property, property_types))
         except ValueError as exc:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
             ) from exc
         prefix = await instances_service.workspace_search_prefix(conn, access.workspace_id)
         store = instance_store.store_for(conn)
@@ -5911,7 +5911,7 @@ async def time_series_object_set(
                 if candidate != candidates[-1]:
                     continue
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
                 ) from exc
             # A named interval is its own last candidate, so it always stops here.
             if len(filled) <= object_sets.MAX_AUTO_POINTS or candidate == candidates[-1]:
@@ -6174,7 +6174,7 @@ async def derived_values_for_page(
         }
         if not body.properties and not body.derivations:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="name at least one derived property to fill in",
             )
         wanted: list[tuple[str, dict[str, Any]]] = []
@@ -6182,7 +6182,7 @@ async def derived_values_for_page(
             prop = declared.get(name)
             if prop is None or not prop.get("derivation"):
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail=f"{name!r} is not a derived property of this object type",
                 )
             wanted.append((name, _jsonb(prop["derivation"])))
@@ -6438,12 +6438,12 @@ async def object_set_series_points(
     # two ways by something the caller cannot see.
     if body.interval not in time_series_service.INTERVALS:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"unknown interval {body.interval!r}",
         )
     if body.aggregate not in time_series_service.AGGREGATES:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"unknown aggregate {body.aggregate!r}",
         )
     # Checked here, for the interval's reason above: refused before a read,
@@ -6506,7 +6506,7 @@ async def object_set_series_points(
             )
         except ValueError as exc:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
             ) from exc
         local_path = await anyio.to_thread.run_sync(
             storage.local_path, str(series["s3_location"])
