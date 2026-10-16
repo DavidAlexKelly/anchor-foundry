@@ -33,6 +33,7 @@ import re
 import secrets
 import threading
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 from urllib.parse import quote
 
@@ -103,6 +104,20 @@ class OnboardingConfig:
     # guess at AWS's own availability: a region nobody has ever run the stack
     # in is not one to discover problems in during somebody's onboarding.
     supported_regions: tuple[str, ...] = ("eu-west-1", "eu-west-2", "us-east-1", "us-west-2")
+
+
+#: **When a deploy said to be running has stopped** (§963). A provision that
+#: is running holds the registry at PROVISIONING (UPDATING for a version
+#: update) and its job here, in memory. If the control plane stops partway -
+#: a deploy of it, a crash - the job goes with the process and the status
+#: stays: the customer's page said "provisioning" for good and the button
+#: answered "Already provisioning." with nothing to do but edit the database.
+#: A deploy ends within the CDK run's hour and the half hour `_poll_until_stable`
+#: waits after it, so a status two hours old with no job behind it here is
+#: one nothing is running, and may be started again.
+ABANDONED_AFTER = timedelta(hours=2)
+ABANDONED_REASON = ("the control plane stopped while this deployment ran, so it never "
+                    "finished - start it again")
 
 
 @dataclass
@@ -251,12 +266,22 @@ class OnboardingService:
         return checks
 
     # ---- step 4: provision --------------------------------------------------
+    def _abandoned(self, record: CustomerRecord) -> bool:
+        """A deploy the registry says is running and nothing is (§963)."""
+        if record.stack_status not in (StackStatus.PROVISIONING, StackStatus.UPDATING):
+            return False
+        job = self._jobs.get(record.org_slug)
+        if job is not None and not job.done:
+            return False
+        return datetime.now(timezone.utc) - record.updated_at > ABANDONED_AFTER
+
     def provision(self, org_slug: str) -> dict[str, Any]:
         """Kick off provisioning. Refuses while a failing preflight check
         stands: the customer would otherwise wait ten minutes to be told
         something this already knows."""
         record = self._registry.get(org_slug)
-        if record.stack_status in (StackStatus.PROVISIONING, StackStatus.UPDATING):
+        if (record.stack_status in (StackStatus.PROVISIONING, StackStatus.UPDATING)
+                and not self._abandoned(record)):
             return {"started": False, "detail": "Already provisioning."}
         if record.stack_status is StackStatus.READY:
             return {"started": False, "detail": "This deployment is already provisioned."}
@@ -335,6 +360,7 @@ class OnboardingService:
     def status(self, org_slug: str, *, with_events: bool = True) -> dict[str, Any]:
         record = self._registry.get(org_slug)
         job = self._jobs.get(org_slug)
+        abandoned = self._abandoned(record)
         events: list[dict[str, str]] = []
         if with_events and record.bootstrap_role_arn and record.aws_region:
             try:
@@ -363,12 +389,13 @@ class OnboardingService:
             "owner_invited": record.owner_invited_at is not None,
             "provisioning": bool(job and not job.done),
             "outputs": record.outputs,
-            "error": job.error if job else None,
+            "error": (job.error if job else None) or (
+                ABANDONED_REASON if abandoned else None),
             "events": events,
             # Only the failures, in plain English, so the page does not ask
             # somebody to read a stack trace to find out what to do next.
             "failures": self.failures(events),
             # A failed deploy is retryable: `provision` refuses while one is
             # running or already ready, and FAILED is neither.
-            "retryable": record.stack_status is StackStatus.FAILED,
+            "retryable": record.stack_status is StackStatus.FAILED or abandoned,
         }
