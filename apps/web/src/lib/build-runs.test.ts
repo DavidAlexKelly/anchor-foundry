@@ -9,6 +9,7 @@ import {
   latestRun,
   modelForFile,
   shouldPoll,
+  untilSettled,
   whyNoBuild,
 } from "./build-runs";
 
@@ -186,5 +187,34 @@ describe("what the panel says", () => {
     expect(buildIsAProblem(run({ status: "cancelled" }))).toBe(true);
     expect(buildIsAProblem(run({ status: "succeeded" }))).toBe(false);
     expect(buildIsAProblem(undefined)).toBe(false);
+  });
+});
+
+describe("waiting for a run answered before it finished (§969)", () => {
+  it("reads the history until the run has ended, and returns it", async () => {
+    const answers: ModelRun[][] = [
+      [],
+      [run({ id: "r2", status: "queued" })],
+      [run({ id: "r1" }), run({ id: "r2", status: "running" })],
+      [run({ id: "r1" }), run({ id: "r2", status: "failed", error_message: "boom" })],
+    ];
+    let reads = 0;
+    const waits: number[] = [];
+    const ended = await untilSettled(
+      async () => answers[reads++] ?? [],
+      "r2",
+      async (ms) => { waits.push(ms); },
+    );
+    expect(ended).toMatchObject({ id: "r2", status: "failed", error_message: "boom" });
+    expect(reads).toBe(4);
+    expect(waits).toEqual([2000, 2000, 2000]);
+  });
+
+  it("does not wait for a run already over", async () => {
+    let waited = false;
+    const ended = await untilSettled(async () => [run({ id: "r2" })], "r2",
+      async () => { waited = true; });
+    expect(ended.status).toBe("succeeded");
+    expect(waited).toBe(false);
   });
 });

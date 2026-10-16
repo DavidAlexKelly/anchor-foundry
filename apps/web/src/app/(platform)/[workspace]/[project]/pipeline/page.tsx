@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams, useRouter } from "next/navigation";
 import { useRef, useState } from "react";
 import { ApiError, models as modelApi } from "@/lib/api";
+import { untilSettled } from "@/lib/build-runs";
 import { PipelineGraphView } from "@/components/pipeline-graph";
 import { Dialog, Field } from "@/components/dialog";
 import { nodePath, type GraphView } from "@/lib/pipeline-graph";
@@ -66,13 +67,27 @@ export default function PipelinePage() {
   const build = useMutation({
     mutationFn: async (models: { id: string; name: string }[]) => {
       for (const model of models) {
+        let ended: { ok: boolean; error: string | null };
         try {
-          await modelApi.run(workspace!.id, project!.id, model.id);
+          const result = await modelApi.run(workspace!.id, project!.id, model.id);
+          // Answered before it finished - a Python model's queued run, or a
+          // SQL one that outlasted its request (§969) - so waited for here:
+          // the next transform reads this one's output.
+          if (result.status === "queued" || result.status === "running") {
+            const run = await untilSettled(
+              () => modelApi.runs(workspace!.id, project!.id, model.id), result.run_id);
+            ended = { ok: run.status === "succeeded", error: run.error_message ?? run.status };
+          } else {
+            ended = { ok: result.ok, error: result.error };
+          }
         } catch (error) {
           throw new Error(
             `${model.name}: ${error instanceof ApiError ? error.message : String(error)}`,
           );
         }
+        // A transform that failed stops the build for the same reason a
+        // refusal does: what reads it would be built on the old version.
+        if (!ended.ok) throw new Error(`${model.name}: ${ended.error ?? "the run failed"}`);
       }
     },
     onSuccess: () => graph.refetch(),
