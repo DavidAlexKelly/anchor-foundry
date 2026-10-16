@@ -35,6 +35,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
+from .. import aws
+
 # The three service images a customer stack pulls. Names are structural: the
 # CDK stack builds `{vendorEcrRegistry}/platform-{name}:{tag}`.
 IMAGES = ("platform-api", "platform-worker", "platform-web")
@@ -254,9 +256,7 @@ class Boto3VendorGateway:
         self._region = region
 
     def _client(self, service: str):
-        import boto3
-
-        return boto3.client(service, region_name=self._region)
+        return aws.client(service, region_name=self._region)
 
     def account_id(self) -> str:
         return self._client("sts").get_caller_identity()["Account"]

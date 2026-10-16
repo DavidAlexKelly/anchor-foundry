@@ -31,6 +31,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from .. import aws
 from ..registry.registry import StackRegistry, StackStatus
 
 logger = logging.getLogger("control_plane.provisioner")
@@ -123,9 +124,8 @@ class Boto3Gateway:
     def assume_bootstrap_role(
         self, role_arn: str, external_id: str, session_name: str
     ) -> TempCredentials:
-        import boto3  # type: ignore[import-untyped]
 
-        sts = boto3.client("sts")
+        sts = aws.client("sts")
         resp = sts.assume_role(
             RoleArn=role_arn,
             RoleSessionName=session_name,
@@ -143,10 +143,9 @@ class Boto3Gateway:
         fails deploy with 'you must enable a service-linked role' unless
         something creates it first. Idempotent: swallows the "already
         exists" error every deploy after the first hits."""
-        import boto3
         import botocore.exceptions
 
-        iam = boto3.client(
+        iam = aws.client(
             "iam",
             aws_access_key_id=creds.access_key_id,
             aws_secret_access_key=creds.secret_access_key,
@@ -159,10 +158,9 @@ class Boto3Gateway:
                 raise
 
     def stack_status(self, creds: TempCredentials, region: str, stack_name: str) -> str | None:
-        import boto3
         import botocore.exceptions  # type: ignore[import-untyped]
 
-        cfn = boto3.client(
+        cfn = aws.client(
             "cloudformation",
             region_name=region,
             aws_access_key_id=creds.access_key_id,
@@ -178,9 +176,8 @@ class Boto3Gateway:
         return str(stacks[0]["StackStatus"]) if stacks else None
 
     def stack_outputs(self, creds: TempCredentials, region: str, stack_name: str) -> dict[str, str]:
-        import boto3
 
-        cfn = boto3.client(
+        cfn = aws.client(
             "cloudformation",
             region_name=region,
             aws_access_key_id=creds.access_key_id,
@@ -197,9 +194,8 @@ class Boto3Gateway:
         """Most recent stack events, newest first. This is the only honest
         answer to "what is it doing?" during the fifteen minutes a first-time
         provision takes - CloudFormation knows, and nothing surfaced it."""
-        import boto3
 
-        cfn = boto3.client(
+        cfn = aws.client(
             "cloudformation",
             region_name=region,
             aws_access_key_id=creds.access_key_id,
@@ -229,9 +225,8 @@ class Boto3Gateway:
         """The CDK bootstrap stack's version parameter, or None if this region
         has never been bootstrapped - which is the single most common reason a
         first deploy fails ten minutes in."""
-        import boto3
 
-        ssm = boto3.client(
+        ssm = aws.client(
             "ssm",
             region_name=region,
             aws_access_key_id=creds.access_key_id,
@@ -247,9 +242,8 @@ class Boto3Gateway:
         """(in use, limit) for Elastic IPs. The stack needs one for its NAT
         gateway, and an account already at its limit fails a long way into the
         deploy with an error that names neither the quota nor the fix."""
-        import boto3
 
-        ec2 = boto3.client(
+        ec2 = aws.client(
             "ec2",
             region_name=region,
             aws_access_key_id=creds.access_key_id,
@@ -259,7 +253,7 @@ class Boto3Gateway:
         used = len(ec2.describe_addresses()["Addresses"])
         limit = 5  # the AWS default; Service Quotas may say otherwise
         try:
-            quotas = boto3.client(
+            quotas = aws.client(
                 "service-quotas",
                 region_name=region,
                 aws_access_key_id=creds.access_key_id,
@@ -279,9 +273,8 @@ class Boto3Gateway:
     def disable_deletion_protection(
         self, creds: TempCredentials, region: str, db_instance_identifier: str
     ) -> None:
-        import boto3
 
-        rds = boto3.client(
+        rds = aws.client(
             "rds",
             region_name=region,
             aws_access_key_id=creds.access_key_id,
@@ -297,9 +290,8 @@ class Boto3Gateway:
     def deletion_protection_enabled(
         self, creds: TempCredentials, region: str, db_instance_identifier: str
     ) -> bool:
-        import boto3
 
-        rds = boto3.client(
+        rds = aws.client(
             "rds",
             region_name=region,
             aws_access_key_id=creds.access_key_id,
@@ -321,9 +313,8 @@ class Boto3Gateway:
         DELETE_SKIPPED the instance in practice, leaving its ENI attached
         and blocking every security group/subnet that depends on it from
         ever deleting. Confirmed against a real stack, not theoretical."""
-        import boto3
 
-        rds = boto3.client(
+        rds = aws.client(
             "rds",
             region_name=region,
             aws_access_key_id=creds.access_key_id,
@@ -335,10 +326,9 @@ class Boto3Gateway:
     def db_instance_status(
         self, creds: TempCredentials, region: str, db_instance_identifier: str
     ) -> str | None:
-        import boto3
         import botocore.exceptions
 
-        rds = boto3.client(
+        rds = aws.client(
             "rds",
             region_name=region,
             aws_access_key_id=creds.access_key_id,
@@ -354,9 +344,8 @@ class Boto3Gateway:
         return str(instances[0]["DBInstanceStatus"]) if instances else None
 
     def delete_stack(self, creds: TempCredentials, region: str, stack_name: str) -> None:
-        import boto3
 
-        cfn = boto3.client(
+        cfn = aws.client(
             "cloudformation",
             region_name=region,
             aws_access_key_id=creds.access_key_id,
@@ -370,9 +359,8 @@ class Boto3Gateway:
         DeleteBucket succeeds on a versioned bucket (the data bucket has
         versioning on; harmless no-op work on an unversioned one, since
         list_object_versions still enumerates current versions there too)."""
-        import boto3
 
-        s3 = boto3.client(
+        s3 = aws.client(
             "s3",
             region_name=region,
             aws_access_key_id=creds.access_key_id,
@@ -389,9 +377,8 @@ class Boto3Gateway:
                 s3.delete_objects(Bucket=bucket_name, Delete={"Objects": to_delete})
 
     def delete_bucket(self, creds: TempCredentials, region: str, bucket_name: str) -> None:
-        import boto3
 
-        s3 = boto3.client(
+        s3 = aws.client(
             "s3",
             region_name=region,
             aws_access_key_id=creds.access_key_id,
@@ -401,9 +388,8 @@ class Boto3Gateway:
         s3.delete_bucket(Bucket=bucket_name)
 
     def delete_search_domain(self, creds: TempCredentials, region: str, domain_name: str) -> None:
-        import boto3
 
-        opensearch = boto3.client(
+        opensearch = aws.client(
             "opensearch",
             region_name=region,
             aws_access_key_id=creds.access_key_id,
