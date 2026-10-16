@@ -632,6 +632,7 @@ async def test_update_properties_merges_and_refuses_a_missing_instance(store) ->
     )
     doc = instance_store._doc_id(source_id, "1")
 
+    before = datetime.now(timezone.utc)
     await store.update_properties(
         search_prefix=PREFIX, object_type_id=type_id, instance_id=doc,
         properties={"rank": 9},
@@ -640,6 +641,10 @@ async def test_update_properties_merges_and_refuses_a_missing_instance(store) ->
         search_prefix=PREFIX, object_type_id=type_id, instance_id=doc
     )
     assert found["properties"] == {"full_name": "Ada", "rank": 9}, "merged, not replaced"
+    # §944: the edit's time carries its offset, as a sync's does, so a reader
+    # does not take it for local time.
+    edited = datetime.fromisoformat(found["updated_at"])
+    assert edited.tzinfo is not None and edited >= before
 
     with pytest.raises(LookupError):
         await store.update_properties(
