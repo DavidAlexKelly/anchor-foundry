@@ -12,6 +12,10 @@ is worth restating at the top of the file that would be the place to break it:
 a `time_series_points` table would be a second copy of data the dataset
 subsystem already versions, retains and traces, with its own backfill path and
 its own answer to "what did this look like last Tuesday".
+
+**The queries call a point's time `point_at`** (§942). They called it `at`
+until DuckDB 1.4 made `AT` a reserved word, after which `SELECT at FROM ...`
+no longer parses. Results are read by position, so the name is internal.
 """
 from __future__ import annotations
 
@@ -379,7 +383,7 @@ def points_for_many_sql(
         # total over the latest hundred readings is a different series.
         clause = f"{series_key} IN ({wanted})"
         if interval == "none":
-            base = f"SELECT {series_key} AS series, {ts} AS at, {val} AS value FROM dataset WHERE {clause}"
+            base = f"SELECT {series_key} AS series, {ts} AS point_at, {val} AS value FROM dataset WHERE {clause}"
         else:
             expression = (
                 f"arg_max({val}, {ts})" if aggregate == "last"
@@ -387,21 +391,21 @@ def points_for_many_sql(
                 else f"{aggregate}({val})"
             )
             base = (
-                f"SELECT {series_key} AS series, date_trunc({_literal(interval)}, {ts}) AS at, "
-                f"{expression} AS value FROM dataset WHERE {clause} GROUP BY series, at"
+                f"SELECT {series_key} AS series, date_trunc({_literal(interval)}, {ts}) AS point_at, "
+                f"{expression} AS value FROM dataset WHERE {clause} GROUP BY series, point_at"
             )
         ctes = [f"t0 AS ({base})"] + [
             f"t{n} AS ({_transform_sql(t, f't{n - 1}', per_series=True)})"
             for n, t in enumerate(transforms, start=1)
         ]
         return (
-            f"WITH {', '.join(ctes)} SELECT series, at, value FROM (SELECT series, at, value, "
-            f"row_number() OVER (PARTITION BY series ORDER BY at DESC) AS rn FROM t{len(transforms)}) "
-            f"WHERE rn <= {capped} ORDER BY series, at"
+            f"WITH {', '.join(ctes)} SELECT series, point_at, value FROM (SELECT series, point_at, value, "
+            f"row_number() OVER (PARTITION BY series ORDER BY point_at DESC) AS rn FROM t{len(transforms)}) "
+            f"WHERE rn <= {capped} ORDER BY series, point_at"
         )
     if interval == "none":
         inner = (
-            f"SELECT {series_key} AS series, {ts} AS at, {val} AS value, "
+            f"SELECT {series_key} AS series, {ts} AS point_at, {val} AS value, "
             f"row_number() OVER (PARTITION BY {series_key} ORDER BY {ts} DESC) AS rn "
             f"FROM dataset WHERE {series_key} IN ({wanted})"
         )
@@ -412,18 +416,18 @@ def points_for_many_sql(
             else f"{aggregate}({val})"
         )
         bucketed = (
-            f"SELECT {series_key} AS series, date_trunc({_literal(interval)}, {ts}) AS at, "
+            f"SELECT {series_key} AS series, date_trunc({_literal(interval)}, {ts}) AS point_at, "
             f"{expression} AS value FROM dataset WHERE {series_key} IN ({wanted}) "
-            f"GROUP BY series, at"
+            f"GROUP BY series, point_at"
         )
         inner = (
-            "SELECT series, at, value, "
-            "row_number() OVER (PARTITION BY series ORDER BY at DESC) AS rn "
+            "SELECT series, point_at, value, "
+            "row_number() OVER (PARTITION BY series ORDER BY point_at DESC) AS rn "
             f"FROM ({bucketed})"
         )
     return (
-        f"SELECT series, at, value FROM ({inner}) WHERE rn <= {capped} "
-        "ORDER BY series, at"
+        f"SELECT series, point_at, value FROM ({inner}) WHERE rn <= {capped} "
+        "ORDER BY series, point_at"
     )
 
 
@@ -688,14 +692,14 @@ def _dsp_sql(transform: dict[str, Any], source: str, *, per_series: bool) -> str
     s = "series, " if per_series else ""
     part = "PARTITION BY series " if per_series else ""
     same = " AND r.series = n.series" if per_series else ""
-    readings = (f"(SELECT {s}at, value, row_number() OVER ({part}ORDER BY at) AS i "
+    readings = (f"(SELECT {s}point_at, value, row_number() OVER ({part}ORDER BY point_at) AS i "
                 f"FROM {source} WHERE value IS NOT NULL)")
     return (
-        f"SELECT {'r.series, ' if per_series else ''}r.at, "
+        f"SELECT {'r.series, ' if per_series else ''}r.point_at, "
         f"sum(n.value * w.weight) / sum(w.weight) AS value "
         f"FROM {readings} r JOIN {readings} n ON n.i BETWEEN r.i - {reach} AND r.i + {reach}{same} "
         f"JOIN (VALUES {table}) w(offset_by, weight) ON w.offset_by = n.i - r.i "
-        f"GROUP BY {'r.series, ' if per_series else ''}r.at"
+        f"GROUP BY {'r.series, ' if per_series else ''}r.point_at"
     )
 
 
@@ -867,7 +871,7 @@ def _transform_sql(
     transform: dict[str, Any], source: str, *, per_series: bool = False,
     inputs: dict[str, str] | None = None,
 ) -> str:
-    """One transform as a query over `source`, which has `at` and `value` - and
+    """One transform as a query over `source`, which has `point_at` and `value` - and
     `series`, when `per_series` is set: a page of series at once (§555), each
     transformed on its own, the windows partitioned by it. `inputs` names the
     query each of a formula's other inputs is read from (§561)."""
@@ -877,7 +881,7 @@ def _transform_sql(
     if kind == "cumulative":
         # p.584: "aggregating over all earlier points, including the input
         # point itself".
-        return (f"SELECT {s}at, {_window_call(transform['aggregate'])} OVER ({part}ORDER BY at "
+        return (f"SELECT {s}point_at, {_window_call(transform['aggregate'])} OVER ({part}ORDER BY point_at "
                 f"ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS value FROM {source}")
     if kind == "periodic":
         # p.584: "equally spaced, non-overlapping time intervals … aligned
@@ -887,8 +891,8 @@ def _transform_sql(
         size = transform["window"] * TIME_UNITS[transform["unit"]]
         edge = "floor" if transform["window_type"] == "start" else "ceil"
         return (
-            f"SELECT {s}epoch_ms(CAST(({align} + {edge}((epoch_ms(CAST(at AS TIMESTAMP)) / 1000.0 "
-            f"- {align}) / {size}) * {size}) * 1000 AS BIGINT)) AS at, "
+            f"SELECT {s}epoch_ms(CAST(({align} + {edge}((epoch_ms(CAST(point_at AS TIMESTAMP)) / 1000.0 "
+            f"- {align}) / {size}) * {size}) * 1000 AS BIGINT)) AS point_at, "
             f"{_window_call(transform['aggregate'])} AS value FROM {source} "
             f"GROUP BY {'1, 2' if per_series else '1'}"
         )
@@ -897,21 +901,21 @@ def _transform_sql(
         # unit chosen: a power reading integrated per hour is energy in
         # kilowatt-hours. Each gap between two points adds its width times
         # the method's height; the first point has no area before it.
-        height = {"linear": f"(lag(value) OVER ({part}ORDER BY at) + value) / 2",
-                  "left": f"lag(value) OVER ({part}ORDER BY at)",
+        height = {"linear": f"(lag(value) OVER ({part}ORDER BY point_at) + value) / 2",
+                  "left": f"lag(value) OVER ({part}ORDER BY point_at)",
                   "right": "value"}[transform["method"]]
         seconds = TIME_UNITS[transform["unit"]]
         return (
-            f"SELECT {s}at, coalesce(sum(area) OVER ({part}ORDER BY at ROWS BETWEEN UNBOUNDED "
-            f"PRECEDING AND CURRENT ROW), 0) AS value FROM (SELECT {s}at, "
-            f"(epoch_ms(CAST(at AS TIMESTAMP)) - epoch_ms(CAST(lag(at) OVER ({part}ORDER BY at) "
+            f"SELECT {s}point_at, coalesce(sum(area) OVER ({part}ORDER BY point_at ROWS BETWEEN UNBOUNDED "
+            f"PRECEDING AND CURRENT ROW), 0) AS value FROM (SELECT {s}point_at, "
+            f"(epoch_ms(CAST(point_at AS TIMESTAMP)) - epoch_ms(CAST(lag(point_at) OVER ({part}ORDER BY point_at) "
             f"AS TIMESTAMP))) / 1000.0 / {seconds} * {height} AS area FROM {source}) areas"
         )
     if kind == "rolling":
         # p.584: "the points that fall in a fixed-size temporal window
         # preceding it, including the input point itself". A window of time,
         # not of points, so gaps in the readings do not stretch it.
-        return (f"SELECT {s}at, {_window_call(transform['aggregate'])} OVER ({part}ORDER BY at "
+        return (f"SELECT {s}point_at, {_window_call(transform['aggregate'])} OVER ({part}ORDER BY point_at "
                 f"RANGE BETWEEN INTERVAL {transform['window']} {transform['unit'].upper()} "
                 f"PRECEDING AND CURRENT ROW) AS value FROM {source}")
     if kind == "derivative":
@@ -920,15 +924,15 @@ def _transform_sql(
         # have no rate, so both are left out rather than drawn as zero.
         seconds = TIME_UNITS[transform["unit"]]
         return (
-            f"SELECT {s}at, value FROM (SELECT {s}at, (value - lag(value) OVER ({part}ORDER BY at)) "
-            "/ NULLIF((epoch_ms(CAST(at AS TIMESTAMP)) "
-            f"- epoch_ms(CAST(lag(at) OVER ({part}ORDER BY at) AS TIMESTAMP))) / 1000.0, 0) "
+            f"SELECT {s}point_at, value FROM (SELECT {s}point_at, (value - lag(value) OVER ({part}ORDER BY point_at)) "
+            "/ NULLIF((epoch_ms(CAST(point_at AS TIMESTAMP)) "
+            f"- epoch_ms(CAST(lag(point_at) OVER ({part}ORDER BY point_at) AS TIMESTAMP))) / 1000.0, 0) "
             f"* {seconds} AS value FROM {source}) rates WHERE value IS NOT NULL"
         )
     if kind == "shift":
         # p.586: "identical to the input time series, but temporally shifted".
-        return (f"SELECT {s}CAST(at AS TIMESTAMP) + INTERVAL ({transform['by']}) "
-                f"{transform['unit'].upper()} AS at, value FROM {source}")
+        return (f"SELECT {s}CAST(point_at AS TIMESTAMP) + INTERVAL ({transform['by']}) "
+                f"{transform['unit'].upper()} AS point_at, value FROM {source}")
     if kind == "dsp":
         return _dsp_sql(transform, source, per_series=per_series)
     if kind == "filter":
@@ -938,7 +942,7 @@ def _transform_sql(
         condition = f"value {FILTER_OPERATORS[transform['op']]} {transform['value']!r}"
         if not transform["keep"]:
             condition = f"NOT ({condition})"
-        return f"SELECT {s}at, value FROM {source} WHERE {condition}"
+        return f"SELECT {s}point_at, value FROM {source} WHERE {condition}"
     if kind == "sample":
         # p.393: a point every step from the first reading to the last, each
         # the reading at or before it, or the line between the readings on
@@ -947,23 +951,23 @@ def _transform_sql(
         step = transform["every"] * TIME_UNITS[transform["unit"]]
         group = " GROUP BY series" if per_series else ""
         on = "g.series = {0}.series AND " if per_series else ""
-        readings = (f"(SELECT {s}CAST(at AS TIMESTAMP) AS at, value FROM {source} "
+        readings = (f"(SELECT {s}CAST(point_at AS TIMESTAMP) AS point_at, value FROM {source} "
                     "WHERE value IS NOT NULL)")
         grid = (
             f"(SELECT {s}unnest(generate_series(lo, least(hi, lo + INTERVAL ({step * (MAX_SAMPLES - 1)}) "
-            f"SECOND), INTERVAL ({step}) SECOND)) AS at FROM (SELECT {s}min(CAST(at AS TIMESTAMP)) AS lo, "
-            f"max(CAST(at AS TIMESTAMP)) AS hi FROM {source} WHERE value IS NOT NULL{group}) bounds)"
+            f"SECOND), INTERVAL ({step}) SECOND)) AS point_at FROM (SELECT {s}min(CAST(point_at AS TIMESTAMP)) AS lo, "
+            f"max(CAST(point_at AS TIMESTAMP)) AS hi FROM {source} WHERE value IS NOT NULL{group}) bounds)"
         )
         g = "g.series, " if per_series else ""
         if transform["method"] == "previous":
-            return (f"SELECT {g}g.at AS at, p.value AS value FROM {grid} g "
-                    f"ASOF LEFT JOIN {readings} p ON {on.format('p')}g.at >= p.at")
-        span = "(epoch_ms(n.at) - epoch_ms(p.at))"
+            return (f"SELECT {g}g.point_at AS point_at, p.value AS value FROM {grid} g "
+                    f"ASOF LEFT JOIN {readings} p ON {on.format('p')}g.point_at >= p.point_at")
+        span = "(epoch_ms(n.point_at) - epoch_ms(p.point_at))"
         return (
-            f"SELECT {g}g.at AS at, CASE WHEN n.at = p.at THEN p.value ELSE p.value + "
-            f"(n.value - p.value) * (epoch_ms(g.at) - epoch_ms(p.at)) / {span} END AS value "
-            f"FROM {grid} g ASOF LEFT JOIN {readings} p ON {on.format('p')}g.at >= p.at "
-            f"ASOF LEFT JOIN {readings} n ON {on.format('n')}g.at <= n.at"
+            f"SELECT {g}g.point_at AS point_at, CASE WHEN n.point_at = p.point_at THEN p.value ELSE p.value + "
+            f"(n.value - p.value) * (epoch_ms(g.point_at) - epoch_ms(p.point_at)) / {span} END AS value "
+            f"FROM {grid} g ASOF LEFT JOIN {readings} p ON {on.format('p')}g.point_at >= p.point_at "
+            f"ASOF LEFT JOIN {readings} n ON {on.format('n')}g.point_at <= n.point_at"
         )
     if kind == "event_statistics":
         # p.393: "Aggregate a time series over intervals where an event
@@ -974,15 +978,15 @@ def _transform_sql(
         [events_of] = (inputs or {}).values()
         condition = f"value {FILTER_OPERATORS[transform['op']]} {transform['value']!r}"
         events = (
-            f"SELECT min(at) AS start, max(at) AS finish FROM (SELECT at, hit, sum(CASE WHEN hit "
-            f"THEN 0 ELSE 1 END) OVER (ORDER BY at ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) "
-            f"AS run FROM (SELECT CAST(at AS TIMESTAMP) AS at, ({condition}) AS hit FROM {events_of} "
+            f"SELECT min(point_at) AS start, max(point_at) AS finish FROM (SELECT point_at, hit, sum(CASE WHEN hit "
+            f"THEN 0 ELSE 1 END) OVER (ORDER BY point_at ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) "
+            f"AS run FROM (SELECT CAST(point_at AS TIMESTAMP) AS point_at, ({condition}) AS hit FROM {events_of} "
             f"WHERE value IS NOT NULL) marked) runs WHERE hit GROUP BY run"
         )
         return (
-            f"SELECT e.start AS at, {transform['aggregate']}(x.value) "
-            f"AS value FROM ({events}) e LEFT JOIN (SELECT CAST(at AS TIMESTAMP) AS at, value FROM "
-            f"{source}) x ON x.at BETWEEN e.start AND e.finish GROUP BY e.start"
+            f"SELECT e.start AS point_at, {transform['aggregate']}(x.value) "
+            f"AS value FROM ({events}) e LEFT JOIN (SELECT CAST(point_at AS TIMESTAMP) AS point_at, value FROM "
+            f"{source}) x ON x.point_at BETWEEN e.start AND e.finish GROUP BY e.start"
         )
     if kind == "linear_aggregate":
         # p.393's *Linear aggregation* (§653): "Compute a linear aggregation
@@ -994,18 +998,18 @@ def _transform_sql(
         # lines the series up first.
         queries = [source, *(inputs or {}).values()]
         readings = [
-            f"(SELECT CAST(at AS TIMESTAMP) AS at, value FROM {q} WHERE value IS NOT NULL)"
+            f"(SELECT CAST(point_at AS TIMESTAMP) AS point_at, value FROM {q} WHERE value IS NOT NULL)"
             for q in queries
         ]
-        grid = f"(SELECT DISTINCT at FROM ({' UNION ALL '.join(readings)}) every)"
+        grid = f"(SELECT DISTINCT point_at FROM ({' UNION ALL '.join(readings)}) every)"
         lines = " UNION ALL ".join(
-            f"SELECT g.at AS at, CASE WHEN n.at = p.at THEN p.value ELSE p.value + (n.value - p.value) "
-            f"* (epoch_ms(g.at) - epoch_ms(p.at)) / (epoch_ms(n.at) - epoch_ms(p.at)) END AS value "
-            f"FROM {grid} g ASOF JOIN {r} p ON g.at >= p.at ASOF JOIN {r} n ON g.at <= n.at"
+            f"SELECT g.point_at AS point_at, CASE WHEN n.point_at = p.point_at THEN p.value ELSE p.value + (n.value - p.value) "
+            f"* (epoch_ms(g.point_at) - epoch_ms(p.point_at)) / (epoch_ms(n.point_at) - epoch_ms(p.point_at)) END AS value "
+            f"FROM {grid} g ASOF JOIN {r} p ON g.point_at >= p.point_at ASOF JOIN {r} n ON g.point_at <= n.point_at"
             for r in readings
         )
-        return (f"SELECT at, {transform['aggregate']}(value) AS value FROM ({lines}) lined "
-                "GROUP BY at")
+        return (f"SELECT point_at, {transform['aggregate']}(value) AS value FROM ({lines}) lined "
+                "GROUP BY point_at")
     if kind == "combine":
         # p.393: every point of every series, and where two share an instant,
         # one point for it by the aggregate chosen. SQL's aggregates skip a
@@ -1013,11 +1017,11 @@ def _transform_sql(
         # instant where every series is silent stays a gap (a filter on the
         # gaps survived the sweep as equivalent in all but that).
         parts = " UNION ALL ".join(
-            f"SELECT CAST(at AS TIMESTAMP) AS at, value FROM {query}"
+            f"SELECT CAST(point_at AS TIMESTAMP) AS point_at, value FROM {query}"
             for query in [source, *(inputs or {}).values()]
         )
-        return (f"SELECT at, {transform['aggregate']}(value) AS value FROM ({parts}) combined "
-                "GROUP BY at")
+        return (f"SELECT point_at, {transform['aggregate']}(value) AS value FROM ({parts}) combined "
+                "GROUP BY point_at")
     if kind == "formula" and inputs:
         # §561: p.586's formula over several series. **Its points are the
         # series' own**, and each other input is read *as of* each of them -
@@ -1026,28 +1030,28 @@ def _transform_sql(
         # reading yet leaves a gap, as a division by zero does. p.586 does not
         # say how inputs line up; this is the rule that invents no reading.
         joins = " ".join(
-            f"ASOF LEFT JOIN (SELECT CAST(at AS TIMESTAMP) AS at, value FROM {query}) "
-            f"in_{name} ON CAST(x.at AS TIMESTAMP) >= in_{name}.at"
+            f"ASOF LEFT JOIN (SELECT CAST(point_at AS TIMESTAMP) AS point_at, value FROM {query}) "
+            f"in_{name} ON CAST(x.point_at AS TIMESTAMP) >= in_{name}.point_at"
             for name, query in inputs.items()
         )
         expression = formula_sql(transform["expression"], tuple(inputs))
-        return (f"SELECT at, CASE WHEN isfinite(v) THEN v END AS value FROM "
-                f"(SELECT x.at AS at, CAST({expression} AS DOUBLE) AS v "
+        return (f"SELECT point_at, CASE WHEN isfinite(v) THEN v END AS value FROM "
+                f"(SELECT x.point_at AS point_at, CAST({expression} AS DOUBLE) AS v "
                 f"FROM {source} x {joins}) formula")
     if kind == "formula":
         # p.586's formula, over this series as `x`. A point whose formula has
         # no answer (a division by zero, a square root of a negative) is a
         # gap rather than an error for the whole series, and so is one that
         # overflows: infinity is not a reading.
-        return (f"SELECT {s}at, CASE WHEN isfinite(v) THEN v END AS value FROM "
-                f"(SELECT {s}at, CAST({formula_sql(transform['expression'])} AS DOUBLE) AS v "
+        return (f"SELECT {s}point_at, CASE WHEN isfinite(v) THEN v END AS value FROM "
+                f"(SELECT {s}point_at, CAST({formula_sql(transform['expression'])} AS DOUBLE) AS v "
                 f"FROM {source}) formula")
     where = []
     if transform["start"] is not None:
-        where.append(f"CAST(at AS TIMESTAMP) >= TIMESTAMP {_literal(transform['start'])}")
+        where.append(f"CAST(point_at AS TIMESTAMP) >= TIMESTAMP {_literal(transform['start'])}")
     if transform["end"] is not None:
-        where.append(f"CAST(at AS TIMESTAMP) <= TIMESTAMP {_literal(transform['end'])}")
-    return f"SELECT {s}at, value FROM {source} WHERE {' AND '.join(where)}"
+        where.append(f"CAST(point_at AS TIMESTAMP) <= TIMESTAMP {_literal(transform['end'])}")
+    return f"SELECT {s}point_at, value FROM {source} WHERE {' AND '.join(where)}"
 
 
 def points_sql(
@@ -1098,9 +1102,9 @@ def points_sql(
         # be a different series, not a shorter one.
         ctes: list[str] = []
         last = _chain(ctes, "t", _base_sql(ts, val, clause, interval, aggregate), transforms)
-        return (f"WITH {', '.join(ctes)} SELECT at, value FROM {last} "
-                f"ORDER BY at LIMIT {capped}")
-    return f"{_base_sql(ts, val, clause, interval, aggregate)} ORDER BY at LIMIT {capped}"
+        return (f"WITH {', '.join(ctes)} SELECT point_at, value FROM {last} "
+                f"ORDER BY point_at LIMIT {capped}")
+    return f"{_base_sql(ts, val, clause, interval, aggregate)} ORDER BY point_at LIMIT {capped}"
 
 
 #: p.392's *Time series search* (§651): at most this many events from one
@@ -1145,11 +1149,11 @@ def events_sql(
     condition = f"value {FILTER_OPERATORS[op]} {float(value)!r}"
     return (
         f"WITH {', '.join(ctes)}, "
-        f"marked AS (SELECT CAST(at AS TIMESTAMP) AS at, ({condition}) AS hit FROM {last} "
+        f"marked AS (SELECT CAST(point_at AS TIMESTAMP) AS point_at, ({condition}) AS hit FROM {last} "
         "WHERE value IS NOT NULL), "
-        "runs AS (SELECT at, hit, sum(CASE WHEN hit THEN 0 ELSE 1 END) OVER "
-        "(ORDER BY at ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS run FROM marked) "
-        "SELECT min(at) AS start, max(at) AS finish, count(*) AS points FROM runs WHERE hit "
+        "runs AS (SELECT point_at, hit, sum(CASE WHEN hit THEN 0 ELSE 1 END) OVER "
+        "(ORDER BY point_at ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS run FROM marked) "
+        "SELECT min(point_at) AS start, max(point_at) AS finish, count(*) AS points FROM runs WHERE hit "
         f"GROUP BY run ORDER BY start LIMIT {MAX_EVENTS + 1}"
     )
 
@@ -1188,7 +1192,7 @@ def _base_sql(ts: str, val: str, clause: str, interval: str, aggregate: str,
         # The raw points. Still capped and still ordered by the caller - "no
         # bucketing" is not "no limit", and a series with a decade of readings
         # would otherwise decide how much memory the API uses.
-        return f"SELECT {ts} AS at, {val} AS value FROM {table} WHERE {clause}"
+        return f"SELECT {ts} AS point_at, {val} AS value FROM {table} WHERE {clause}"
     # `last` is the value at the greatest timestamp in the bucket, which is not
     # an aggregate DuckDB spells `last(...)` reliably across versions - the
     # arg_max form says exactly what is meant and needs no ordering guarantee.
@@ -1198,9 +1202,9 @@ def _base_sql(ts: str, val: str, clause: str, interval: str, aggregate: str,
         else f"{aggregate}({val})"
     )
     return (
-        f"SELECT date_trunc({_literal(interval)}, {ts}) AS at, "
+        f"SELECT date_trunc({_literal(interval)}, {ts}) AS point_at, "
         f"{expression} AS value FROM {table} "
-        f"WHERE {clause} GROUP BY at"
+        f"WHERE {clause} GROUP BY point_at"
     )
 
 
@@ -1252,8 +1256,8 @@ def track_sql(
     clause = " AND ".join(where)
     capped = max(1, min(limit, MAX_POINTS))
     return (
-        f"SELECT {ts} AS at, CAST({point} AS VARCHAR) AS point FROM dataset "
-        f"WHERE {clause} ORDER BY at LIMIT {capped}"
+        f"SELECT {ts} AS point_at, CAST({point} AS VARCHAR) AS point FROM dataset "
+        f"WHERE {clause} ORDER BY point_at LIMIT {capped}"
     )
 
 
@@ -1288,9 +1292,9 @@ def tracks_for_many_sql(
     series_key = f"CAST({key} AS VARCHAR)"
     capped = max(1, min(per_series, MAX_POINTS))
     return (
-        f"SELECT series, at, point FROM (SELECT {series_key} AS series, {ts} AS at, "
+        f"SELECT series, point_at, point FROM (SELECT {series_key} AS series, {ts} AS point_at, "
         f"CAST({point} AS VARCHAR) AS point, "
         f"row_number() OVER (PARTITION BY {series_key} ORDER BY {ts} DESC) AS rn "
         f"FROM dataset WHERE {series_key} IN ({wanted})) WHERE rn <= {capped} "
-        "ORDER BY series, at"
+        "ORDER BY series, point_at"
     )

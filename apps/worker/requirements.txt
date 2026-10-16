@@ -9,7 +9,7 @@ dagster==1.13.26
 dagster-webserver==1.13.26
 psycopg[binary]==3.2.13
 PyMySQL==1.1.3
-duckdb==1.1.3
+duckdb==1.4.5
 pandas==2.2.3
 pytz==2024.1
 boto3==1.34.162
