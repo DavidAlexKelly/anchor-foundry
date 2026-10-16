@@ -93,6 +93,17 @@ async def list_for_project(conn: AsyncConnection, project_id: UUID) -> list[dict
     )
 
 
+def refuse_expired(row: dict[str, Any] | None) -> None:
+    """A version whose data a retention policy removed (§965) cannot be read,
+    rolled back to or forked: said in those words, rather than as a file
+    gone missing, which would send somebody looking for an accident."""
+    if row is not None and row.get("expired_at") is not None:
+        raise ConflictError(
+            f"version {row['version_number']}'s data was removed by this dataset's retention "
+            "policy, so it cannot be read. Its schema and row count are still what it reported."
+        )
+
+
 async def set_retention(
     conn: AsyncConnection, project_id: UUID, dataset_id: UUID, keep_versions: int | None
 ) -> dict[str, Any]:
@@ -266,7 +277,7 @@ async def fork(
     version = await fetch_one(
         conn,
         """
-        SELECT version_number, s3_manifest_key, table_schema, row_count
+        SELECT version_number, s3_manifest_key, table_schema, row_count, expired_at
           FROM dataset_versions
          WHERE dataset_id = :did AND version_number = :v
         """,
@@ -274,6 +285,7 @@ async def fork(
     )
     if version is None:
         raise NotFoundError("dataset version")
+    refuse_expired(version)
     if not version["s3_manifest_key"]:
         # **Three states, not two** (§357; `dataset-preview` p.4). A version
         # that was never asked for is a 404; one whose bytes are unaddressable
@@ -740,7 +752,7 @@ async def roll_back(
         conn,
         """
         SELECT id, version_number, s3_manifest_key, table_schema, row_count,
-               sync_cursor_value
+               sync_cursor_value, expired_at
           FROM dataset_versions
          WHERE dataset_id = :did AND version_number = :v
         """,
@@ -748,6 +760,7 @@ async def roll_back(
     )
     if source is None:
         raise NotFoundError("dataset version")
+    refuse_expired(source)
     if version_number == current:
         # Not an error worth a traceback and not a silent no-op either: a
         # rollback that quietly wrote a duplicate version would put a row in
@@ -863,7 +876,7 @@ async def version_location(
         conn,
         """
         SELECT id, version_number, s3_manifest_key, table_schema, row_count,
-               produced_by_kind, produced_by_id, created_at
+               produced_by_kind, produced_by_id, created_at, expired_at
           FROM dataset_versions
          WHERE dataset_id = :did AND version_number = :n
         """,
@@ -871,6 +884,7 @@ async def version_location(
     )
     if row is None:
         raise NotFoundError(f"version {version_number} of this dataset")
+    refuse_expired(dict(row))
     return dict(row)
 
 

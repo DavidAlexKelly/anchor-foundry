@@ -184,3 +184,25 @@ def test_what_a_policy_would_remove_is_shown_before_it_is_saved(client, fx, vers
     assert report(client, fx, versioned)["would_expire"] == []
     assert client.get(f"{base(fx)}/datasets/{versioned}/retention?keep_versions=0",
                       headers=hdr(fx.viewer_sub)).status_code == 422
+
+def test_an_expired_version_is_refused_in_words_wherever_it_would_be_read(
+    client, fx, versioned
+) -> None:
+    """§965: its data is gone on purpose. Read, rolled back to or forked, it
+    says so - not that a file went missing, which reads as an accident."""
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        conn.execute("UPDATE dataset_versions SET expired_at = now()"
+                     " WHERE dataset_id = %s AND version_number = 1", (versioned,))
+    said = "removed by this dataset's retention policy"
+    preview = client.get(f"{base(fx)}/datasets/{versioned}/preview?version=1",
+                         headers=hdr(fx.viewer_sub))
+    assert preview.status_code == 409 and said in preview.json()["detail"]
+    back = client.post(f"{base(fx)}/datasets/{versioned}/rollback", headers=hdr(fx.editor_sub),
+                       json={"version_number": 1})
+    assert back.status_code == 409 and said in back.json()["detail"]
+    fork = client.post(f"{base(fx)}/datasets/{versioned}/fork", headers=hdr(fx.editor_sub),
+                       json={"name": f"From v1 {uuid.uuid4().hex[:6]}", "version_number": 1})
+    assert fork.status_code == 409 and said in fork.json()["detail"]
+    # A version that was kept still reads.
+    assert client.get(f"{base(fx)}/datasets/{versioned}/preview?version=2",
+                      headers=hdr(fx.viewer_sub)).status_code == 200
