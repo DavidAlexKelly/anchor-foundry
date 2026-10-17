@@ -14,6 +14,7 @@ decorative. Federated (the spec default) is fully served by test + discover.
 from __future__ import annotations
 
 import json
+from time import monotonic
 from typing import Any
 from uuid import UUID
 
@@ -146,8 +147,11 @@ async def update(
     if secret_values:
         secret_arn = await anyio.to_thread.run_sync(
             secrets.put_secret, str(connection_id), secret_values)
+        forget_secret(existing["secret_arn"])
+        forget_secret(secret_arn)
     if oidc_source:
         # A source moved to OpenID Connect keeps no credentials it had (§599).
+        forget_secret(existing["secret_arn"])
         secret_arn = None
 
     row = await fetch_one(
@@ -189,6 +193,7 @@ async def delete(
         # After the row delete in the same transaction; gateway delete is not
         # transactional, but the 7-day recovery window covers a crashed commit.
         await anyio.to_thread.run_sync(secrets.delete_secret, str(existing["secret_arn"]))
+        forget_secret(existing["secret_arn"])
 
 
 async def set_exports_enabled(
@@ -396,6 +401,21 @@ async def record_test_result(
     return row
 
 
+#: How long a task reuses a connection's credentials (§960), as a listener's
+#: secret (§867). Every action webhook, export, sync and outbound call read
+#: them from Secrets Manager: a round trip and a charge each time, for a value
+#: that changes when somebody edits the connection. This task forgets them
+#: when it writes or deletes them; another task may use the old ones for up
+#: to the TTL, which is the cost of not asking every time.
+SECRET_TTL_SECONDS = 30.0
+_secret_cache: dict[str, tuple[float, dict[str, str]]] = {}
+
+
+def forget_secret(arn: Any) -> None:
+    if arn:
+        _secret_cache.pop(str(arn), None)
+
+
 def secret_values_for(
     secrets: SecretsGateway, row: dict[str, Any]
 ) -> dict[str, str]:
@@ -421,7 +441,14 @@ def secret_values_for(
         return {"oidc_subject": oidc.subject_for(row["resource_id"])}
     if not row.get("secret_arn"):
         return {}
-    return secrets.get_secret(str(row["secret_arn"]))
+    arn = str(row["secret_arn"])
+    now = monotonic()
+    cached = _secret_cache.get(arn)
+    if cached is not None and now - cached[0] < SECRET_TTL_SECONDS:
+        return dict(cached[1])
+    values = secrets.get_secret(arn)
+    _secret_cache[arn] = (now, dict(values))
+    return values
 
 
 def _check_oidc(config: dict[str, Any], secret_values: dict[str, str] | None) -> bool:
