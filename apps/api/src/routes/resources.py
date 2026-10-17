@@ -44,6 +44,34 @@ router = APIRouter(
 # that does not exist, which is the intended answer and not a limitation.
 resolve_router = APIRouter(prefix="/resources", tags=["resources"])
 
+# §990: the workspace-wide search, beside the per-project browser above.
+search_router = APIRouter(prefix="/workspaces/{workspace_id}/search", tags=["resources"])
+
+
+class SearchHit(BaseModel):
+    id: UUID
+    kind: str
+    name: str
+    description: str | None
+    #: Null for a resource that belongs to the workspace rather than a
+    #: project: an object type, or a connection shared across it.
+    project_id: UUID | None
+    project_name: str | None
+    project_slug: str | None
+    updated_at: datetime
+
+
+@search_router.get("", response_model=list[SearchHit])
+async def search_workspace(
+    q: str = Query(min_length=1, max_length=200),
+    access: WorkspaceAccess = Depends(require_workspace_role("viewer")),
+) -> list[SearchHit]:
+    """Resources by name across the workspace's projects (§990): the search
+    at the top of every page."""
+    async with user_connection(access.auth.user_id) as conn:
+        rows = await resources_service.search_workspace(conn, access.workspace_id, q)
+    return [SearchHit(**r) for r in rows]
+
 
 class ResourceOut(BaseModel):
     id: UUID

@@ -1009,6 +1009,19 @@ export interface AuditEntry {
   user_agent?: string | null;
 }
 
+/** One resource a workspace search found (§990). */
+export interface SearchHit {
+  id: string;
+  kind: string;
+  name: string;
+  description: string | null;
+  /** Null for a resource of the workspace rather than of a project. */
+  project_id: string | null;
+  project_name: string | null;
+  project_slug: string | null;
+  updated_at: string;
+}
+
 // ---- first-owner bootstrap (unauthenticated, one-time only) ----------------
 export interface BootstrapStatus {
   needs_setup: boolean;
