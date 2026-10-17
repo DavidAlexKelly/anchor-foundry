@@ -20,6 +20,7 @@ import {
   kindOf,
   problem,
   runLabel,
+  stillGoing,
   summarise,
   toPayload,
   unexportableColumns,
@@ -280,6 +281,21 @@ group("the history (p.206)", () => {
   test("a failure is a failure whatever else the row says", () => {
     expect(runLabel({ status: "failed", skipped: false, rows_written: 0, dataset_version: 7 }))
       .toBe("failed");
+  });
+
+  test("a run still going says so, not that it wrote nothing (§968)", () => {
+    expect(runLabel({ status: "running", skipped: false, rows_written: 0, dataset_version: 7 }))
+      .toBe("running");
+  });
+});
+
+group("a run that outlasted its request (§968)", () => {
+  test("is going until the history has it ended", () => {
+    expect(stillGoing(undefined, "r2")).toBe(true);
+    expect(stillGoing([{ id: "r1", status: "succeeded" }], "r2")).toBe(true);
+    expect(stillGoing([{ id: "r2", status: "running" }], "r2")).toBe(true);
+    expect(stillGoing([{ id: "r2", status: "succeeded" }], "r2")).toBe(false);
+    expect(stillGoing([{ id: "r2", status: "failed" }], "r2")).toBe(false);
   });
 });
 

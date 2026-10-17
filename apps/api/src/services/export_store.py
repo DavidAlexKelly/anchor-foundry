@@ -17,6 +17,7 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from ..lib.db import fetch_all, fetch_one
@@ -208,12 +209,46 @@ async def set_schedule(
     return await get(conn, project_id, export_id)
 
 
+RUN_COLUMNS = """id, status, skipped, dataset_version, rows_written, error,
+                  started_at, finished_at, detail"""
+
+
+async def open_run(
+    conn: AsyncConnection, *, export_id: UUID, dataset_version: int, run_by: UUID | None,
+) -> dict[str, Any]:
+    """A run, recorded as running before it starts (§968; db 0172), so one
+    that outlasts its request has a row to answer with and to be followed by.
+
+    One at a time per export: a second while the first runs would send the
+    same rows to the same destination."""
+    try:
+        row = await fetch_one(
+            conn,
+            f"""
+            INSERT INTO export_runs (export_id, status, dataset_version, run_by)
+            VALUES (:eid, 'running', :version, :by)
+            RETURNING {RUN_COLUMNS}
+            """,
+            {"eid": str(export_id), "version": dataset_version,
+             "by": str(run_by) if run_by else None},
+        )
+    except IntegrityError as exc:
+        if "export_runs_one_running" not in str(exc.orig):
+            raise
+        raise ConflictError(
+            "this export is already running - its history says when it has finished"
+        ) from exc
+    assert row is not None
+    return dict(row)
+
+
 async def record(
     conn: AsyncConnection,
     *,
     export_id: UUID,
     result: dict[str, Any],
     run_by: UUID | None,
+    run_id: UUID | None = None,
 ) -> dict[str, Any]:
     """One run, and — when it wrote — the version it got to.
 
@@ -223,16 +258,29 @@ async def record(
     the two statements are in the caller's transaction, so either both land or
     neither does.
     """
-    row = await fetch_one(
-        conn,
+    # A run opened as running (`open_run`) is completed; one recorded only
+    # once it is over is inserted whole.
+    statement = (
+        f"""
+        UPDATE export_runs
+           SET status = :status, skipped = :skipped, dataset_version = :version,
+               rows_written = :rows, error = :error, finished_at = now(), detail = :detail
+         WHERE id = :rid AND export_id = :eid
+        RETURNING {RUN_COLUMNS}
         """
+        if run_id else
+        f"""
         INSERT INTO export_runs (export_id, status, skipped, dataset_version,
                                  rows_written, error, finished_at, run_by, detail)
         VALUES (:eid, :status, :skipped, :version, :rows, :error, now(), :by, :detail)
-        RETURNING id, status, skipped, dataset_version, rows_written, error,
-                  started_at, finished_at, detail
-        """,
+        RETURNING {RUN_COLUMNS}
+        """
+    )
+    row = await fetch_one(
+        conn,
+        statement,
         {
+            "rid": str(run_id) if run_id else None,
             "eid": str(export_id),
             "status": "succeeded" if result["ok"] else "failed",
             "skipped": bool(result.get("skipped")),
