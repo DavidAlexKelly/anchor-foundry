@@ -20,6 +20,8 @@ from typing import Protocol
 import psycopg
 from psycopg.rows import dict_row
 
+from .. import aws
+
 # 32+ chars required by the bootstrap CloudFormation template's MinLength.
 _EXTERNAL_ID_BYTES = 32
 
@@ -58,9 +60,8 @@ class KmsSecretsCodec:
     before depending on it in production."""
 
     def __init__(self, key_id: str, region: str) -> None:
-        import boto3  # type: ignore[import-untyped]
 
-        self._kms = boto3.client("kms", region_name=region)
+        self._kms = aws.client("kms", region_name=region)
         self._key_id = key_id
 
     def encrypt(self, plaintext: str) -> bytes:
