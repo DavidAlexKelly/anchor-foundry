@@ -2,6 +2,7 @@ import * as path from "path";
 import { DockerImage, Duration } from "aws-cdk-lib";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as lambda from "aws-cdk-lib/aws-lambda";
+import * as logs from "aws-cdk-lib/aws-logs";
 import * as rds from "aws-cdk-lib/aws-rds";
 import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
 import * as triggers from "aws-cdk-lib/triggers";
@@ -105,6 +106,12 @@ export class MigrationTriggerConstruct extends Construct {
         DATABASE_NAME: "platform",
       },
       executeAfter: [database],
+      // §983: a log group of its own, kept a month like the services' (§931).
+      // Left to Lambda, the function wrote to one it made on its first run and
+      // kept for good, outside anything this stack retains or removes. Named
+      // by CloudFormation rather than `/aws/lambda/<name>`, so a stack whose
+      // function already made that one does not collide with it.
+      logGroup: new logs.LogGroup(this, "Logs", { retention: logs.RetentionDays.ONE_MONTH }),
     });
 
     dbSecret.grantRead(this.trigger);
