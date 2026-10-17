@@ -18,6 +18,7 @@ from .jobs.cleanup import workspace_cleanup
 from .jobs.code_preview_runs import scheduled_preview_runs
 from .jobs.code_test_runs import scheduled_test_runs
 from .jobs.dagster_runs import dagster_run_pruning
+from .jobs.dataset_retention import dataset_retention
 from .jobs.export_schedules import scheduled_exports
 from .jobs.instance_syncs import scheduled_instance_syncs
 from .jobs.listener_archives import scheduled_listener_archives
@@ -90,6 +91,7 @@ defs = Definitions(
     jobs=[
         dagster_run_pruning,
         workspace_cleanup,
+        dataset_retention,
         scheduled_model_runs,
         scheduled_connection_syncs,
         scheduled_instance_syncs,
@@ -112,6 +114,15 @@ defs = Definitions(
             should_execute=one_at_a_time(workspace_cleanup.name),
             cron_schedule="15 3 * * *",  # nightly, off-peak
             name="nightly_workspace_cleanup",
+        ),
+        ScheduleDefinition(
+            default_status=RUNNING,
+            job=dataset_retention,
+            should_execute=one_at_a_time(dataset_retention.name),
+            # Nightly, after the cleanup (§965): a retention policy is about
+            # the bill, which a day either way does not change.
+            cron_schedule="35 3 * * *",
+            name="nightly_dataset_retention",
         ),
         ScheduleDefinition(
             default_status=RUNNING,
