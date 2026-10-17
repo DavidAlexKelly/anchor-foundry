@@ -411,6 +411,18 @@ check("a database's moment of absence does not have ECS replace every API task (
   }
 });
 
+check("the migration's logs are kept a month, in a group the stack owns (§983)", () => {
+  const fns = Object.entries(plain.findResources("AWS::Lambda::Function"))
+    .filter(([id]) => id.startsWith("Migration"));
+  if (fns.length !== 1) throw new Error(`expected the migration function, found ${fns.length}`);
+  const group = (fns[0][1] as any).Properties.LoggingConfig?.LogGroup;
+  if (!group?.Ref) throw new Error("the migration logs to a group Lambda makes and keeps for good");
+  const made = plain.findResources("AWS::Logs::LogGroup")[group.Ref];
+  if (made?.Properties?.RetentionInDays !== 30) {
+    throw new Error(`kept ${made?.Properties?.RetentionInDays ?? "for ever"}`);
+  }
+});
+
 check("the API does not name its server (§923)", () => {
   if (envOf(plain, "api").UVICORN_SERVER_HEADER !== "false") throw new Error("uvicorn sends server: uvicorn");
 });
