@@ -63,3 +63,40 @@ def test_the_stores_client_says_so_in_seconds() -> None:
     assert time.monotonic() - started < 5
     assert store._client.transport.max_retries == 1
     assert store._client.transport.retry_on_timeout is False
+
+
+# ---- AWS (§979) ---------------------------------------------------------------
+@pytest.mark.parametrize("raised", ["EndpointConnectionError", "ConnectTimeoutError",
+                                    "ReadTimeoutError"])
+def test_an_aws_service_that_did_not_answer_is_a_503_that_says_so(raised: str, caplog) -> None:
+    """§970's limits end a stalled call in seconds, with one of these."""
+    from botocore import exceptions as botocore_exceptions
+
+    from src.main import AWS_UNAVAILABLE_DETAIL
+
+    app = create_app()
+
+    @app.get("/api/_probe/aws")
+    async def probe() -> None:
+        raise getattr(botocore_exceptions, raised)(endpoint_url="https://s3.eu-west-2.amazonaws.com")
+
+    with caplog.at_level(logging.WARNING, logger="anchor.unavailable"):
+        with TestClient(app, raise_server_exceptions=False) as client:
+            r = client.get("/api/_probe/aws")
+    assert (r.status_code, r.json()["detail"], r.headers["retry-after"]) == (
+        503, AWS_UNAVAILABLE_DETAIL, "5")
+    assert "aws unavailable" in caplog.text
+
+
+def test_an_aws_refusal_is_not_taken_for_an_absence() -> None:
+    """A `ClientError` is AWS answering, not AWS gone: left as it was."""
+    from botocore.exceptions import ClientError
+
+    app = create_app()
+
+    @app.get("/api/_probe/refused")
+    async def probe() -> None:
+        raise ClientError({"Error": {"Code": "AccessDenied", "Message": "no"}}, "GetObject")
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        assert client.get("/api/_probe/refused").status_code == 500
