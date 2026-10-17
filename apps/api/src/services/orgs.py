@@ -11,6 +11,8 @@ injected so the service is testable without AWS.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Protocol
 from uuid import UUID
 
@@ -452,22 +454,55 @@ async def remove_group_member(
 
 
 # ---- audit ------------------------------------------------------------------
+@dataclass(frozen=True)
+class AuditFilters:
+    """What the audit log is narrowed by (§988). Every one optional."""
+
+    action: str | None = None  # a prefix: `dataset.` or `dataset.export`
+    user_id: UUID | None = None
+    resource_id: UUID | None = None
+    workspace_id: UUID | None = None
+    since: datetime | None = None
+    until: datetime | None = None
+    before_id: int | None = None  # the cursor: entries older than this one
+
+
+def _like_prefix(text_: str) -> str:
+    """`text_` as a LIKE prefix, its own wildcards matched literally."""
+    return text_.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+
+
 async def list_audit(
-    conn: AsyncConnection, organisation_id: UUID, *, limit: int, offset: int
+    conn: AsyncConnection, organisation_id: UUID, *, limit: int, offset: int,
+    filters: AuditFilters = AuditFilters(),
 ) -> list[dict[str, Any]]:
     limit = max(1, min(limit, 200))
     offset = max(0, offset)
+    f = filters
     return await fetch_all(
         conn,
         """
         SELECT a.id, a.action, a.resource_type, a.resource_id, a.workspace_id,
                a.project_id, a.metadata, a.created_at,
-               u.email AS actor_email, u.display_name AS actor_name
+               u.email AS actor_email, u.display_name AS actor_name,
+               host(a.ip_address) AS ip_address, a.user_agent
           FROM audit_log a
           LEFT JOIN users u ON u.id = a.user_id
          WHERE a.organisation_id = :org
+           AND (CAST(:action AS text) IS NULL OR a.action LIKE CAST(:action AS text))
+           AND (CAST(:uid AS uuid) IS NULL OR a.user_id = CAST(:uid AS uuid))
+           AND (CAST(:rid AS uuid) IS NULL OR a.resource_id = CAST(:rid AS uuid))
+           AND (CAST(:wid AS uuid) IS NULL OR a.workspace_id = CAST(:wid AS uuid))
+           AND (CAST(:since AS timestamptz) IS NULL OR a.created_at >= CAST(:since AS timestamptz))
+           AND (CAST(:until AS timestamptz) IS NULL OR a.created_at < CAST(:until AS timestamptz))
+           AND (CAST(:before AS bigint) IS NULL OR a.id < CAST(:before AS bigint))
          ORDER BY a.id DESC
          LIMIT :limit OFFSET :offset
         """,
-        {"org": str(organisation_id), "limit": limit, "offset": offset},
+        {"org": str(organisation_id), "limit": limit, "offset": offset,
+         "action": _like_prefix(f.action) if f.action else None,
+         "uid": str(f.user_id) if f.user_id else None,
+         "rid": str(f.resource_id) if f.resource_id else None,
+         "wid": str(f.workspace_id) if f.workspace_id else None,
+         "since": f.since, "until": f.until, "before": f.before_id},
     )

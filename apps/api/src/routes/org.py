@@ -82,6 +82,10 @@ class AuditEntry(BaseModel):
     actor_email: str | None
     actor_name: str | None
     created_at: datetime
+    #: Where the request came from and with what (§988): recorded on every
+    #: entry since §955, and the first two things an investigation asks.
+    ip_address: str | None = None
+    user_agent: str | None = None
 
 
 @router.get("", response_model=OrgOut)
@@ -255,7 +259,23 @@ async def list_audit(
     auth: AuthContext = Depends(require_org_admin),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
+    # §988: what an investigation narrows by. `action` is a prefix, so
+    # `dataset.` is every dataset action and `dataset.export` one of them.
+    action: str | None = Query(default=None, min_length=1, max_length=200),
+    user_id: UUID | None = None,
+    resource_id: UUID | None = None,
+    workspace_id: UUID | None = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
+    # The page after the entry with this id, newest first: a cursor rather
+    # than an offset, which reads and discards every entry before it - on a
+    # log that only grows, a cost that grows with it.
+    before_id: int | None = Query(default=None, ge=1),
 ) -> list[AuditEntry]:
     async with user_connection(auth.user_id) as conn:
-        rows = await org_service.list_audit(conn, auth.organisation_id, limit=limit, offset=offset)
+        rows = await org_service.list_audit(
+            conn, auth.organisation_id, limit=limit, offset=offset,
+            filters=org_service.AuditFilters(
+                action=action, user_id=user_id, resource_id=resource_id,
+                workspace_id=workspace_id, since=since, until=until, before_id=before_id))
     return [AuditEntry(**row) for row in rows]
