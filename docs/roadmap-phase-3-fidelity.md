@@ -425,6 +425,8 @@ The sync pays for it: the trigger, one more index and the `ANALYZE` add about 17
 
 **E.44 — Nothing held the services' connections under the database's limit. Done (§981), S.** Each API task's pool may hold thirty connections, a deploy runs old and new tasks side by side, and the database's `max_connections` is set by its class's memory: at the six tasks a stack may scale to, a deploy at a busy hour can hold 385 connections against the 402 a `db.t4g.medium` takes. That fits, with little to spare, and nothing said so: `scaling-check.ts` now sums every connection the services can hold at once - pools, health checks, the worker's runs, the migration - against the class's limit, so raising `API_TASKS.max` or a pool past it fails the build. Past it, the remedy is a larger class or RDS Proxy, not a larger number.
 
+**E.45 — A list that asked once per row. Done (§986), S.** Found by counting the statements each of the project's lists sends with two of everything and with six. The models list asked once more for every model, for its inputs, so a project of three hundred models sent three hundred and one statements to draw one page. It asks once now. `test_list_query_counts.py` holds eleven lists - datasets, models, connections and their health, exports, the pipeline, modules, object types and their sources, projects and resources - to the same count however long they are. **Also checked:** `pip-audit` finds no advisories in the API's, worker's or control plane's pins, and `npm audit` none in the web app's; the CDK app's one, a `brace-expansion` bundled inside `aws-cdk-lib`, runs only at synth on the repository's own patterns, and goes with the next `aws-cdk-lib` that bundles a fixed one.
+
 ## Suggested order
 
 **First, out of band:** E.1.
