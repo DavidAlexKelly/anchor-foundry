@@ -1513,7 +1513,10 @@ export interface TabularResult {
 // ---- connection sync --------------------------------------------------------
 export interface SyncResult {
   run_id: string;
-  ok: boolean;
+  /** null while `running` (§967): the sync outlasted its request and carries
+   * on, and `run_id`'s run says how it ended. */
+  ok: boolean | null;
+  running?: boolean;
   error: string | null;
   rows_synced: number;
   created_dataset: boolean;

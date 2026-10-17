@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 
 from ..lib.proxy import client_address
 from ..lib.db import user_connection
+from ..lib.long_work import answer_within
 from ..lib.errors import ConflictError, ForbiddenError
 from ..middleware.permissions import ProjectAccess, require_project_role
 from ..services import audit
@@ -817,11 +818,14 @@ class SyncDatasetOut(BaseModel):
 
 class SyncResult(BaseModel):
     run_id: UUID
-    ok: bool
-    error: str | None
-    rows_synced: int
-    created_dataset: bool
-    dataset: SyncDatasetOut | None
+    # None while `running` (§967): the sync outlasted the request and carries
+    # on; its run says how it ended.
+    ok: bool | None
+    error: str | None = None
+    rows_synced: int = 0
+    created_dataset: bool = False
+    dataset: SyncDatasetOut | None = None
+    running: bool = False
     # A file sync's run (§749): the paths it took, in the order read.
     files_taken: list[str] = Field(default_factory=list)
 
@@ -856,6 +860,7 @@ async def trigger_sync(
     connection_id: UUID,
     body: SyncRequest,
     request: Request,
+    response: Response,
     access: ProjectAccess = Depends(require_project_role("editor")),
 ) -> SyncResult:
     if body.mode == "incremental":
@@ -874,7 +879,27 @@ async def trigger_sync(
             source_table=f"{body.source_schema}.{body.source_table}",
             requested_by=access.auth.user_id,
         )
+    return await _answered(
+        _sync_table(connection_id, run_id, row, policies, body, access,
+                    client_address(request), request.headers.get("user-agent")),
+        run_id, response)
 
+
+async def _answered(work: Any, run_id: UUID, response: Response) -> SyncResult:
+    """A sync's own answer if it finishes while one can still reach the
+    browser; otherwise a 202 naming its run, which it carries on under (§967)."""
+    result = await answer_within(work)
+    if result is None:
+        response.status_code = status.HTTP_202_ACCEPTED
+        return SyncResult(run_id=run_id, ok=None, running=True)
+    return result
+
+
+async def _sync_table(
+    connection_id: UUID, run_id: UUID, row: Any, policies: Any, body: SyncRequest,
+    access: ProjectAccess, ip_address: str | None, user_agent: str | None,
+) -> SyncResult:
+    """An ad hoc sync, once its run is open."""
     config = row["config"] if isinstance(row["config"], dict) else _parse(row["config"])
     ok, error, rows_synced, created = True, None, 0, False
     dataset: dict[str, Any] | None = None
@@ -941,8 +966,8 @@ async def trigger_sync(
             project_id=access.project_id,
             metadata={"table": f"{body.source_schema}.{body.source_table}",
                       "ok": ok, "rows": rows_synced},
-            ip_address=client_address(request),
-            user_agent=request.headers.get("user-agent"),
+            ip_address=ip_address,
+            user_agent=user_agent,
         )
     return SyncResult(
         run_id=run_id,
@@ -1245,6 +1270,7 @@ async def clear_scheduled_sync(
 async def run_scheduled_sync(
     connection_id: UUID,
     request: Request,
+    response: Response,
     access: ProjectAccess = Depends(require_project_role("editor")),
 ) -> SyncResult:
     async with user_connection(access.auth.user_id) as conn:
@@ -1254,7 +1280,7 @@ async def run_scheduled_sync(
     if schedule["sync_mode"] == "files":
         # A folder (decision 0021), whose run is its own shape: many files,
         # chosen by filters, committed as one version of its type.
-        return await _run_file_sync(connection_id, schedule, request, access)
+        return await _run_file_sync(connection_id, schedule, request, response, access)
     async with user_connection(access.auth.user_id) as conn:
         if not schedule["sync_source_table"]:
             raise ConnectorConfigError(
@@ -1269,7 +1295,17 @@ async def run_scheduled_sync(
             source_table=f"{schedule['sync_source_schema']}.{schedule['sync_source_table']}",
             requested_by=access.auth.user_id,
         )
+    return await _answered(
+        _sync_scheduled(connection_id, run_id, row, policies, schedule, access,
+                        client_address(request), request.headers.get("user-agent")),
+        run_id, response)
 
+
+async def _sync_scheduled(
+    connection_id: UUID, run_id: UUID, row: Any, policies: Any, schedule: Any,
+    access: ProjectAccess, ip_address: str | None, user_agent: str | None,
+) -> SyncResult:
+    """A scheduled table sync run now, once its run is open."""
     config = row["config"] if isinstance(row["config"], dict) else _parse(row["config"])
     mode = schedule["sync_mode"]
     ok, error, rows_synced, created = True, None, 0, False
@@ -1368,8 +1404,8 @@ async def run_scheduled_sync(
             workspace_id=access.workspace_id,
             project_id=access.project_id,
             metadata={"mode": mode, "ok": ok, "rows": rows_synced},
-            ip_address=client_address(request),
-            user_agent=request.headers.get("user-agent"),
+            ip_address=ip_address,
+            user_agent=user_agent,
         )
     return SyncResult(
         run_id=run_id, ok=ok, error=error, rows_synced=rows_synced,
@@ -1378,7 +1414,8 @@ async def run_scheduled_sync(
 
 
 async def _run_file_sync(
-    connection_id: UUID, schedule: dict[str, Any], request: Request, access: ProjectAccess,
+    connection_id: UUID, schedule: dict[str, Any], request: Request, response: Response,
+    access: ProjectAccess,
 ) -> SyncResult:
     """A file sync's run (decision 0021; `data-connection` p.160-164).
 
@@ -1401,7 +1438,19 @@ async def _run_file_sync(
             conn, connection_id=connection_id, source_table=folder or "/",
             requested_by=access.auth.user_id, mode="files",
         )
+    return await _answered(
+        _sync_files(connection_id, run_id, row, policies, already, schedule, folder,
+                    transaction, filters, access,
+                    client_address(request), request.headers.get("user-agent")),
+        run_id, response)
 
+
+async def _sync_files(
+    connection_id: UUID, run_id: UUID, row: Any, policies: Any, already: Any,
+    schedule: dict[str, Any], folder: str, transaction: str, filters: Any,
+    access: ProjectAccess, ip_address: str | None, user_agent: str | None,
+) -> SyncResult:
+    """A file sync, once its run is open."""
     config = row["config"] if isinstance(row["config"], dict) else _parse(row["config"])
     ok, error, rows_synced, created = True, None, 0, False
     dataset: dict[str, Any] | None = None
@@ -1478,8 +1527,8 @@ async def _run_file_sync(
             metadata={"mode": "files", "ok": ok, "rows": rows_synced,
                       "files": [f["path"] for f in taken][:100],
                       "transaction": transaction},
-            ip_address=client_address(request),
-            user_agent=request.headers.get("user-agent"),
+            ip_address=ip_address,
+            user_agent=user_agent,
         )
     return SyncResult(
         run_id=run_id, ok=ok, error=error, rows_synced=rows_synced,
