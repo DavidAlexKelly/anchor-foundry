@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  AUDIT_PAGE, NO_FILTERS, actorText, auditQuery, filterProblem, nextCursor, originText,
+  AUDIT_PAGE, NO_FILTERS, actorText, auditQuery, exportQuery, filterProblem, nextCursor,
+  originText,
 } from "./audit-log";
 import type { AuditEntry } from "./types";
 
@@ -45,5 +46,10 @@ describe("the audit log (§988)", () => {
       .toBe("ada@example.com");
     expect(originText({ ip_address: "10.0.0.1", user_agent: "curl/8.5" })).toBe("10.0.0.1 · curl/8.5");
     expect(originText({ ip_address: null, user_agent: null })).toBe("not recorded");
+  });
+
+  it("exports what is narrowed, every page of it (§989)", () => {
+    expect(exportQuery(NO_FILTERS)).toBe("");
+    expect(exportQuery({ ...NO_FILTERS, action: "model." })).toBe("action=model.");
   });
 });

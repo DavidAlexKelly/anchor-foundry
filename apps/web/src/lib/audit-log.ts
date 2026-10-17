@@ -44,6 +44,13 @@ export function auditQuery(filters: AuditFilters, beforeId?: number): string {
   return q.toString();
 }
 
+/** The export's query (§989): the same filters, every page. */
+export function exportQuery(filters: AuditFilters): string {
+  const q = new URLSearchParams(auditQuery(filters));
+  q.delete("limit");
+  return q.toString();
+}
+
 /** The cursor for the page after this one; undefined when this was the last. */
 export function nextCursor(page: readonly AuditEntry[]): number | undefined {
   const last = page[page.length - 1];

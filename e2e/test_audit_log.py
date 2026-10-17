@@ -48,3 +48,25 @@ def test_anybody_else_is_neither_offered_nor_shown_it(viewer_page) -> None:
     viewer_page.goto(f"{WEB_BASE}/org/audit")
     expect(viewer_page.get_by_test_id("audit-error")).to_have_text(
         "Only an organisation's administrators can read its audit log.", timeout=30000)
+
+
+def test_what_was_searched_for_downloads_as_a_file(page, api) -> None:
+    """§989: the export is the filters last searched for."""
+    workspace = api.call("GET", "/workspaces")[0]
+    tag = uuid.uuid4().hex[:6]
+    api.call("POST", f"/workspaces/{workspace['id']}/projects",
+             {"name": f"Exported {tag}", "slug": f"exported-{tag}"})
+    page.goto(f"{WEB_BASE}/org/audit")
+    page.get_by_test_id("audit-action").fill("project.create")
+    page.get_by_test_id("audit-search").click()
+    expect(page.get_by_test_id("audit-entry").first).to_contain_text("project.create",
+                                                                     timeout=15000)
+    with page.expect_download() as downloading:
+        page.get_by_test_id("audit-export").click()
+    download = downloading.value
+    assert download.suggested_filename == "audit-log.csv"
+    with open(download.path(), encoding="utf-8") as handle:
+        lines = handle.read().splitlines()
+    assert lines[0].startswith("id,created_at,action,actor_email")
+    assert all(",project.create," in line for line in lines[1:])
+    assert any(f"exported-{tag}" in line for line in lines[1:])

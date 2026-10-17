@@ -2,11 +2,14 @@
 audit log. All gated on org owner/admin except where noted."""
 from __future__ import annotations
 
+import csv
+import io
+import json
 from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, EmailStr, Field
 
 from ..lib.proxy import client_address
@@ -252,6 +255,72 @@ async def remove_group_member(
             ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
+
+
+def _audit_filters(
+    action: str | None = Query(default=None, min_length=1, max_length=200),
+    user_id: UUID | None = None,
+    resource_id: UUID | None = None,
+    workspace_id: UUID | None = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
+) -> org_service.AuditFilters:
+    return org_service.AuditFilters(action=action, user_id=user_id, resource_id=resource_id,
+                                    workspace_id=workspace_id, since=since, until=until)
+
+
+#: The first characters a spreadsheet reads as the start of a formula (§989).
+_FORMULA_START = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _cell(value: Any) -> str:
+    """One value as a spreadsheet will read it. Text that would start a
+    formula is led by a quote: what an entry records was typed by people -
+    a dataset's name, a webhook's response - and `=HYPERLINK(...)` opened in a
+    spreadsheet runs rather than reads."""
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list)):
+        value = json.dumps(value, sort_keys=True)
+    text_ = str(value)
+    return "'" + text_ if text_.startswith(_FORMULA_START) else text_
+
+
+@router.get("/audit.csv")
+async def export_audit(
+    request: Request,
+    auth: AuthContext = Depends(require_org_admin),
+    filters: org_service.AuditFilters = Depends(_audit_filters),
+) -> Response:
+    """The audit log as narrowed, as CSV (§989): what an audit or an
+    investigation is handed. Refused past `AUDIT_EXPORT_MAX` entries with a
+    sentence, and recorded itself - who took a copy of the log is part of it."""
+    most = org_service.AUDIT_EXPORT_MAX
+    async with user_connection(auth.user_id) as conn:
+        rows = await org_service.list_audit(
+            conn, auth.organisation_id, limit=most + 1, offset=0, filters=filters, most=most + 1)
+        if len(rows) > most:
+            raise HTTPException(
+                status_code=422,
+                detail=f"more than {most:,} entries match - narrow the search to export it")
+        await audit.record(
+            conn, organisation_id=auth.organisation_id, user_id=auth.user_id,
+            action="org.audit.export", resource_type="organisation",
+            resource_id=auth.organisation_id,
+            metadata={"entries": len(rows),
+                      "filters": {k: str(v) for k, v in vars(filters).items() if v is not None}},
+            ip_address=client_address(request), user_agent=request.headers.get("user-agent"),
+        )
+    columns = ["id", "created_at", "action", "actor_email", "actor_name", "resource_type",
+               "resource_id", "workspace_id", "project_id", "ip_address", "user_agent", "metadata"]
+    out = io.StringIO()
+    writer = csv.writer(out)
+    writer.writerow(columns)
+    for row in rows:
+        writer.writerow([_cell(row.get(c)) for c in columns])
+    return Response(
+        content=out.getvalue(), media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="audit-log.csv"'})
 
 
 @router.get("/audit", response_model=list[AuditEntry])
