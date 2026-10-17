@@ -103,6 +103,32 @@ async def list_inputs(conn: AsyncConnection, model_id: UUID) -> list[dict[str, A
     )
 
 
+async def inputs_for(
+    conn: AsyncConnection, model_ids: list[UUID]
+) -> dict[str, list[dict[str, Any]]]:
+    """`list_inputs` for many models in one statement, by model id (§986):
+    the models list asked once per model, so a project of three hundred sent
+    three hundred and one statements to draw one page."""
+    if not model_ids:
+        return {}
+    rows = await fetch_all(
+        conn,
+        """
+        SELECT mi.model_id, mi.dataset_id, mi.input_alias, d.name AS dataset_name
+          FROM model_inputs mi
+          JOIN datasets d ON d.id = mi.dataset_id
+         WHERE mi.model_id = ANY(CAST(:ids AS uuid[]))
+         ORDER BY mi.model_id, mi.input_alias
+        """,
+        {"ids": [str(i) for i in model_ids]},
+    )
+    out: dict[str, list[dict[str, Any]]] = {str(i): [] for i in model_ids}
+    for row in rows:
+        entry = dict(row)
+        out[str(entry.pop("model_id"))].append(entry)
+    return out
+
+
 async def _insert_version(conn: AsyncConnection, sql: str, params: dict[str, Any]) -> Any:
     """Append a dataset_versions row, translating migration 0023's schema
     policy refusal into a DatasetEngineError. The callers here own a run
