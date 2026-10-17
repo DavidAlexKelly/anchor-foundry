@@ -1068,7 +1068,13 @@ function ModelRow({
             Queued - Python models run on the background worker. Check back for the result.
           </p>
         )}
-        {result && result.status !== "queued" && !result.ok && (
+        {result && result.status === "running" && (
+          <p className="login-note" style={{ margin: "6px 0 0" }} data-testid="model-run-running">
+            Still running - this one is taking a while. It carries on, and its run history
+            has the result.
+          </p>
+        )}
+        {result && result.status !== "queued" && result.status !== "running" && !result.ok && (
           <div className="form-error" style={{ marginTop: 6 }}>{result.error}</div>
         )}
         {result && result.status !== "queued" && result.ok && result.output_dataset && (

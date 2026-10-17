@@ -353,3 +353,67 @@ def test_no_cascade_warning_for_a_build_that_will_not_happen(page, api, chain) -
     finally:
         api.call("PATCH", f"{chain['base']}/models/{chain['b']}",
                  {"trigger_mode": "manual"})
+
+
+def test_a_build_waits_for_a_transform_answered_before_it_finished(page, api, chain) -> None:
+    """§969. A run answered before it is over - a SQL run that outlasted its
+    request, or a Python model's queued one - is waited for, or `B` would read
+    the version `A` is still replacing.
+
+    `A` is made to outlast its request in the browser: its answer is rewritten
+    into the one a long run gives, and its history holds the run as running
+    until the test lets it end. `B` must not start before that."""
+    b_before = runs(api, chain, chain["b"])
+    released: list[bool] = []
+
+    def long_answer(route) -> None:
+        answer = route.fetch().json()
+        route.fulfill(status=202, json={**answer, "status": "running", "output_dataset": None,
+                                        "rows_produced": 0})
+
+    def history(route) -> None:
+        listed = route.fetch().json()
+        if not released:
+            listed = [{**run, "status": "running", "finished_at": None} for run in listed]
+        route.fulfill(json=listed)
+
+    page.route(f"**/models/{chain['a']}/run", long_answer)
+    page.route(f"**/models/{chain['a']}/runs", history)
+    open_pipeline(page, chain)
+    card(page, chain, "dataset", "S").click()
+    card(page, chain, "dataset", "B").click(modifiers=["ControlOrMeta"])
+    page.get_by_test_id("expand-between").click()
+    force(page)
+    page.get_by_test_id("selection-build-run").click()
+    expect(page.get_by_test_id("selection-build-run")).to_have_text("Building…")
+    # Long enough for the history to have been read twice while held.
+    page.wait_for_timeout(5000)
+    assert runs(api, chain, chain["b"]) == b_before, "B started while A was still running"
+    expect(page.get_by_test_id("selection-build-run")).to_have_text("Building…")
+
+    released.append(True)
+    # Waited for through the page, not `eventually`: the held history is
+    # answered by this test's route handler, which runs only while a page call
+    # is in progress.
+    expect(page.get_by_test_id("selection-build-run")).to_have_text("Build", timeout=30000)
+    expect(page.get_by_test_id("pipeline-build-error")).to_have_count(0)
+    assert runs(api, chain, chain["b"]) == b_before + 1
+
+
+def test_a_transform_that_fails_stops_the_build(page, api, chain) -> None:
+    """§969: what reads a failed transform would be built on its old output,
+    the reason a refusal already stopped the build. Made to fail in the
+    browser, so the chain stays whole for the tests that share it."""
+    b_before = runs(api, chain, chain["b"])
+    page.route(f"**/models/{chain['a']}/run", lambda route: route.fulfill(json={
+        "run_id": "00000000-0000-0000-0000-000000000000", "status": "failed", "ok": False,
+        "error": "the source table is gone", "rows_produced": 0, "output_dataset": None}))
+    open_pipeline(page, chain)
+    card(page, chain, "dataset", "S").click()
+    card(page, chain, "dataset", "B").click(modifiers=["ControlOrMeta"])
+    page.get_by_test_id("expand-between").click()
+    force(page)
+    page.get_by_test_id("selection-build-run").click()
+    expect(page.get_by_test_id("pipeline-build-error")).to_have_text(
+        f"A {chain['tag']}: the source table is gone", timeout=30000)
+    assert runs(api, chain, chain["b"]) == b_before

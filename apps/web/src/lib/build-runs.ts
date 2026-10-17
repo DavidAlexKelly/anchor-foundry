@@ -96,6 +96,32 @@ export function isSettled(run: Pick<ModelRun, "status">): boolean {
   return run.status !== "queued" && run.status !== "running";
 }
 
+/** How often a build waiting on a run asks whether it has finished. */
+export const SETTLE_EVERY_MS = 2000;
+
+/**
+ * The run `runId`, once it has finished (§969).
+ *
+ * A run is answered before it finishes twice over: a Python model's is queued
+ * for the worker, and a SQL model's that outlasts its request answers
+ * `running` and carries on. A build that runs transforms one at a time, so
+ * each reads its inputs' new versions, has to wait for it, or the next
+ * transform reads the version the last is still replacing. There is no
+ * limit here because the platform gives one: a run left unfinished is failed
+ * by the abandoned-run sweep, and then it has finished.
+ */
+export async function untilSettled(
+  read: () => Promise<readonly ModelRun[]>,
+  runId: string,
+  wait: (ms: number) => Promise<void> = (ms) => new Promise((done) => setTimeout(done, ms)),
+): Promise<ModelRun> {
+  for (;;) {
+    const run = (await read()).find((r) => r.id === runId);
+    if (run !== undefined && isSettled(run)) return run;
+    await wait(SETTLE_EVERY_MS);
+  }
+}
+
 /**
  * Whether the panel should keep asking.
  *
