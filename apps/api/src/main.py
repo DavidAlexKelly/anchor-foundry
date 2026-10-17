@@ -4,6 +4,7 @@ requires a validated Cognito JWT via the auth middleware dependencies.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -23,7 +24,7 @@ from starlette.requests import Request as StarletteRequest
 from .lib.body_limit import BodyLimit
 from .lib.security_headers import SecurityHeaders
 from .lib.config import get_settings
-from .lib.db import dispose_engine, get_engine
+from .lib.db import HEALTH_DEADLINE_S, dispose_engine, get_engine, get_health_engine
 from .lib.errors import BreakingChangeError
 from .lib import duck, observability
 from .services.connectors import ConnectorConfigError
@@ -196,10 +197,19 @@ def create_app() -> FastAPI:
     observability.install(app)
 
     @app.get("/api/health", include_in_schema=False)
-    async def health() -> dict[str, str]:
-        async with get_engine().connect() as conn:
-            await conn.execute(text("SELECT 1"))
-        return {"status": "ok"}
+    async def health() -> JSONResponse:
+        # §956: on its own connection, so a pool every request is using does
+        # not read as a broken task; within the load balancer's wait, so a
+        # database that does not answer is a 503 rather than a timeout.
+        try:
+            async with asyncio.timeout(HEALTH_DEADLINE_S):
+                async with get_health_engine().connect() as conn:
+                    await conn.execute(text("SELECT 1"))
+        except (TimeoutError, DBAPIError) as exc:
+            unavailable_log.warning("health check could not reach the database",
+                                    extra={"fields": {"reason": type(exc).__name__}})
+            return JSONResponse(status_code=503, content={"status": "database unavailable"})
+        return JSONResponse(content={"status": "ok"})
 
 
     @app.exception_handler(ConnectorConfigError)

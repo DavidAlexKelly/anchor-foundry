@@ -23,6 +23,7 @@ from uuid import UUID
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
+from sqlalchemy.pool import NullPool
 
 from .config import get_settings
 
@@ -68,10 +69,43 @@ def connect_args(statement_timeout_ms: int, idle_in_transaction_timeout_ms: int 
 
 
 async def dispose_engine() -> None:
-    global _engine
+    global _engine, _health_engine
     if _engine is not None:
         await _engine.dispose()
         _engine = None
+    if _health_engine is not None:
+        await _health_engine.dispose()
+        _health_engine = None
+
+
+_health_engine: AsyncEngine | None = None
+
+#: How long the health check gives the database, in seconds: inside the
+#: load balancer's five-second wait, so a slow answer is a 503 it hears
+#: rather than a timeout it guesses at.
+HEALTH_DEADLINE_S = 3
+
+
+def get_health_engine() -> AsyncEngine:
+    """**The health check's own way to the database, outside the pool** (§956).
+
+    The load balancer asks every thirty seconds and replaces a task that fails
+    twice. Through the request pool, a task whose thirty connections were all
+    busy - a burst of slow requests, which is load, not a fault - waited for
+    one past the check's five seconds, failed, and was replaced: its requests
+    landed on the other tasks, which were as busy, and the next one went the
+    same way. A fresh connection per check still says whether this task can
+    reach its database, which is what the check is for, without queueing
+    behind the requests it is meant to keep alive."""
+    global _health_engine
+    if _health_engine is None:
+        _health_engine = create_async_engine(
+            get_settings().database_url,
+            poolclass=NullPool,
+            connect_args={"connect_timeout": HEALTH_DEADLINE_S,
+                          **connect_args(HEALTH_DEADLINE_S * 1000)},
+        )
+    return _health_engine
 
 
 @asynccontextmanager
