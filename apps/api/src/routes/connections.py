@@ -21,6 +21,7 @@ import anyio
 from fastapi import APIRouter, Depends, Request, Response, status
 from pydantic import BaseModel, Field
 
+from ..lib.proxy import client_address
 from ..lib.db import user_connection
 from ..lib.errors import ConflictError, ForbiddenError
 from ..middleware.permissions import ProjectAccess, require_project_role
@@ -248,7 +249,7 @@ async def create_connection(
             workspace_id=access.workspace_id,
             project_id=access.project_id,
             metadata={"name": body.name, "source_type": body.source_type, "scope": body.scope},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return _out(row)
@@ -286,7 +287,7 @@ async def update_connection(
                 "config_changed": body.config is not None,
                 "credentials_rotated": bool(body.secret),
             },
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return _out(row)
@@ -343,7 +344,7 @@ async def delete_connection(
             resource_id=connection_id,
             workspace_id=access.workspace_id,
             project_id=access.project_id,
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
 
@@ -423,7 +424,7 @@ async def add_egress_policy(
             workspace_id=access.workspace_id,
             project_id=access.project_id,
             metadata={"host": policy["host"], "port": policy["port"]},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return EgressPolicyOut(**row)
@@ -458,7 +459,7 @@ async def remove_egress_policy(
             project_id=access.project_id,
             metadata={"remaining": len(remaining),
                       "now_unrestricted": len(remaining) == 0},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
 
@@ -511,7 +512,7 @@ async def set_exports_enabled(
             workspace_id=access.workspace_id,
             project_id=access.project_id,
             metadata={"enabled": body.enabled, "name": row["name"]},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return ExportsEnabled(enabled=body.enabled)
@@ -561,7 +562,7 @@ async def test_connection(
             workspace_id=access.workspace_id,
             project_id=access.project_id,
             metadata={"ok": ok},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return TestResult(ok=ok, error=error, connection=_out(updated))
@@ -614,7 +615,7 @@ async def diagnose_connection(
             workspace_id=access.workspace_id,
             project_id=access.project_id,
             metadata={"ok": ok},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return DiagnoseOut(ok=ok, steps=[DiagnoseStep(**d) for d in diagnose_service.as_dicts(steps)])
@@ -664,7 +665,7 @@ async def discover_schema(
             workspace_id=access.workspace_id,
             project_id=access.project_id,
             metadata={"tables": len(tables)},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return [
@@ -766,7 +767,7 @@ async def preview_table(
                 "source_table": body.source_table,
                 "rows": len(sample.rows),
             },
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return PreviewOut(
@@ -940,7 +941,7 @@ async def trigger_sync(
             project_id=access.project_id,
             metadata={"table": f"{body.source_schema}.{body.source_table}",
                       "ok": ok, "rows": rows_synced},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return SyncResult(
@@ -1173,7 +1174,7 @@ async def set_scheduled_sync(
                 "cron_schedule": body.cron_schedule,
                 "cursor_start_value": body.cursor_start_value,
             },
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return ScheduledSyncOut(**row)
@@ -1209,7 +1210,7 @@ async def forget_sync_cursor(
             workspace_id=access.workspace_id,
             project_id=access.project_id,
             metadata={},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return ScheduledSyncOut(**row)
@@ -1234,7 +1235,7 @@ async def clear_scheduled_sync(
             resource_id=connection_id,
             workspace_id=access.workspace_id,
             project_id=access.project_id,
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return ScheduledSyncOut(**row)
@@ -1367,7 +1368,7 @@ async def run_scheduled_sync(
             workspace_id=access.workspace_id,
             project_id=access.project_id,
             metadata={"mode": mode, "ok": ok, "rows": rows_synced},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return SyncResult(
@@ -1477,7 +1478,7 @@ async def _run_file_sync(
             metadata={"mode": "files", "ok": ok, "rows": rows_synced,
                       "files": [f["path"] for f in taken][:100],
                       "transaction": transaction},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return SyncResult(
@@ -1580,7 +1581,7 @@ async def revoke_authorization(
                 user_id=access.auth.user_id, action="connection.authorization.revoke",
                 resource_type="connection", resource_id=connection_id,
                 workspace_id=access.workspace_id, project_id=access.project_id,
-                ip_address=request.client.host if request.client else None,
+                ip_address=client_address(request),
                 user_agent=request.headers.get("user-agent"),
             )
     return GrantOut(authorized=False)

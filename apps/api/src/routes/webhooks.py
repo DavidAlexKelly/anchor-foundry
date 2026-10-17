@@ -27,6 +27,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query, Request, status
 from pydantic import BaseModel, Field
 
+from ..lib.proxy import client_address
 from ..lib.db import user_connection
 from ..middleware.permissions import (
     ProjectAccess,
@@ -232,7 +233,7 @@ async def create_webhook(
             workspace_id=access.workspace_id,
             project_id=access.project_id,
             metadata={"api_name": body.api_name, "method": definition["method"]},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return _out(row)
@@ -267,7 +268,7 @@ async def update_webhook(
             workspace_id=access.workspace_id,
             project_id=access.project_id,
             metadata={"method": definition["method"]},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return _out(row)
@@ -291,7 +292,7 @@ async def delete_webhook(
             workspace_id=access.workspace_id,
             project_id=access.project_id,
             metadata={},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
 

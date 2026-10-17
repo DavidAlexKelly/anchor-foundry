@@ -9,6 +9,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query, Request, status
 from pydantic import BaseModel, EmailStr, Field
 
+from ..lib.proxy import client_address
 from ..lib.db import user_connection
 from ..middleware.auth import AuthContext, clear_identity_cache, get_current_user
 from ..middleware.permissions import require_org_admin
@@ -131,7 +132,7 @@ async def invite_member(
             resource_type="user",
             resource_id=row["id"],
             metadata={"email": str(body.email), "org_role": body.org_role},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return UserOut(**row, identity_linked=True)
@@ -154,7 +155,7 @@ async def update_member_role(
             resource_type="user",
             resource_id=user_id,
             metadata={"org_role": body.org_role},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     clear_identity_cache()  # role changes take effect on the next request
@@ -174,7 +175,7 @@ async def disable_member(
             action="org.member.disable",
             resource_type="user",
             resource_id=user_id,
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     clear_identity_cache()  # a disabled user's cached identity must not survive
@@ -203,7 +204,7 @@ async def create_group(
             resource_type="group",
             resource_id=row["id"],
             metadata={"name": body.name},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return GroupOut(**row, member_count=0)
@@ -224,7 +225,7 @@ async def add_group_member(
             resource_type="group",
             resource_id=group_id,
             metadata={"user_id": str(user_id)},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
 
@@ -244,7 +245,7 @@ async def remove_group_member(
             resource_type="group",
             resource_id=group_id,
             metadata={"user_id": str(user_id)},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
 

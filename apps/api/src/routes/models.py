@@ -23,6 +23,7 @@ from fastapi import APIRouter, Depends, Query, Request, status
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+from ..lib.proxy import client_address
 from ..lib.db import user_connection
 from ..lib.errors import ForbiddenError
 from ..middleware.permissions import (
@@ -228,7 +229,7 @@ async def create_model(
             workspace_id=access.workspace_id,
             project_id=access.project_id,
             metadata={"name": body.name, "inputs": len(body.inputs)},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
         return await _with_inputs(conn, row)
@@ -278,7 +279,7 @@ async def update_model(
                       "inputs_changed": body.inputs is not None,
                       "trigger_mode": body.trigger_mode,
                       "input_health_policy": body.input_health_policy},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
         return await _with_inputs(conn, row)
@@ -301,7 +302,7 @@ async def delete_model(
             resource_id=model_id,
             workspace_id=access.workspace_id,
             project_id=access.project_id,
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
 
@@ -346,7 +347,7 @@ async def run_model(
                 workspace_id=access.workspace_id,
                 project_id=access.project_id,
                 metadata={"status": "blocked", "policy": policy},
-                ip_address=request.client.host if request.client else None,
+                ip_address=client_address(request),
                 user_agent=request.headers.get("user-agent"),
             )
             return RunResult(
@@ -371,7 +372,7 @@ async def run_model(
                 workspace_id=access.workspace_id,
                 project_id=access.project_id,
                 metadata={"status": "queued", "language": "python"},
-                ip_address=request.client.host if request.client else None,
+                ip_address=client_address(request),
                 user_agent=request.headers.get("user-agent"),
             )
             return RunResult(
@@ -433,7 +434,7 @@ async def run_model(
             workspace_id=access.workspace_id,
             project_id=access.project_id,
             metadata={"ok": ok, "rows": rows_produced},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return RunResult(
@@ -487,7 +488,7 @@ async def restore_model_version(
             workspace_id=access.workspace_id,
             project_id=access.project_id,
             metadata={"restored_from": version_number},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
         return await _with_inputs(conn, row)
@@ -685,7 +686,7 @@ async def save_graph(
             workspace_id=access.workspace_id,
             project_id=access.project_id,
             metadata={"name": row["name"]},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return SavedGraphOut(**row)
@@ -722,7 +723,7 @@ async def replace_saved_graph(
             workspace_id=access.workspace_id,
             project_id=access.project_id,
             metadata={"name": row["name"]},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return SavedGraphOut(**row)
@@ -1029,7 +1030,7 @@ async def adopt_into_repository(
                 "path": result["path"],
                 "commit_id": result["commit_id"],
             },
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
         return AdoptOut(**result)
@@ -1110,7 +1111,7 @@ async def adopt_many_into_repository(
                     "commit_id": result["commit_id"],
                     "moved_with": len(results) - 1,
                 },
-                ip_address=request.client.host if request.client else None,
+                ip_address=client_address(request),
                 user_agent=request.headers.get("user-agent"),
             )
         return [AdoptOut(**r) for r in results]

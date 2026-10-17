@@ -27,6 +27,7 @@ import anyio
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
+from ..lib.proxy import client_address
 from ..lib.db import user_connection
 from ..lib.errors import ConflictError, NotFoundError
 from ..middleware.permissions import ProjectAccess, require_project_role
@@ -232,7 +233,7 @@ async def create_change_set(
                 "summary": body.summary,
                 "models": [str(m["model_id"]) for m in row["models"]],
             },
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return ChangeSetOut(**row)
@@ -911,7 +912,7 @@ async def create_proposal(
             workspace_id=access.workspace_id,
             project_id=access.project_id,
             metadata={"summary": body.summary, "files": len(body.changes)},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return _detail(row)
@@ -961,7 +962,7 @@ async def review_proposal(
             workspace_id=access.workspace_id,
             project_id=access.project_id,
             metadata={"verdict": body.verdict},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return _detail(row)
@@ -990,7 +991,7 @@ async def apply_proposal(
             workspace_id=access.workspace_id,
             project_id=access.project_id,
             metadata={"change_set": str(row["change_set_id"])},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return _detail(row)
@@ -1140,7 +1141,7 @@ async def set_review_policy(
             workspace_id=access.workspace_id,
             project_id=access.project_id,
             metadata={"require_code_review": required},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return ReviewPolicyIn(require_code_review=required)

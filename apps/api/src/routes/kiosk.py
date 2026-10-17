@@ -18,6 +18,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Request, status
 from pydantic import BaseModel
 
+from ..lib.proxy import client_address
 from ..lib.db import fetch_one, user_connection
 from ..lib.errors import ForbiddenError, NotFoundError
 from ..middleware.auth import AuthContext, get_current_user
@@ -55,7 +56,7 @@ class KioskSessionOut(BaseModel):
 
 
 def _meta(request: Request) -> dict[str, Any]:
-    return {"ip_address": request.client.host if request.client else None,
+    return {"ip_address": client_address(request),
             "user_agent": request.headers.get("user-agent")}
 
 

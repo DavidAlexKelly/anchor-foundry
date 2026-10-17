@@ -13,6 +13,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Request, status
 from pydantic import BaseModel, Field
 
+from ..lib.proxy import client_address
 from ..lib.db import user_connection
 from ..middleware.permissions import (
     ProjectAccess,
@@ -128,7 +129,7 @@ async def create_project(
             workspace_id=access.workspace_id,
             project_id=row["id"],
             metadata={"name": body.name, "slug": row["slug"]},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     effective = "owner" if access.role == "admin" else access.role
@@ -169,7 +170,7 @@ async def update_project(
             workspace_id=access.workspace_id,
             project_id=access.project_id,
             metadata=body.model_dump(exclude_none=True),
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     return ProjectSummary(**{**row, "effective_role": access.role})
@@ -191,7 +192,7 @@ async def delete_project(
             resource_id=access.project_id,
             workspace_id=access.workspace_id,
             project_id=access.project_id,
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
 
@@ -235,7 +236,7 @@ async def set_permission(
             project_id=access.project_id,
             metadata={"role": body.role, "user_id": str(body.user_id) if body.user_id else None,
                       "group_id": str(body.group_id) if body.group_id else None},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )
     row.setdefault("email", None)
@@ -263,6 +264,6 @@ async def remove_permission(
             resource_id=member_id,
             workspace_id=access.workspace_id,
             project_id=access.project_id,
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_address(request),
             user_agent=request.headers.get("user-agent"),
         )

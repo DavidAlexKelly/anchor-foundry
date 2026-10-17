@@ -20,6 +20,7 @@ import anyio
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
+from ..lib.proxy import client_address
 from ..lib.db import fetch_one, user_connection
 from ..services import audit, egress, egress_store, outbound_apps
 from ..services import connections as conn_service
@@ -120,7 +121,7 @@ async def callback(
                 resource_id=connection_id, workspace_id=UUID(str(row["workspace_id"])),
                 project_id=UUID(str(row["project_id"])) if row["project_id"] else None,
                 metadata={"scope": values.get("scope")},
-                ip_address=request.client.host if request.client else None,
+                ip_address=client_address(request),
                 user_agent=request.headers.get("user-agent"),
             )
     return _back(back, "granted")

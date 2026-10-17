@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends, Query, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from ..lib import proxy
 from ..lib.db import get_engine, user_connection
 from ..lib.errors import ConflictError
 from ..middleware.permissions import ProjectAccess, require_project_role
@@ -325,14 +326,6 @@ async def listener_events(
     return [EventOut(**r) for r in rows]
 
 
-def _proxy_hops() -> int:
-    """How many proxies stand between a sender and this process, from
-    LISTENER_PROXY_HOPS (one behind the ALB, set in the CDK services
-    construct; none in development)."""
-    raw = os.environ.get("LISTENER_PROXY_HOPS", "0")
-    return int(raw) if raw.isdigit() else 0
-
-
 @ingress_router.post("/listen/{token}")
 async def receive(token: str, request: Request) -> JSONResponse:
     """p.261's endpoint. **No user**: what a request proves is its listener's
@@ -347,9 +340,7 @@ async def receive(token: str, request: Request) -> JSONResponse:
     try:
         async with get_engine().begin() as conn:
             found = await listener_service.admit(
-                conn, token, sender=listener_service.sender_address(
-                    request.client.host if request.client else None,
-                    request.headers.get("x-forwarded-for"), _proxy_hops()))
+                conn, token, sender=proxy.client_address(request))
         # A second transaction, so the count above stands whatever is
         # decided here (db 0110).
         # **The address the card shows, not the one this process heard
