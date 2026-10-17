@@ -13,6 +13,7 @@ import sys
 import uuid
 from types import SimpleNamespace
 
+import psycopg
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
@@ -88,10 +89,11 @@ def test_a_statement_the_code_got_wrong_is_still_a_500(client, caplog) -> None:
     assert _errors(caplog), "a fault in the code still reaches the alarm"
 
 
-class OperationalError(Exception):
-    def __init__(self, sqlstate=None):
-        super().__init__("x")
-        self.sqlstate = sqlstate
+def OperationalError(sqlstate=None) -> psycopg.OperationalError:
+    """psycopg's, with the SQLSTATE a server would have sent."""
+    kind = type("Operational", (psycopg.OperationalError,),
+                {"sqlstate": property(lambda self: sqlstate)})
+    return kind("x")
 
 
 @pytest.mark.parametrize("sqlstate, invalidated, expected", [
@@ -109,6 +111,12 @@ def test_which_errors_say_the_database_is_unavailable(sqlstate, invalidated, exp
     exc = DBAPIError("SELECT 1", None, OperationalError(sqlstate),
                      connection_invalidated=invalidated)
     assert main.database_unavailable(exc) is expected
+
+
+def test_a_connect_that_timed_out_is_unavailable() -> None:
+    """psycopg says so with ConnectionTimeout, a subclass (§958)."""
+    exc = DBAPIError("SELECT 1", None, psycopg.errors.ConnectionTimeout("connection timeout expired"))
+    assert main.database_unavailable(exc) is True
 
 
 def test_an_error_with_no_sqlstate_that_is_not_operational_is_not_unavailable() -> None:
