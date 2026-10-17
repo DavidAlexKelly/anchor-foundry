@@ -1,3 +1,4 @@
+import { whyExpired } from "./dataset-retention";
 /**
  * Branching a dataset from one of its historical transactions
  * (§357; `dataset-preview` p.4).
@@ -60,7 +61,11 @@ export function branchName(source: string, version: number): string {
  */
 export function whyNotBranchable(version: {
   size_bytes?: number | null;
+  expired_at?: string | null;
 }): string {
+  // §966: removed on purpose, and said so before "not in storage" would make
+  // it sound like an accident.
+  if (version.expired_at) return whyExpired(version);
   if (version.size_bytes === null || version.size_bytes === undefined) {
     return "this version's data is no longer in storage, so there is nothing to copy";
   }

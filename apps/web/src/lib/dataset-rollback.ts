@@ -1,3 +1,4 @@
+import { whyExpired } from "./dataset-retention";
 /**
  * Rolling a dataset back to one of its earlier versions
  * (§361; `data-lineage` p.73, p.75-76).
@@ -26,6 +27,7 @@
 export type RollbackVersion = {
   version_number: number;
   size_bytes?: number | null;
+  expired_at?: string | null;
 };
 
 /**
@@ -48,6 +50,7 @@ export function whyNotRollbackable(
   if (version.version_number === currentVersion) {
     return "this is the version the dataset is on";
   }
+  if (version.expired_at) return whyExpired(version);
   if (version.size_bytes === null || version.size_bytes === undefined) {
     return "this version's data is no longer in storage, so there is nothing to roll back to";
   }
