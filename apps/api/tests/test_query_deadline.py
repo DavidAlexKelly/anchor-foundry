@@ -88,7 +88,8 @@ def test_a_mistake_still_reads_as_the_mistake(parquet, one_second) -> None:
 
 
 def test_the_deadlines_fit_what_waits_for_them() -> None:
-    # Inside CloudFront's sixty seconds for a request; a run may outlast one.
-    assert duck.QUERY_DEADLINE_S < 60 <= duck.TRANSFORM_DEADLINE_S
-    assert duck.stopped_message(50).startswith("stopped after 50 seconds")
+    # Inside CloudFront's sixty seconds for a request, the wait for a slot
+    # included (§984); a run may outlast one.
+    assert duck.SLOT_WAIT_S + duck.QUERY_DEADLINE_S < 60 <= duck.TRANSFORM_DEADLINE_S
+    assert duck.stopped_message(45).startswith("stopped after 45 seconds")
     assert duck.stopped_message(600).startswith("stopped after 10 minutes")

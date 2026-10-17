@@ -45,9 +45,19 @@ class Busy(RuntimeError):
 # `DUCKDB_SLOT_WAIT` seconds for one before it is told the platform is busy.
 # Unset, as on a laptop, nothing waits.
 #
+# Ten seconds by default (§984). It was sixty, which is CloudFront's whole
+# minute (E.31) spent before the work began: a request that waited that long
+# was a 504 whatever came after, and then did its work for nobody. The wait
+# and a query's own deadline together stay inside the minute; past the wait
+# the person is told busy, with a Retry-After the web app's queries act on
+# (§959).
+#
 # A slot belongs to a thread, not a connection: an operation that opens two
 # connections (a sandbox and a writer) holds one slot, so two such operations
 # cannot each hold one and wait forever for a second.
+#: How long an operation waits for a slot by default (§984).
+SLOT_WAIT_S = 10.0
+
 _slots_lock = threading.Lock()
 _slots: threading.BoundedSemaphore | None = None
 _slots_size = 0
@@ -80,7 +90,7 @@ class _ThreadSlot:
                 return
         semaphore = _semaphore()
         if semaphore is not None:
-            wait = float(os.environ.get("DUCKDB_SLOT_WAIT", "60"))
+            wait = float(os.environ.get("DUCKDB_SLOT_WAIT", str(SLOT_WAIT_S)))
             if not semaphore.acquire(timeout=wait):
                 raise Busy("the platform is busy with other work; try again in a moment")
         with self.lock:
@@ -182,7 +192,7 @@ def connect() -> duckdb.DuckDBPyConnection:
 #: How long a person's query may run on a request's path (§971): inside
 #: CloudFront's sixty seconds, so it is stopped with a sentence rather than
 #: carrying on after the 504 holding a slot and a core.
-QUERY_DEADLINE_S = float(os.environ.get("DUCKDB_QUERY_DEADLINE_S", "50"))
+QUERY_DEADLINE_S = float(os.environ.get("DUCKDB_QUERY_DEADLINE_S", "45"))
 
 #: How long a SQL model's run from the API may run: it may outlast its request
 #: (§969), but not hold a slot for good.
