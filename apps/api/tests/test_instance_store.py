@@ -1467,3 +1467,29 @@ async def test_only_the_last_bulk_request_waits_for_a_refresh(store, monkeypatch
             rows=_rows(count), synced_at=datetime.now(timezone.utc), declared=DECLARED,
         )
         assert seen == expected, count
+
+
+@pytest.mark.anyio
+async def test_a_cluster_that_cannot_be_reached_is_not_a_missing_object() -> None:
+    """§961: `get_instance` caught every exception as "not found", so an
+    unreachable cluster answered an existing object with a 404 and an edit
+    to it with "no such object". Only a document that is not there is None."""
+    import socket
+
+    with socket.socket() as s:  # a port nothing listens on
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    down = instance_store.OpenSearchInstanceStore(f"http://127.0.0.1:{port}", "u", "p")
+    try:
+        with pytest.raises(Exception) as caught:
+            await down.get_instance(search_prefix=PREFIX, object_type_id=uuid.uuid4(),
+                                    instance_id="x")
+        assert "NotFound" not in type(caught.value).__name__
+    finally:
+        await down.close()
+
+
+@pytest.mark.anyio
+async def test_a_missing_object_is_still_none(store) -> None:
+    assert await store.get_instance(search_prefix=PREFIX, object_type_id=uuid.uuid4(),
+                                    instance_id=str(uuid.uuid4())) is None

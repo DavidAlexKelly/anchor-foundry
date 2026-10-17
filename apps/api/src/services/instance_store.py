@@ -871,10 +871,18 @@ class OpenSearchInstanceStore:
     async def get_instance(
         self, *, search_prefix: str, object_type_id: UUID, instance_id: str
     ) -> dict[str, Any] | None:
+        from opensearchpy import NotFoundError as Missing
+
         index = _index_name(search_prefix, object_type_id)
         try:
             resp = await self._client.get(index=index, id=instance_id)
-        except Exception:  # opensearchpy.NotFoundError, deferred import
+        except Missing:
+            # **Only a document that is not there is "not found"** (§961).
+            # This caught every exception, so a cluster that timed out, was
+            # down or refused the credentials answered an existing object
+            # with a 404, and an edit to it with "no such object" - an outage
+            # reported as missing data. Those now raise, as every other read
+            # of the cluster does.
             return None
         source = resp["_source"]
         if str(source.get("object_type_id")) != str(object_type_id):
