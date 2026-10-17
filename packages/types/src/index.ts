@@ -1004,6 +1004,9 @@ export interface AuditEntry {
   actor_email: string | null;
   actor_name: string | null;
   created_at: string;
+  /** Where the request came from and with what (§988); null when unrecorded. */
+  ip_address?: string | null;
+  user_agent?: string | null;
 }
 
 // ---- first-owner bootstrap (unauthenticated, one-time only) ----------------

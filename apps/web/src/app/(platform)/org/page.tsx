@@ -1,6 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import Link from "next/link";
 import { useState } from "react";
 import { ApiError, api, mutations } from "@/lib/api";
 import { Dialog, Field } from "@/components/dialog";
@@ -180,7 +181,15 @@ export default function OrgPage() {
             </p>
           )}
         </div>
-        {isAdmin && <InviteButton />}
+        {isAdmin && (
+          <div className="row" style={{ gap: 8 }}>
+            {/* §988: the log of what everyone did, for whoever answers for it. */}
+            <Link href="/org/audit" className="btn quiet" data-testid="org-audit-link">
+              Audit log
+            </Link>
+            <InviteButton />
+          </div>
+        )}
       </div>
 
       <p className="eyebrow" style={{ marginBottom: 10 }}>members</p>
