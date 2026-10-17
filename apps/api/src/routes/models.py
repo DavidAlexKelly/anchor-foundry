@@ -203,7 +203,10 @@ async def list_models(
 ) -> list[ModelOut]:
     async with user_connection(access.auth.user_id) as conn:
         rows = await model_service.list_for_project(conn, access.project_id)
-        return [await _with_inputs(conn, r) for r in rows]
+        # One statement for every model's inputs, not one each (§986).
+        inputs = await model_service.inputs_for(conn, [UUID(str(r["id"])) for r in rows])
+    return [ModelOut(**r, inputs=[ModelInputOut(**i) for i in inputs[str(r["id"])]])
+            for r in rows]
 
 
 @router.post("", response_model=ModelOut, status_code=status.HTTP_201_CREATED)
