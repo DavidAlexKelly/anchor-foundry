@@ -8,6 +8,8 @@ import { api } from "@/lib/api";
 import { clearSignedIn, isSignedIn, loginHrefFor } from "@/lib/auth";
 import { AnchorGlyph } from "@/components/glyph";
 import { NotificationBell } from "@/components/notification-bell";
+import { WorkspaceSearch } from "@/components/workspace-search";
+import { workspaceOf } from "@/lib/workspace-search";
 
 export default function PlatformLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -85,6 +87,8 @@ function Topbar({
           </Link>
         </nav>
         <div className="spacer" />
+        {/* §990: inside a workspace, its resources by name. */}
+        {workspaceOf(pathname) && <WorkspaceSearch slug={workspaceOf(pathname)!} />}
         <div className="identity">
           {/* p.91 puts notifications in the Workspace bar rather than on a
               page: a notification is addressed to a person, and somebody who

@@ -180,6 +180,10 @@ export const api = {
    * parameter has no empty form, so `[]` produces the same request as no filter
    * at all and answers with the whole directory. `user-select.shouldAsk` is
    * where that decision is made and tested. */
+  /** A workspace's resources by name, across its projects (§990). */
+  searchWorkspace: (wid: string, q: string) =>
+    request<import("./types").SearchHit[]>(
+      `/workspaces/${wid}/search?q=${encodeURIComponent(q)}`),
   /** The organisation's audit log, newest first, narrowed (§988). */
   orgAudit: (query: string) =>
     request<import("./types").AuditEntry[]>(`/org/audit${query ? `?${query}` : ""}`),
