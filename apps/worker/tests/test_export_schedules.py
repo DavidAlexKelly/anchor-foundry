@@ -697,3 +697,78 @@ def test_a_pass_that_starts_while_an_export_runs_leaves_it_alone(
     run_due_exports(_ctx())
     assert second == [None]
     assert len(_runs(eid)) == 1, "the second pass ran the export again"
+
+
+# ---- one run of an export at a time (§973; db 0172) -------------------------
+def test_a_scheduled_run_leaves_an_export_another_run_is_sending(
+    workspace: dict, source_database: dict
+) -> None:
+    """A manual run from the API holds the export's one running place; the
+    schedule's pass would send the same rows beside it, so it leaves it."""
+    cid = _connection(workspace, source_database)
+    dataset = _synced_dataset(workspace, cid)
+    eid = _export(workspace, cid, dataset)
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        conn.execute("INSERT INTO export_runs (export_id, status, dataset_version)"
+                     " VALUES (%s, 'running', 1)", (eid,))
+    run_due_exports(_ctx())
+    assert [r["status"] for r in _runs(eid)] == ["running"]
+    assert _exported_rows() == []
+
+
+def test_a_scheduled_run_is_running_while_it_sends(
+    workspace: dict, source_database: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """So a manual run pressed meanwhile is refused rather than sent twice."""
+    cid = _connection(workspace, source_database)
+    dataset = _synced_dataset(workspace, cid)
+    eid = _export(workspace, cid, dataset)
+    seen: list[list[str]] = []
+    real = export_schedules.export_runs.perform
+
+    def watching(*args, **kwargs):
+        seen.append([r["status"] for r in _runs(eid)])
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(export_schedules.export_runs, "perform", watching)
+    run_due_exports(_ctx())
+    assert seen == [["running"]]
+    # And the one row it opened is the one it completed.
+    assert [(r["status"], r["rows"]) for r in _runs(eid)] == [("succeeded", 2)]
+
+
+def test_a_fault_in_a_scheduled_run_completes_its_row_as_failed(
+    workspace: dict, source_database: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cid = _connection(workspace, source_database)
+    dataset = _synced_dataset(workspace, cid)
+    eid = _export(workspace, cid, dataset)
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("a bug in the export")
+
+    monkeypatch.setattr(export_schedules.export_runs, "perform", broken)
+    run_due_exports(_ctx())
+    [run] = _runs(eid)
+    assert (run["status"], run["error"]) == (
+        "failed", "the export stopped unexpectedly; it runs again on its schedule")
+
+
+def test_an_export_run_is_failed_by_the_sweep_only_past_an_hour(workspace: dict,
+                                                                source_database: dict) -> None:
+    """A worker's export may wait half an hour on its source (§948), so the
+    sweep that fails abandoned runs gives an export longer than a sync."""
+    from anchor_worker.jobs import model_runs
+
+    cid = _connection(workspace, source_database)
+    dataset = _synced_dataset(workspace, cid)
+    slow, gone = _export(workspace, cid, dataset), _export(workspace, cid, dataset)
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        for eid, minutes in ((slow, 40), (gone, 70)):
+            conn.execute("INSERT INTO export_runs (export_id, status, dataset_version, started_at)"
+                         " VALUES (%s, 'running', 1, now() - make_interval(mins => %s))",
+                         (eid, minutes))
+    context = _ctx()
+    model_runs._fail_abandoned(context, context.resources.platform_db)
+    assert [r["status"] for r in _runs(slow)] == ["running"]
+    assert [r["status"] for r in _runs(gone)] == ["failed"]

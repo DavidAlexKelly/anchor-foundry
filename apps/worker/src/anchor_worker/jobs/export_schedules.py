@@ -171,6 +171,60 @@ def _run_one(context, platform_db, export_id, workspace_id) -> bool:
         "last_version": last_version,
     }
     connection = {"source_type": source_type, "config": _json(config)}
+
+    # Recorded as running before it starts, as a run from the API is (§968,
+    # §973; db 0172), so the two never run one export at once: one sending
+    # what the other is sending would put the same rows in the destination
+    # twice. Another run holding it is doing this pass's work - it sends the
+    # current version too - so this pass leaves it.
+    run_id = _open(platform_db, workspace_id, export_id, int(current_version))
+    if run_id is None:
+        context.log.info("scheduled export %s (%s): already running; left to that run",
+                         export_id, name)
+        return False
+    try:
+        outcome = _send(storage, export, connection, config, resource_id, secret_arn,
+                        manifest_key, history, current_version, dataset_schema, policies)
+    except Exception:
+        # Completed whatever happened, so the history never shows it running for good.
+        _record(platform_db, workspace_id, export_id, {
+            "ok": False, "skipped": False, "dataset_version": int(current_version),
+            "rows_written": 0, "detail": None,
+            "error": "the export stopped unexpectedly; it runs again on its schedule",
+        }, run_id)
+        raise
+
+    _record(platform_db, workspace_id, export_id, outcome, run_id)
+    _advance(context, platform_db, workspace_id, export_id, schedule)
+    context.log.info(
+        "scheduled export %s (%s): %s", export_id, name,
+        "skipped" if outcome["skipped"] else ("succeeded" if outcome["ok"] else f"failed ({outcome['error']})"),
+    )
+    return True
+
+
+def _open(platform_db, workspace_id, export_id, dataset_version: int):
+    """The run's row, running; None when another run of this export holds
+    the one running place (db 0172's `export_runs_one_running`)."""
+    with platform_db.connect_scoped_to(workspace_id) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO export_runs (export_id, status, dataset_version, run_by)
+                VALUES (%s, 'running', %s, NULL)
+                ON CONFLICT (export_id) WHERE status = 'running' DO NOTHING
+                RETURNING id
+                """,
+                (str(export_id), dataset_version),
+            )
+            row = cur.fetchone()
+        conn.commit()
+    return row[0] if row else None
+
+
+def _send(storage, export, connection, config, resource_id, secret_arn, manifest_key,
+          history, current_version, dataset_schema, policies):
+    """The export itself: its credentials, its input's bytes, and the call."""
     # §599, as a scheduled sync does it.
     secret = oidc.source_credentials(config, resource_id) or _read_secret(secret_arn)
 
@@ -198,7 +252,7 @@ def _run_one(context, platform_db, export_id, workspace_id) -> bool:
         except (StorageKeyError, FileNotFoundError, OSError):
             return None
 
-    outcome = export_runs.perform(
+    return export_runs.perform(
         export, connection, secret,
         parquet_path=parquet_path,
         dataset_version=int(current_version or 0),
@@ -208,16 +262,8 @@ def _run_one(context, platform_db, export_id, workspace_id) -> bool:
         path_of=path_of,
     )
 
-    _record(platform_db, workspace_id, export_id, outcome)
-    _advance(context, platform_db, workspace_id, export_id, schedule)
-    context.log.info(
-        "scheduled export %s (%s): %s", export_id, name,
-        "skipped" if outcome["skipped"] else ("succeeded" if outcome["ok"] else f"failed ({outcome['error']})"),
-    )
-    return True
 
-
-def _record(platform_db, workspace_id, export_id, outcome) -> None:
+def _record(platform_db, workspace_id, export_id, outcome, run_id) -> None:
     """One row per run, including the one where nothing happened.
 
     p.192 makes "nothing new" a success, and a success that left no row would
@@ -242,21 +288,23 @@ def _record(platform_db, workspace_id, export_id, outcome) -> None:
             # result and not in the table — the API's `record` drops it too, and
             # the two writers must produce the same row or the history stops
             # being one list. `detail` is kept by both (§748; db 0145).
+            # The row `_open` made, completed (§973).
             cur.execute(
                 """
-                INSERT INTO export_runs
-                    (export_id, status, skipped, dataset_version, rows_written,
-                     error, finished_at, run_by, detail)
-                VALUES (%s, %s, %s, %s, %s, %s, now(), NULL, %s)
+                UPDATE export_runs
+                   SET status = %s, skipped = %s, dataset_version = %s, rows_written = %s,
+                       error = %s, finished_at = now(), detail = %s
+                 WHERE id = %s AND export_id = %s
                 """,
                 (
-                    str(export_id),
                     "succeeded" if outcome["ok"] else "failed",
                     outcome["skipped"],
                     outcome["dataset_version"],
                     outcome["rows_written"],
                     outcome["error"],
                     outcome.get("detail"),
+                    str(run_id),
+                    str(export_id),
                 ),
             )
             # The API's condition exactly, including why there is no

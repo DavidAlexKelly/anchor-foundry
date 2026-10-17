@@ -511,6 +511,9 @@ ABANDONED_ACTION_RUN = "30 minutes"
 #: A sync the API runs (§950; db 0169): its extract stops at the source
 #: deadline, five minutes (§947), and the rest is one request's ingest.
 ABANDONED_SYNC_RUN = "30 minutes"
+#: An export run (§968, §973; db 0172): the worker's waits at most its
+#: source deadline, thirty minutes (§948), and the API's five. Past both.
+ABANDONED_EXPORT_RUN = "1 hour"
 
 
 def _fail_abandoned(context: OpExecutionContext, platform_db: PlatformDatabase) -> int:
@@ -520,8 +523,9 @@ def _fail_abandoned(context: OpExecutionContext, platform_db: PlatformDatabase) 
     with platform_db.connect() as conn:
         failed = conn.execute(
             "SELECT fail_abandoned_runs(CAST(%s AS interval), CAST(%s AS interval),"
-            " CAST(%s AS interval), CAST(%s AS interval))",
-            (ABANDONED_MODEL_RUN, ABANDONED_CODE_RUN, ABANDONED_ACTION_RUN, ABANDONED_SYNC_RUN),
+            " CAST(%s AS interval), CAST(%s AS interval), CAST(%s AS interval))",
+            (ABANDONED_MODEL_RUN, ABANDONED_CODE_RUN, ABANDONED_ACTION_RUN, ABANDONED_SYNC_RUN,
+             ABANDONED_EXPORT_RUN),
         ).fetchone()[0]
         conn.commit()
     if failed:
