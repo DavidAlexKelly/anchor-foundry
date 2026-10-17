@@ -472,11 +472,17 @@ def _like_prefix(text_: str) -> str:
     return text_.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
 
 
+#: The most entries one export may hold (§989): a month of a busy
+#: organisation, and a file a spreadsheet opens. Past it the export is refused
+#: with a sentence rather than cut short without one.
+AUDIT_EXPORT_MAX = 50_000
+
+
 async def list_audit(
     conn: AsyncConnection, organisation_id: UUID, *, limit: int, offset: int,
-    filters: AuditFilters = AuditFilters(),
+    filters: AuditFilters = AuditFilters(), most: int = 200,
 ) -> list[dict[str, Any]]:
-    limit = max(1, min(limit, 200))
+    limit = max(1, min(limit, most))
     offset = max(0, offset)
     f = filters
     return await fetch_all(
