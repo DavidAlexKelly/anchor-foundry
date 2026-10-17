@@ -55,7 +55,7 @@ _COLUMNS = """
     id, project_id, workspace_id, name, slug, description, origin,
     connection_id, s3_location, table_schema, row_count, current_version,
     schema_policy, forked_from_dataset_id, forked_from_version,
-    original_filename, parse_options, created_by, created_at, updated_at
+    original_filename, parse_options, retention_versions, created_by, created_at, updated_at
 """
 
 # Migration 0023 enforces the schema policy in a BEFORE INSERT trigger on
@@ -91,6 +91,53 @@ async def list_for_project(conn: AsyncConnection, project_id: UUID) -> list[dict
         f"SELECT {_COLUMNS} FROM datasets WHERE project_id = :pid ORDER BY name",
         {"pid": str(project_id)},
     )
+
+
+async def set_retention(
+    conn: AsyncConnection, project_id: UUID, dataset_id: UUID, keep_versions: int | None
+) -> dict[str, Any]:
+    """Keep the newest `keep_versions` versions of this dataset, or every
+    version when None (§964; decision 0005 §4)."""
+    await get(conn, project_id, dataset_id)
+    row = await fetch_one(
+        conn,
+        f"UPDATE datasets SET retention_versions = :keep WHERE id = :did RETURNING {_COLUMNS}",
+        {"keep": keep_versions, "did": str(dataset_id)},
+    )
+    assert row is not None
+    return row
+
+
+async def expirable_versions(
+    conn: AsyncConnection, dataset_id: UUID, *, keeping: int | None = None
+) -> list[dict[str, Any]]:
+    """The versions this dataset's policy lets go, oldest first (db 0170): the
+    one definition the report, the preview and the sweeper all read. With
+    `keeping`, what a policy of that many would let go, before it is saved.
+    Ask it only about a dataset already read under the caller's own policies:
+    it counts exports and shared files the caller may not see, because it
+    has to."""
+    if keeping is not None:
+        return await fetch_all(
+            conn,
+            "SELECT version_number, s3_manifest_key"
+            "  FROM expirable_dataset_versions_keeping(:did, :keep)",
+            {"did": str(dataset_id), "keep": keeping},
+        )
+    return await fetch_all(
+        conn,
+        "SELECT version_number, s3_manifest_key FROM expirable_dataset_versions(:did)",
+        {"did": str(dataset_id)},
+    )
+
+
+async def expired_count(conn: AsyncConnection, dataset_id: UUID) -> int:
+    row = await fetch_one(
+        conn,
+        "SELECT count(*) AS n FROM dataset_versions WHERE dataset_id = :did AND expired_at IS NOT NULL",
+        {"did": str(dataset_id)},
+    )
+    return int(row["n"]) if row else 0
 
 
 async def get(conn: AsyncConnection, project_id: UUID, dataset_id: UUID) -> dict[str, Any]:
@@ -479,6 +526,7 @@ async def list_versions(
         SELECT * FROM (
             SELECT v.id, v.version_number, v.row_count, v.table_schema,
                    v.produced_by_kind, v.s3_manifest_key, v.created_at, v.transaction_type,
+                   v.expired_at,
                    -- Where a rollback took its data from, resolved to the
                    -- number the history shows rather than the row id it
                    -- stores, so the reader sees "rolled back to v3" instead of

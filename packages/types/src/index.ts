@@ -1214,6 +1214,8 @@ export interface Dataset {
    *  id is a historical record that survives the source being deleted. */
   forked_from_dataset_id: string | null;
   forked_from_version: number | null;
+  /** How many versions this dataset keeps; null keeps every one (§964). */
+  retention_versions?: number | null;
   /** The file this was uploaded from, still in storage (§362; db 0090). Null
    *  when there is none to read again — anything not uploaded, or uploaded
    *  before the name was recorded. */
@@ -1316,6 +1318,16 @@ export interface DatasetRetention {
   total_bytes: number;
   unmeasured: number;
   current_version: number;
+  /** The policy (§964; decision 0005): the newest N versions are kept, and
+   * null keeps every one. */
+  keep_versions?: number | null;
+  /** Versions whose data a policy has removed; their records remain. */
+  expired?: number;
+  /** What the policy - or the one asked about - would remove: never the
+   * current version, the newest N, one a transactional export still reads,
+   * or one whose file another version reads. */
+  would_expire?: number[];
+  would_free_bytes?: number;
 }
 
 /** How to read an uploaded delimited file (§362; `dataset-preview` p.14,
@@ -1463,6 +1475,9 @@ export interface DatasetVersion {
    * transactions out instead (`data-lineage` p.70); this says the same thing
    * forwards, without editing the past. */
   rolled_back_to?: number | null;
+  /** When a retention policy removed this version's data (§965). The record
+   *  is still true about what it was; it can no longer be read. */
+  expired_at?: string | null;
   /** How it relates to the version before (§747; `data-integration` p.22):
    *  a SNAPSHOT begins a new view, an APPEND only adds rows to the one before,
    *  an UPDATE may also change or remove them. */

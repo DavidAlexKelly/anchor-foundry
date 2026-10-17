@@ -45,7 +45,7 @@ Per dataset, not per workspace. Datasets differ by three orders of magnitude in 
 
 Shape: `datasets.retention_versions integer NULL` — keep the newest N, NULL means keep everything. Versions rather than days, because "how many versions back can I look" is the question time travel actually answers, and a day-based rule on an hourly sync and a monthly one mean wildly different things.
 
-**Not built yet.** Expiry deletes customer data, and shipping the delete before anybody can see what would be deleted is the wrong order. The reporting is here; the policy and its sweeper are the next item, and this document is what they will be built against.
+**Not built yet.** Expiry deletes customer data, and shipping the delete before anybody can see what would be deleted is the wrong order. The reporting is here; the policy and its sweeper are the next item, and this document is what they will be built against. *§964 built the policy and the report: `datasets.retention_versions`, `dataset_versions.expired_at`, and `expirable_dataset_versions()` (db 0170), which `PUT`/`GET /datasets/{id}/retention` answer from. Besides §3's protections it holds every version a transactional export (§748) will still read, each one from its `last_version` on; and every version whose file another still reads, since a rollback (§361) points its new version at the old version's own file rather than copying it. Nothing deletes yet; the sweeper reads the same function.*
 
 ## Consequences
 

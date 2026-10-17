@@ -100,6 +100,8 @@ class DatasetOut(BaseModel):
     # a fork never recomputes, so this is not a pipeline-graph edge.
     forked_from_dataset_id: UUID | None = None
     forked_from_version: int | None = None
+    # How many versions this dataset keeps; None keeps every one (§964; db 0170).
+    retention_versions: int | None = None
     # The file this was uploaded from, still in storage (§362; db 0090). Null
     # when there is none to read again — anything not uploaded, or uploaded
     # before the name was recorded — which is what the Parse again panel reads
@@ -148,6 +150,9 @@ class VersionOut(BaseModel):
     # Set on a version a rollback produced, naming the version it took its data
     # from (§361; `data-lineage` p.73). None on every other kind.
     rolled_back_to: int | None = None
+    # When a retention policy removed this version's data (§964). The row is
+    # still true about what it was; it can no longer be read.
+    expired_at: datetime | None = None
     # p.22's type (§747; db 0144): SNAPSHOT begins a new view, APPEND and
     # UPDATE extend the one before.
     transaction_type: str
@@ -186,6 +191,21 @@ class RetentionOut(BaseModel):
     total_bytes: int
     unmeasured: int
     current_version: int
+    # The policy (§964; decision 0005 §4): the newest N versions are kept, and
+    # None keeps them all.
+    keep_versions: int | None = None
+    # Versions whose data a policy has already removed; their rows remain.
+    expired: int = 0
+    # What the policy would remove now, before anything does: the versions,
+    # and the bytes they hold. The current version, the newest N and any a
+    # transactional export still needs are never among them.
+    would_expire: list[int] = []
+    would_free_bytes: int = 0
+
+
+class RetentionIn(BaseModel):
+    """Keep the newest `keep_versions` versions; null keeps every one."""
+    keep_versions: int | None = Field(default=None, ge=1, le=1_000_000)
 
 
 class ColumnProfileOut(BaseModel):
@@ -1155,33 +1175,79 @@ async def _sizes_by_listing(keys: list[Any]) -> list[int | None]:
     return [listed.get(str(k)) if k else None for k in keys]
 
 
+async def _retention(conn: Any, access: ProjectAccess, dataset_id: UUID,
+                     keeping: int | None = None) -> RetentionOut:
+    current = await ds_service.get(conn, access.project_id, dataset_id)
+    rows = await ds_service.list_versions(conn, access.project_id, dataset_id)
+    expirable = await ds_service.expirable_versions(conn, dataset_id, keeping=keeping)
+    # The bytes still held: an expired version's are gone by definition, and
+    # counting it as "unmeasured" would make every expiry look like damage.
+    held = [row for row in rows if row.get("expired_at") is None]
+    sizes = await _sizes_by_listing([row.get("s3_manifest_key") for row in held])
+    by_version = {int(row["version_number"]): size for row, size in zip(held, sizes)}
+    going = [int(row["version_number"]) for row in expirable]
+    return RetentionOut(
+        versions=len(rows),
+        total_bytes=sum(size for size in sizes if size is not None),
+        unmeasured=sum(1 for size in sizes if size is None),
+        current_version=int(current["current_version"]),
+        keep_versions=current.get("retention_versions"),
+        expired=len(rows) - len(held),
+        would_expire=going,
+        would_free_bytes=sum(by_version.get(n) or 0 for n in going),
+    )
+
+
 @router.get("/{dataset_id}/retention", response_model=RetentionOut)
 async def dataset_retention(
     dataset_id: UUID,
+    keep_versions: int | None = Query(default=None, ge=1, le=1_000_000),
     access: ProjectAccess = Depends(require_project_role("viewer")),
 ) -> RetentionOut:
-    """What keeping every version of this dataset costs.
+    """What keeping this dataset's versions costs, and what its policy would
+    remove (§964).
 
-    Nothing deletes an old version today (docs/decisions/0005), so this number
-    only grows. Reporting it is the point: a cost nobody can see is a cost
-    nobody manages, and this one arrives as a line on a bill months later.
+    Every version is kept unless somebody sets a policy (docs/decisions/0005),
+    so the cost only grows; reporting it is the point. With a policy, this is
+    also the answer to "what would it delete" - asked of the same function
+    the sweeper reads, before the sweeper deletes anything. `keep_versions`
+    asks what a policy of that many would remove, before it is saved; the
+    rest of the answer is the dataset as it is.
     """
     async with user_connection(access.auth.user_id) as conn:
-        current = await ds_service.get(conn, access.project_id, dataset_id)
-        rows = await ds_service.list_versions(conn, access.project_id, dataset_id)
-    total = 0
-    unmeasured = 0
-    for size in await _sizes_by_listing([row.get("s3_manifest_key") for row in rows]):
-        if size is None:
-            unmeasured += 1
-        else:
-            total += size
-    return RetentionOut(
-        versions=len(rows),
-        total_bytes=total,
-        unmeasured=unmeasured,
-        current_version=int(current["current_version"]),
-    )
+        return await _retention(conn, access, dataset_id, keeping=keep_versions)
+
+
+@router.put("/{dataset_id}/retention", response_model=RetentionOut)
+async def set_dataset_retention(
+    dataset_id: UUID,
+    body: RetentionIn,
+    request: Request,
+    access: ProjectAccess = Depends(require_project_role("editor")),
+) -> RetentionOut:
+    """Keep the newest `keep_versions` versions of this dataset, or every
+    version with null (§964; decision 0005 §4). An editor may delete the
+    dataset outright, so an editor may limit its history. The answer says
+    what the policy would remove, so it can be read before anything is."""
+    async with user_connection(access.auth.user_id) as conn:
+        before = await ds_service.get(conn, access.project_id, dataset_id)
+        await ds_service.set_retention(conn, access.project_id, dataset_id, body.keep_versions)
+        report = await _retention(conn, access, dataset_id)
+        await audit.record(
+            conn,
+            organisation_id=access.auth.organisation_id,
+            user_id=access.auth.user_id,
+            action="dataset.retention",
+            resource_type="dataset",
+            resource_id=dataset_id,
+            workspace_id=access.workspace_id,
+            project_id=access.project_id,
+            metadata={"from": before.get("retention_versions"), "to": body.keep_versions,
+                      "would_expire": len(report.would_expire)},
+            ip_address=client_address(request),
+            user_agent=request.headers.get("user-agent"),
+        )
+    return report
 
 
 @router.get("/{dataset_id}/versions", response_model=VersionPage)
