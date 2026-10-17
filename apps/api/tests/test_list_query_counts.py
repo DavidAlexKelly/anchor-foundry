@@ -117,6 +117,9 @@ LISTS = [
     "~/object-types",
     "~/projects",
     "/resources",
+    # The project's and the workspace's own pages, which count what is in them.
+    "",
+    "~",
 ]
 
 
@@ -147,3 +150,42 @@ def counts(client: TestClient) -> dict[str, tuple[int, int]]:
 def test_a_list_asks_the_same_number_of_times_however_long_it_is(counts, path) -> None:
     small, large = counts[path]
     assert large == small, f"{path}: {small} statements with 2 of each, {large} with 6"
+
+
+# ---- and as one type's instances grow ---------------------------------------
+def a_type_with_rows(client: TestClient, fx: Fixture, rows: int) -> str:
+    tag = uuid.uuid4().hex[:6]
+    csv = "id,v\n" + "".join(f"{i},x{i}\n" for i in range(rows))
+    r = client.post(f"{base(fx)}/datasets/upload", headers=hdr(fx.editor_sub),
+                    data={"name": f"many_{tag}"},
+                    files={"file": ("many.csv", io.BytesIO(csv.encode()), "text/csv")})
+    assert r.status_code == 201, r.text
+    did = r.json()["id"]
+    r = client.post(f"{wbase(fx)}/object-types", headers=hdr(fx.editor_sub), json={
+        "api_name": f"many_{tag}", "display_name": f"Many {tag}",
+        "properties": [{"api_name": "v", "data_type": "string"}]})
+    assert r.status_code == 201, r.text
+    type_id = r.json()["id"]
+    r = client.post(f"{base(fx)}/object-type-sources", headers=hdr(fx.editor_sub), json={
+        "object_type_id": type_id, "dataset_id": did, "primary_key_column": "id",
+        "column_mappings": {"v": "v"}})
+    assert r.status_code == 201, r.text
+    r = client.post(f"{base(fx)}/object-type-sources/{r.json()['id']}/sync",
+                    headers=hdr(fx.editor_sub))
+    assert r.status_code == 200, r.text
+    return type_id
+
+
+@pytest.mark.parametrize("suffix", ["", "/instances"])
+def test_a_types_pages_ask_the_same_number_of_times_however_many_objects(client, suffix) -> None:
+    fx = Fixture()
+    found = []
+    for rows in (3, 30):
+        type_id = a_type_with_rows(client, fx, rows)
+        path = f"{wbase(fx)}/object-types/{type_id}{suffix}"
+        client.get(path, headers=hdr(fx.viewer_sub))
+        with counted() as seen:
+            r = client.get(path, headers=hdr(fx.viewer_sub))
+        assert r.status_code == 200, r.text
+        found.append(len(seen))
+    assert found[0] == found[1], f"object type{suffix}: {found[0]} with 3 objects, {found[1]} with 30"
