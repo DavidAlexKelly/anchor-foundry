@@ -92,7 +92,8 @@ async def callback(
         import json
 
         config = json.loads(config)
-    secret = conn_service.secret_values_for(connection_routes.secrets_gateway(), dict(row))
+    secret = await anyio.to_thread.run_sync(
+        conn_service.secret_values_for, connection_routes.secrets_gateway(), dict(row))
 
     def trade() -> dict[str, str]:
         # §263: the token endpoint is the source's destination, inside its own
