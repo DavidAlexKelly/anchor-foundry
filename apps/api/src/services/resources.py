@@ -126,6 +126,45 @@ async def list_for_project(
     }
 
 
+#: How many of a workspace's resources one search answers with (§990): a list
+#: to choose from as one types, not a page to read.
+SEARCH_LIMIT = 20
+
+
+async def search_workspace(
+    conn: AsyncConnection, workspace_id: UUID, query: str, *, limit: int = SEARCH_LIMIT,
+) -> list[dict[str, Any]]:
+    """The workspace's resources whose names hold `query`, in every project
+    the caller can read - which is RLS's to say, as for every resource read.
+
+    The name that is the query comes first, then the ones that start with it,
+    then the rest, each newest first: someone who types a dataset's whole name
+    wants that dataset, not the forty whose names contain it."""
+    words = query.strip().lower()
+    if not words:
+        return []
+    escaped = _escape_like(words)
+    rows = await fetch_all(
+        conn,
+        """
+        SELECT r.id, r.kind::text AS kind, r.name, r.description, r.project_id,
+               r.updated_at, p.name AS project_name, p.slug AS project_slug
+          FROM resources r
+          LEFT JOIN projects p ON p.id = r.project_id
+         WHERE r.workspace_id = :wid
+           AND r.trashed_at IS NULL
+           AND lower(r.name) LIKE :anywhere ESCAPE '\\'
+         ORDER BY lower(r.name) = :exact DESC,
+                  lower(r.name) LIKE :prefix ESCAPE '\\' DESC,
+                  r.updated_at DESC, r.id
+         LIMIT :limit
+        """,
+        {"wid": str(workspace_id), "anywhere": f"%{escaped}%", "prefix": f"{escaped}%",
+         "exact": words, "limit": max(1, min(limit, SEARCH_LIMIT))},
+    )
+    return [dict(r) for r in rows]
+
+
 async def get(conn: AsyncConnection, resource_id: UUID) -> dict[str, Any] | None:
     """One resource by id, or None. RLS decides visibility, so a resource in a
     project the caller cannot reach is indistinguishable from one that does not
