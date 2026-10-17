@@ -64,9 +64,18 @@ export function WorkspaceSearch({ slug }: { slug: string }) {
 
   return (
     <div className="workspace-search" data-testid="workspace-search" style={{ position: "relative" }}>
+      {/* A combobox, in ARIA's words: a text box whose list of choices
+          opens under it. Not `type="search"`, whose role every page's own
+          search boxes have - a test, or a screen reader, asking for "the
+          search box" of a page means the page's, not this. */}
       <input
         ref={input}
-        type="search"
+        type="text"
+        role="combobox"
+        aria-expanded={open && !!asked}
+        aria-controls="workspace-search-results"
+        aria-autocomplete="list"
+        aria-activedescendant={highlight >= 0 ? `workspace-search-hit-${highlight}` : undefined}
         data-testid="workspace-search-input"
         placeholder="Search this workspace  /"
         aria-label="Search this workspace"
@@ -93,6 +102,7 @@ export function WorkspaceSearch({ slug }: { slug: string }) {
       />
       {open && asked && (
         <ul
+          id="workspace-search-results"
           role="listbox"
           data-testid="workspace-search-results"
           className="card"
@@ -110,6 +120,7 @@ export function WorkspaceSearch({ slug }: { slug: string }) {
           {found.map((hit, index) => (
             <li
               key={hit.id}
+              id={`workspace-search-hit-${index}`}
               role="option"
               aria-selected={index === highlight}
               data-testid="workspace-search-hit"
