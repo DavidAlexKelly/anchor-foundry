@@ -30,7 +30,11 @@ WORKER_OIDC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..
 
 
 def worker_oidc():
-    spec = importlib.util.spec_from_file_location("worker_oidc_under_test", WORKER_OIDC)
+    # A fresh copy each time, so no test reads a key another cached; named
+    # inside the worker's package so its own imports (`from . import aws`)
+    # resolve against it.
+    sys.path.insert(0, os.path.dirname(os.path.dirname(WORKER_OIDC)))
+    spec = importlib.util.spec_from_file_location("anchor_worker.oidc_under_test", WORKER_OIDC)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module

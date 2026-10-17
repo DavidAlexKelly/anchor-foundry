@@ -38,7 +38,7 @@ from ..connectors import ConnectorError, get_connector
 from ..resources import PlatformDatabase
 from ..storage import StorageKeyError, gateway_from_env, slugify, storage_prefix
 from .claims import claim_due
-from .. import duck
+from .. import aws, duck
 
 MAX_SYNC_BYTES = 200 * 1024 * 1024  # matches the API's day-one interactive cap
 
@@ -537,9 +537,7 @@ def run_due_scheduled_syncs(context: OpExecutionContext, platform_db: PlatformDa
 def _read_secret(secret_arn: str | None) -> dict[str, str]:
     if not secret_arn:
         return {}
-    import boto3
-
-    client = boto3.client("secretsmanager")
+    client = aws.client("secretsmanager")
     resp = client.get_secret_value(SecretId=secret_arn)
     return json.loads(resp["SecretString"])
 

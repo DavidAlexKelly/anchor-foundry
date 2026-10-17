@@ -14,6 +14,8 @@ from __future__ import annotations
 import json
 from typing import Protocol
 
+from ..lib import aws
+
 
 class SecretsGateway(Protocol):
     def put_secret(self, connection_id: str, values: dict[str, str]) -> str:
@@ -41,9 +43,7 @@ class Boto3SecretsGateway:
     manage exactly these secrets and nothing else in the account."""
 
     def __init__(self, region: str) -> None:
-        import boto3  # deferred: not installed in local dev
-
-        self._client = boto3.client("secretsmanager", region_name=region)
+        self._client = aws.client("secretsmanager", region_name=region)
 
     def put_secret(self, connection_id: str, values: dict[str, str]) -> str:
         name = f"{SECRET_PREFIX}{connection_id}"

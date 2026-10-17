@@ -37,7 +37,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import user_api
+from . import aws, user_api
 
 SCRATCH_ROOT_ENV = "ANCHOR_TRANSFORM_SCRATCH"
 DEFAULT_SCRATCH_ROOT = "/transform-scratch"
@@ -133,9 +133,7 @@ def _required(name: str) -> str:
 
 
 def _ecs_client():
-    import boto3  # imported here so staging and collecting work without it
-
-    return boto3.client("ecs")
+    return aws.client("ecs")
 
 
 # ---- staging -----------------------------------------------------------------
