@@ -123,3 +123,62 @@ def test_only_an_org_admin_reads_it(client, logged) -> None:
     fx = logged["fx"]
     r = client.get("/api/org/audit", headers=hdr(fx.editor_sub), params={"action": "dataset."})
     assert r.status_code == 403
+
+
+# ---- the export (§989) ---------------------------------------------------------
+def export(client: TestClient, fx: Fixture, who=None, **params):
+    return client.get("/api/org/audit.csv", headers=hdr(who or fx.admin_sub), params=params)
+
+
+def test_the_export_is_the_log_as_narrowed(client, logged) -> None:
+    import csv
+    import io
+
+    fx = logged["fx"]
+    r = export(client, fx, action="dataset.")
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"].startswith("text/csv")
+    assert 'filename="audit-log.csv"' in r.headers["content-disposition"]
+    rows = list(csv.DictReader(io.StringIO(r.text)))
+    assert [row["action"] for row in rows] == ["dataset.export", "dataset.export", "dataset.create"]
+    assert rows[0]["ip_address"] == "10.0.0.3" and rows[0]["user_agent"] == "curl/8.5"
+
+
+def test_text_that_would_start_a_formula_is_read_not_run(client) -> None:
+    """What an entry records was typed by people; a spreadsheet runs a cell
+    that starts with `=`."""
+    import csv
+    import io
+
+    fx = Fixture()
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        conn.execute(
+            """INSERT INTO audit_log (organisation_id, user_id, action, resource_type, metadata,
+                                      user_agent)
+               VALUES (%s, %s, 'dataset.create', '=HYPERLINK("http://x")', '{"n": 1}', '+cmd')""",
+            (fx.org, fx.editor))
+    [row] = list(csv.DictReader(io.StringIO(export(client, fx).text)))
+    assert row["resource_type"] == "'=HYPERLINK(\"http://x\")"
+    assert row["user_agent"] == "'+cmd"
+    assert row["metadata"] == '{"n": 1}'
+
+
+def test_taking_a_copy_is_itself_recorded(client, logged) -> None:
+    fx = logged["fx"]
+    export(client, fx, action="model.")
+    [entry] = search(client, fx, action="org.audit.export", limit=1)
+    assert entry["metadata"] == {"entries": 1, "filters": {"action": "model."}}
+
+
+def test_an_export_past_the_cap_is_refused_in_words(client, logged, monkeypatch) -> None:
+    from src.services import orgs
+
+    monkeypatch.setattr(orgs, "AUDIT_EXPORT_MAX", 2)
+    r = export(client, logged["fx"], action="dataset.")
+    assert r.status_code == 422
+    assert r.json()["detail"] == "more than 2 entries match - narrow the search to export it"
+
+
+def test_only_an_org_admin_takes_a_copy(client, logged) -> None:
+    fx = logged["fx"]
+    assert export(client, fx, who=fx.editor_sub).status_code == 403

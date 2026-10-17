@@ -6,9 +6,9 @@
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { useState } from "react";
-import { ApiError, api } from "@/lib/api";
+import { ApiError, api, downloadFile } from "@/lib/api";
 import {
-  NO_FILTERS, actorText, auditQuery, filterProblem, nextCursor, originText,
+  NO_FILTERS, actorText, auditQuery, exportQuery, filterProblem, nextCursor, originText,
   type AuditFilters,
 } from "@/lib/audit-log";
 import { Field } from "@/components/dialog";
@@ -29,6 +29,25 @@ export default function AuditLogPage() {
   });
   const entries = log.data?.pages.flat() ?? [];
   const [open, setOpen] = useState<number | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [exportProblem, setExportProblem] = useState("");
+
+  async function exportLog() {
+    setExporting(true);
+    setExportProblem("");
+    try {
+      const query = exportQuery(asked);
+      await downloadFile(`/api/org/audit.csv${query ? `?${query}` : ""}`, "audit-log.csv");
+    } catch (error) {
+      setExportProblem(
+        error instanceof ApiError && error.status === 422
+          ? "More entries match than one export holds - narrow the search to export it."
+          : "Couldn't export the log. Try again.",
+      );
+    } finally {
+      setExporting(false);
+    }
+  }
 
   return (
     <main className="page">
@@ -100,9 +119,23 @@ export default function AuditLogPage() {
           >
             Clear
           </button>
+          {/* §989: what was searched for, as a file - the filters last asked,
+              not what is typed and not yet searched. */}
+          <button
+            type="button"
+            className="btn quiet"
+            data-testid="audit-export"
+            disabled={exporting}
+            onClick={() => void exportLog()}
+          >
+            {exporting ? "Exporting…" : "Download CSV"}
+          </button>
         </div>
       </form>
       {problem && <p className="field-hint" data-testid="audit-problem">{problem}</p>}
+      {exportProblem && (
+        <p className="field-hint" data-testid="audit-export-problem">{exportProblem}</p>
+      )}
 
       {log.isPending && <div className="state">Loading the log…</div>}
       {log.isError && (
