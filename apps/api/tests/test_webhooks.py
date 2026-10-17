@@ -182,12 +182,14 @@ def test_outputs_on_a_head_request_are_refused() -> None:
         wh.parse(definition(method="HEAD", body=None, outputs=[{"api_name": "x"}]))
 
 
-def test_a_timeout_longer_than_a_minute_is_refused() -> None:
+def test_a_timeout_past_what_a_request_can_wait_is_refused() -> None:
     """Ours, not the document's: a webhook fires inside a request somebody is
-    waiting on (decision 0012 §3), so a long timeout is a way to make an action
-    look hung."""
-    with pytest.raises(wh.WebhookError, match="between 1 and 60"):
-        wh.parse(definition(timeout_seconds=120))
+    waiting on (decision 0012 §3), and CloudFront gives it a minute, the action
+    around the call included (§975)."""
+    for seconds in (51, 60, 120):
+        with pytest.raises(wh.WebhookError, match="between 1 and 50"):
+            wh.parse(definition(timeout_seconds=seconds))
+    assert wh.parse(definition(timeout_seconds=50))["timeout_seconds"] == 50
 
 
 def test_a_status_that_is_not_one_is_refused() -> None:

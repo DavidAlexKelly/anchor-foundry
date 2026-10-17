@@ -36,6 +36,7 @@ import anyio
 
 from ..lib import safe_http
 from . import egress
+from .webhooks import MAX_TIMEOUT_S
 from . import webhooks as webhooks_service
 from .connectors import RestConnector, _check_url, _join_url
 
@@ -140,7 +141,9 @@ def _send(
     # the URL rather than the mistake.
     config = config_of(connection)
     started = time.monotonic()
-    deadline = started + int(webhook.get("timeout_seconds") or 20)
+    # Held to today's bound, not only checked against it when saved: a webhook
+    # saved under the old minute still runs no longer than a request allows.
+    deadline = started + min(int(webhook.get("timeout_seconds") or 20), MAX_TIMEOUT_S)
     fetched: list[dict[str, str]] = []
 
     def auth() -> dict[str, str]:
