@@ -51,6 +51,13 @@ CONNECTION_SETTINGS: dict[str, int] = {
 }
 
 
+#: How long a request waits for a pooled connection when all thirty are taken
+#: (§984). SQLAlchemy's default is thirty seconds, half of CloudFront's minute
+#: (E.31) gone before the request's first statement; it is told the platform
+#: is busy sooner now, with a Retry-After (§951).
+POOL_WAIT_S = 10
+
+
 def get_engine() -> AsyncEngine:
     global _engine
     if _engine is None:
@@ -59,6 +66,7 @@ def get_engine() -> AsyncEngine:
             settings.database_url,
             pool_size=10,
             max_overflow=20,
+            pool_timeout=POOL_WAIT_S,
             pool_pre_ping=True,
             connect_args={**CONNECTION_SETTINGS,
                           **connect_args(settings.statement_timeout_ms,

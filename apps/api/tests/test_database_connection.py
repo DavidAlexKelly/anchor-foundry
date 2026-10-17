@@ -99,3 +99,12 @@ def test_a_database_that_does_not_answer_is_a_prompt_503(silent_database) -> Non
         r = client.get("/api/_reads")
     assert r.status_code == 503, r.text
     assert time.monotonic() - started < 5
+
+
+def test_a_request_waits_seconds_for_a_pooled_connection_not_half_a_minute() -> None:
+    """§984: with every pooled connection taken, the wait is ten seconds, not
+    SQLAlchemy's thirty - half of CloudFront's minute before any work."""
+    from src.lib import db
+
+    engine = db.get_engine()
+    assert engine.sync_engine.pool.timeout() == db.POOL_WAIT_S == 10
