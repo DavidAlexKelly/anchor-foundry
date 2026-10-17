@@ -170,6 +170,13 @@ def _quote(name: str) -> str:
 
 TRANSFORM_BATCH_ROWS = 50_000
 
+#: How long a scheduled SQL model's own SQL may run (§982). DuckDB has no
+#: statement timeout, so a join on the wrong key ran until Dagster's six-hour
+#: limit (§957), holding one of the worker's four run slots, and past the hour
+#: the abandoned-run sweep had already called it failed while it ran. Forty-five
+#: minutes: far past what a scheduled model takes, inside that hour.
+SCHEDULED_TRANSFORM_DEADLINE_S = float(os.environ.get("DUCKDB_SCHEDULED_DEADLINE_S", "2700"))
+
 
 def run_sql_transform(
     inputs: dict[str, str], sql: str, dest_parquet: str
@@ -187,38 +194,41 @@ def run_sql_transform(
         sandbox.execute(f"SET memory_limit='{QUERY_MEMORY_LIMIT}'")
         for alias, path in inputs.items():
             sandbox.execute(f'CREATE TABLE "{alias}" AS SELECT * FROM read_parquet({path!r})')
-        duck.seal(sandbox)
-        try:
-            sandbox.execute(f"CREATE TABLE __output AS ({sql})")
-        except duckdb.Error as exc:
-            # §952: a scheduled model whose SQL names a column DuckDB 1.4 made
-            # a keyword says which word, rather than the token after it.
-            hint = duck.keyword_hint(sql) if isinstance(exc, duckdb.ParserException) else ""
-            raise DatasetEngineError(_clean(exc) + hint) from exc
+        # §982: and no longer than a scheduled run may, inside the hour after
+        # which the abandoned-run sweep calls it failed.
+        duck.seal(sandbox, SCHEDULED_TRANSFORM_DEADLINE_S)
+        with duck.deadline(sandbox, DatasetEngineError):
+            try:
+                sandbox.execute(f"CREATE TABLE __output AS ({sql})")
+            except duckdb.Error as exc:
+                # §952: a scheduled model whose SQL names a column DuckDB 1.4
+                # made a keyword says which word, rather than the token after it.
+                hint = duck.keyword_hint(sql) if isinstance(exc, duckdb.ParserException) else ""
+                raise DatasetEngineError(_clean(exc) + hint) from exc
 
-        described = sandbox.execute("DESCRIBE __output").fetchall()
-        if not described:
-            raise DatasetEngineError("the transform produced no columns")
-        schema = [ColumnSchema(name=row[0], data_type=row[1]) for row in described]
-        row_count = int(sandbox.execute("SELECT count(*) FROM __output").fetchone()[0])
-        if row_count > MAX_TRANSFORM_OUTPUT_ROWS:
-            raise DatasetEngineError(
-                f"the transform produced {row_count:,} rows - above this build's "
-                f"{MAX_TRANSFORM_OUTPUT_ROWS:,} row limit"
-            )
+            described = sandbox.execute("DESCRIBE __output").fetchall()
+            if not described:
+                raise DatasetEngineError("the transform produced no columns")
+            schema = [ColumnSchema(name=row[0], data_type=row[1]) for row in described]
+            row_count = int(sandbox.execute("SELECT count(*) FROM __output").fetchone()[0])
+            if row_count > MAX_TRANSFORM_OUTPUT_ROWS:
+                raise DatasetEngineError(
+                    f"the transform produced {row_count:,} rows - above this build's "
+                    f"{MAX_TRANSFORM_OUTPUT_ROWS:,} row limit"
+                )
 
-        columns_ddl = ", ".join(f'"{c.name}" {c.data_type}' for c in schema)
-        writer.execute(f"CREATE TABLE __output ({columns_ddl})")
-        placeholders = ", ".join("?" for _ in schema)
-        cursor = sandbox.execute("SELECT * FROM __output")
-        while True:
-            batch = cursor.fetchmany(TRANSFORM_BATCH_ROWS)
-            if not batch:
-                break
-            writer.executemany(f"INSERT INTO __output VALUES ({placeholders})", batch)
-        os.makedirs(os.path.dirname(dest_parquet), exist_ok=True)
-        writer.execute(f"COPY __output TO {dest_parquet!r} (FORMAT parquet)")
-        return schema, row_count
+            columns_ddl = ", ".join(f'"{c.name}" {c.data_type}' for c in schema)
+            writer.execute(f"CREATE TABLE __output ({columns_ddl})")
+            placeholders = ", ".join("?" for _ in schema)
+            cursor = sandbox.execute("SELECT * FROM __output")
+            while True:
+                batch = cursor.fetchmany(TRANSFORM_BATCH_ROWS)
+                if not batch:
+                    break
+                writer.executemany(f"INSERT INTO __output VALUES ({placeholders})", batch)
+            os.makedirs(os.path.dirname(dest_parquet), exist_ok=True)
+            writer.execute(f"COPY __output TO {dest_parquet!r} (FORMAT parquet)")
+            return schema, row_count
     finally:
         sandbox.close()
         writer.close()
