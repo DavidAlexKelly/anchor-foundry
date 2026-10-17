@@ -180,6 +180,43 @@ for (const name of ["api", "worker"] as const) {
   });
 }
 
+// §981: every connection the services can hold at once, against what the
+// database takes. RDS sets max_connections to LEAST(DBInstanceClassMemory /
+// 9531392, 5000), where DBInstanceClassMemory is the class's memory less what
+// RDS keeps for itself; nine tenths of the nominal figure is the estimate.
+// Nothing held the two together, so raising API_TASKS.max, or a pool, could
+// have a deploy - which runs old and new tasks side by side - answer "too many
+// connections" at the busiest hour.
+const CLASS_MEMORY_MIB: Record<string, number> = {
+  "db.t4g.medium": 4096, "db.t4g.large": 8192, "db.r6g.large": 16384, "db.r6g.xlarge": 32768,
+};
+
+check("every connection the services can hold fits under the database's limit (§981)", () => {
+  const db = Object.values(template.findResources("AWS::RDS::DBInstance"))[0] as any;
+  const cls = String(db.Properties.DBInstanceClass);
+  const memory = CLASS_MEMORY_MIB[cls];
+  if (!memory) throw new Error(`${cls}: add its memory to CLASS_MEMORY_MIB`);
+  const allowed = Math.min(Math.floor((memory * 0.9 * 1024 * 1024) / 9531392), 5000)
+    - 3; // superuser_reserved_connections
+  const api = fs.readFileSync(
+    path.join(__dirname, "..", "..", "..", "..", "apps", "api", "src", "lib", "db.py"), "utf8");
+  const pool = Number(/pool_size=(\d+)/.exec(api)?.[1]) + Number(/max_overflow=(\d+)/.exec(api)?.[1]);
+  if (!pool) throw new Error("apps/api/src/lib/db.py no longer declares its pool");
+  const settings = fs.readFileSync(
+    path.join(__dirname, "..", "..", "..", "..", "apps", "worker", "dagster.yaml"), "utf8");
+  const runs = Number(/max_concurrent_runs:\s*(\d+)/.exec(settings)?.[1]);
+  // A deploy runs a service's old and new tasks together, up to maxHealthyPercent.
+  const surge = Number((Object.values(services)[0] as any).Properties.DeploymentConfiguration
+    .MaximumPercent) / 100;
+  // Each API task: its pool and the health check's own connection (§956).
+  const apiNeeds = API_TASKS.max * surge * (pool + 1);
+  // The worker: a connection per running op, two for its daemon and sweep.
+  const workerNeeds = surge * (runs + 2);
+  const migration = 1;
+  const need = apiNeeds + workerNeeds + migration;
+  if (need > allowed) throw new Error(`${need} connections at once, ${cls} allows ${allowed}`);
+});
+
 if (failures.length) {
   console.log(`\n${failures.length} failed:\n  ${failures.join("\n  ")}`);
   process.exit(1);
