@@ -586,11 +586,15 @@ def test_every_variable_prop_is_a_known_reference() -> None:
     """
     import re
 
-    widgets = os.path.join(
+    canvas = os.path.join(
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-        "web", "src", "components", "canvas", "widgets.tsx",
+        "web", "src", "components", "canvas",
     )
-    source = open(widgets).read()
+    # The widgets, and since §995 their settings panels beside them.
+    source = "".join(
+        open(os.path.join(canvas, name)).read()
+        for name in ("widgets.tsx", "widget-settings.tsx")
+    )
     # Every prop a settings panel *reads*. Not every identifier in the file: a
     # local called `setVariable` is not a prop, and matching bare names would
     # make this fail on a rename that changed nothing.
