@@ -10340,9 +10340,10 @@ const EmbeddedObjectView = dynamic(
 );
 
 /** p.41's configured object set panel (§744), dynamically for
- * `EmbeddedObjectView`'s reason: it is the same file. */
+ * `EmbeddedObjectView`'s reason: `configured-object-view.tsx` renders a
+ * module, so it imports this file. */
 const ConfiguredSetPanel = dynamic(
-  () => import("@/components/object-view").then((m) => m.ConfiguredSetPanel),
+  () => import("@/components/configured-object-view").then((m) => m.ConfiguredSetPanel),
   { loading: () => <p className="canvas-widget-empty">Loading this panel…</p> },
 );
 
