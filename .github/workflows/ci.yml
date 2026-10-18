@@ -141,6 +141,69 @@ jobs:
           PLATFORM_APP_PASSWORD: devpass
       - run: scripts/check.sh api
 
+  # **The OpenSearch store against OpenSearch** (§1004). Every test of it ran
+  # against `opensearch_fixture_server.py`, whose own docstring says what it
+  # cannot prove - "that a real cluster agrees" - and decision 0006 left that
+  # check to a first deployment. Run against a cluster once, it found the
+  # Object Explorer's every search refused, an equality that matched "north
+  # west" for "north", and grouping by any non-string property answering
+  # nothing. Here the fixture forwards to the cluster
+  # (`ANCHOR_OPENSEARCH_PROXY_TO`), so the same tests ask it. The version is
+  # the stack's (`constructs/data-stores.ts`), security off as on a test node.
+  api-opensearch:
+    name: api (real OpenSearch)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: platform
+          POSTGRES_PASSWORD: devpass
+          POSTGRES_DB: platform
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U platform" --health-interval 5s
+          --health-timeout 5s --health-retries 20
+      opensearch:
+        image: opensearchproject/opensearch:2.11.1
+        env:
+          discovery.type: single-node
+          DISABLE_SECURITY_PLUGIN: "true"
+          DISABLE_INSTALL_DEMO_CONFIG: "true"
+          OPENSEARCH_JAVA_OPTS: -Xms512m -Xmx512m
+          # A runner's disk is not a cluster's; a watermark refusing to
+          # create an index would fail every test for a reason none names.
+          cluster.routing.allocation.disk.threshold_enabled: "false"
+        ports: ["9200:9200"]
+        options: >-
+          --health-cmd "curl -sf http://localhost:9200/_cluster/health"
+          --health-interval 5s --health-timeout 5s --health-retries 40
+    env:
+      DATABASE_URL: postgresql+psycopg://platform_app:devpass@localhost:5432/platform?sslmode=disable
+      TEST_ADMIN_DSN: postgresql://platform:devpass@localhost:5432/platform?sslmode=disable
+      STORAGE_ROOT: /tmp/anchor-storage
+      ANCHOR_OPENSEARCH_PROXY_TO: http://localhost:9200
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r apps/api/requirements.txt -r apps/api/requirements-dev.txt
+      # As the api job's, and for its two reasons.
+      - name: Migrate
+        run: python packages/db/migrate.py
+        env:
+          DATABASE_URL: postgresql://platform:devpass@localhost:5432/platform?sslmode=disable
+          PLATFORM_APP_PASSWORD: devpass
+      - name: The OpenSearch store's tests, against the cluster
+        working-directory: apps/api
+        run: >
+          python -m pytest -q -ra -p no:cacheprovider
+          tests/test_instance_store.py tests/test_object_sets.py
+          tests/test_link_traversal.py tests/test_instance_cutover.py
+
   # §263. There was no worker job because there was no worker target, and there
   # was no worker target because nothing installed what the worker's 78 tests
   # need - three absences that each explained the next and none of which

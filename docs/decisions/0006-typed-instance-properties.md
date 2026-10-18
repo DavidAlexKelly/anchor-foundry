@@ -252,6 +252,25 @@ this work"* to *"does OpenSearch behave like the mapping it was given"*, which i
 smaller thing to check on a first real cluster — and which the deployment runbook should list
 as a step rather than leaving to be discovered.
 
+**Checked against a real cluster (§1004), and the answer was no.** The fixture forwards to a
+cluster when `ANCHOR_OPENSEARCH_PROXY_TO` is set, so every store test can ask OpenSearch
+2.11 itself, and CI's `api (real OpenSearch)` job does on every pull request. The first run
+found three places the fixture had agreed with the store and the cluster did not:
+
+* **Every Explorer search was refused.** A `phrase_prefix` over `properties.*` met the typed
+  fields §1 mapped, and the primary key's `keyword`, and the cluster answers "Can only use
+  phrase prefix queries on text fields" for the first of them. The value match is `lenient`
+  now, and the key is a prefix query.
+* **An equality on a string was not one.** `term` on a string's analysed field compares with
+  each word, so `region = north` matched "north west". Equalities read the `.keyword`
+  subfield where there is one and the typed field where there is not (`_exact`).
+* **Grouping or counting distinct values of a non-string property answered nothing**, because
+  every aggregation named a `.keyword` a long or a date does not have. The field is now read
+  from the index's own mapping.
+
+The fixture now behaves as the cluster did in each case - a `term` on text matches a word, a
+typed field has no `.keyword` - so the next such change is caught without a cluster too.
+
 ## Consequences
 
 - **A migration and a backfill.** Every workspace's single instance index is replaced by one

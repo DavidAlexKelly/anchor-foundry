@@ -37,6 +37,14 @@ import urllib.request
 
 import pytest
 
+# What the fixture itself does, so nothing to ask of a cluster standing behind
+# it (`ANCHOR_OPENSEARCH_PROXY_TO`, §1004): these write without a refresh and
+# read straight back, which only the fixture answers.
+pytestmark = pytest.mark.skipif(
+    bool(os.environ.get("ANCHOR_OPENSEARCH_PROXY_TO")),
+    reason="tests the fixture, not the cluster behind it",
+)
+
 PORT = 9213  # its own: 9209 and 9211 are taken
 BASE = f"http://127.0.0.1:{PORT}"
 
