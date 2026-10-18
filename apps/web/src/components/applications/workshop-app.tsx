@@ -28,7 +28,7 @@
 import { Editor, Element, Frame, useEditor } from "@craftjs/core";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { nextBefore } from "@/lib/version-pages";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Dialog, Field } from "@/components/dialog";
 import { heldBy, strandedSummary, type OrphanedKey } from "@/lib/state-impact";
 import { ChangelogPanel } from "@/components/canvas/ChangelogPanel";
@@ -678,6 +678,20 @@ function RebasePanel({
  * it. What is left after the breadcrumb and title moved up: the version state,
  * which is Workshop's alone and is the one thing an author of a published
  * module has to be able to see, and the three buttons. */
+/** Turns the builder's Preview on or off (§1000).
+ *
+ * **Craft's `enabled` has one owner, and it is `WorkshopApplication`'s state.**
+ * The builder's `<Editor enabled={canEdit}>` said "editable" for good, and the
+ * Preview button flipped Craft's own option underneath it. Craft re-applies
+ * the prop whenever its store hook gives it a new identity, which a render
+ * after a URL change does - so in a production build a routed module's first
+ * write to the address bar (`?page=`) put the builder straight back into
+ * editing, its routing unmounted, and nothing a reader chose in Preview ever
+ * reached the URL. Preview is now part of the prop, and this is how a button
+ * inside the editor asks for it. `null` outside the builder, where an
+ * `<Editor>` is read-only and has no Preview. */
+const BuilderPreview = createContext<((on: boolean) => void) | null>(null);
+
 function ActionBar({
   app,
   workspaceId,
@@ -765,6 +779,7 @@ function ActionBar({
   onSaved: (head: string) => void;
 }) {
   const { enabled, actions, query } = useEditor((state) => ({ enabled: state.options.enabled }));
+  const setPreview = useContext(BuilderPreview);
   const [showPublish, setShowPublish] = useState(false);
   const [showVersions, setShowVersions] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
@@ -963,7 +978,8 @@ function ActionBar({
         <button
           type="button"
           className="btn quiet"
-          onClick={() => actions.setOptions((o) => (o.enabled = !enabled))}
+          onClick={() =>
+            setPreview ? setPreview(enabled) : actions.setOptions((o) => (o.enabled = !enabled))}
         >
           {enabled ? "Preview" : "Back to editing"}
         </button>
@@ -1206,6 +1222,7 @@ function CanvasEnvBridge({
   children: React.ReactNode;
 }) {
   const { enabled, actions } = useEditor((state) => ({ enabled: state.options.enabled }));
+  const setPreview = useContext(BuilderPreview);
   const search = useSearchParams();
   const profiling = profilerOn(search.toString());
   // **Profiler mode is Preview, and that is p.178 rather than a convenience.**
@@ -1216,8 +1233,10 @@ function CanvasEnvBridge({
   // an accurate measurement of a program no reader runs - the exact objection
   // that kept this feature unbuilt until §392.
   useEffect(() => {
-    if (profiling && enabled) actions.setOptions((o) => (o.enabled = false));
-  }, [profiling, enabled, actions]);
+    if (!profiling || !enabled) return;
+    if (setPreview) setPreview(true);
+    else actions.setOptions((o) => (o.enabled = false));
+  }, [profiling, enabled, actions, setPreview]);
   return (
     <ProfilerRecorder on={profiling}>
     <CanvasEnvProvider value={{
@@ -1465,6 +1484,10 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
   // ordinary save does not throw away the selection and scroll position of
   // somebody who is still working.
   const [reloadToken, setReloadToken] = useState(0);
+  // The builder's Preview (`BuilderPreview`): here, so it is the one thing
+  // that says whether the editor is enabled, and so a remount of the editor -
+  // a revert, a switch of branch - does not drop an author out of it.
+  const [inPreview, setInPreview] = useState(false);
   const workspaceId = resource.workspace_id;
   const projectId = resource.project_id;
   const appId = resource.kind_id;
@@ -1740,13 +1763,14 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
         onExit={() => setPreviewing(null)}
       />
     )}
+    <BuilderPreview.Provider value={setInPreview}>
     <Editor
       // Remounted on a switch of head as well as on a revert: Craft reads
       // `<Frame data>` once, so the other head's document would otherwise
       // never reach the canvas.
       key={`${reloadToken}:${branchName ?? ""}:${rebasing?.token ?? ""}`}
       resolver={CANVAS_RESOLVER}
-      enabled={canEdit}
+      enabled={canEdit && !inPreview}
       onRender={CanvasNode}
     >
       <CanvasEnvBridge
@@ -1832,6 +1856,7 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
         />
       </CanvasEnvBridge>
     </Editor>
+    </BuilderPreview.Provider>
     </>
   );
 }
