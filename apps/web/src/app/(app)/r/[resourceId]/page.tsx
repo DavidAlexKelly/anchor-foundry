@@ -16,15 +16,33 @@
  */
 
 import { useQuery } from "@tanstack/react-query";
+import dynamic from "next/dynamic";
 import { useParams } from "next/navigation";
 import { ApplicationShell, ResourceSummary } from "@/components/application-shell";
-import { DatasetApplication } from "@/components/applications/dataset-app";
-import { ObjectTypeApplication } from "@/components/applications/object-type-app";
-import { RepositoryApplication } from "@/components/applications/repository-app";
-import { WorkshopApplication } from "@/components/applications/workshop-app";
 import { resources as resourcesApi } from "@/lib/api";
 import { ApiError } from "@/lib/api";
 import type { ResolvedResource, ResourceKind } from "@/lib/types";
+
+/** Each application loads when a resource of its kind is opened (§992). One
+ * page holds all four, and Workshop alone brings the whole widget table: a
+ * dataset's link should not wait on it. */
+const loading = () => <div className="state">Loading…</div>;
+const DatasetApplication = dynamic(
+  () => import("@/components/applications/dataset-app").then((m) => m.DatasetApplication),
+  { loading },
+);
+const ObjectTypeApplication = dynamic(
+  () => import("@/components/applications/object-type-app").then((m) => m.ObjectTypeApplication),
+  { loading },
+);
+const RepositoryApplication = dynamic(
+  () => import("@/components/applications/repository-app").then((m) => m.RepositoryApplication),
+  { loading },
+);
+const WorkshopApplication = dynamic(
+  () => import("@/components/applications/workshop-app").then((m) => m.WorkshopApplication),
+  { loading },
+);
 
 /** Where each kind is handled today, and which roadmap item replaces that with
  * a real application. `href` is null for kinds whose current home cannot be
