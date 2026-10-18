@@ -1,12 +1,15 @@
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { contentSecurityPolicy } from "./csp.mjs";
 
 const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
-/** @type {import('next').NextConfig} */
-const CONTENT_SECURITY_POLICY =
-  "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'";
+const CONTENT_SECURITY_POLICY = contentSecurityPolicy({
+  development: process.env.NODE_ENV !== "production",
+  cognitoDomain: process.env.NEXT_PUBLIC_COGNITO_DOMAIN ?? "",
+});
 
+/** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
   output: "standalone",
@@ -40,11 +43,8 @@ const nextConfig = {
         { key: "X-Content-Type-Options", value: "nosniff" },
         { key: "X-Frame-Options", value: "SAMEORIGIN" },
         { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
-        // The parts of a Content-Security-Policy nothing here relies on the
-        // absence of (§860): no plugins, no <base> pointing scripts elsewhere,
-        // no form posting off-site, and framing as X-Frame-Options says, for
-        // browsers that read only this. Scripts and styles are not restricted
-        // yet: Next's hydration and Monaco need a policy written for them.
+        // What a page may load and where it may send things (§860, §993):
+        // `csp.mjs` says what each directive allows and why.
         { key: "Content-Security-Policy", value: CONTENT_SECURITY_POLICY },
       ],
     }];

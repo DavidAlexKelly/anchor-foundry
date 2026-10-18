@@ -20,6 +20,7 @@ import uuid
 from playwright.sync_api import expect
 
 from api import Module
+from conftest import WEB_BASE
 
 
 def project(api, name: str) -> Module:
@@ -40,7 +41,7 @@ def make_repository(mod: Module, name: str) -> dict:
 
 
 def models_screen(page, mod: Module) -> None:
-    page.goto(f"http://localhost:3100/{mod.workspace_slug}/{mod.project_slug}/models")
+    page.goto(f"{WEB_BASE}/{mod.workspace_slug}/{mod.project_slug}/models")
     # The row for a model this test made is what everything here reads, so the
     # wait is for the table to hold something rather than for the page to have
     # navigated (§271: a one-shot read of a collection that starts empty).
@@ -227,7 +228,7 @@ def test_an_empty_history_tells_the_two_empties_apart(page, api) -> None:
     else, and the reader is the one who knows which they are looking at."""
     mod = project(api, "History empty")
     # No models at all. `models_screen` waits for a row, so go straight there.
-    page.goto(f"http://localhost:3100/{mod.workspace_slug}/{mod.project_slug}/models")
+    page.goto(f"{WEB_BASE}/{mod.workspace_slug}/{mod.project_slug}/models")
     page.get_by_test_id("project-history").click()
 
     expect(page.get_by_test_id("project-history-empty")).to_contain_text(
