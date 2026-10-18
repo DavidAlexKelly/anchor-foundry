@@ -14,7 +14,7 @@ import uuid
 from playwright.sync_api import expect
 
 from api import Module
-from conftest import WEB_BASE
+from conftest import WEB_BASE, eventually
 
 
 def test_a_resource_in_another_project_is_found_and_opened(page, api) -> None:
@@ -27,8 +27,15 @@ def test_a_resource_in_another_project_is_found_and_opened(page, api) -> None:
     box = page.get_by_test_id("workspace-search-input")
     expect(box).to_be_visible(timeout=30000)
     page.locator("body").click()
-    page.keyboard.press("/")
-    expect(box).to_be_focused()
+
+    def pressed() -> bool:
+        # The box is drawn before the page hydrates, and `/` is heard only
+        # after: a press in between lands on the page and does nothing.
+        page.keyboard.press("/")
+        return box.evaluate("el => el === document.activeElement")
+
+    eventually(pressed, bool, what="the search box, focused by /")
+    expect(box).to_have_value("")
     box.fill(name[:12])
     hit = page.get_by_test_id("workspace-search-hit").filter(has_text=name)
     expect(hit).to_contain_text(f"Dataset · Searched in {there.tag}", timeout=15000)
