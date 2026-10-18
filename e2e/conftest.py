@@ -242,7 +242,16 @@ def pytest_runtest_makereport(item, call):
     - capturing on every test - is what makes an artefact nobody looks at.
     """
     outcome = yield
-    setattr(item, f"report_{outcome.get_result().when}", outcome.get_result())
+    report = outcome.get_result()
+    setattr(item, f"report_{report.when}", report)
+    # **What the page did, beside why the test failed** (§997). A screenshot
+    # shows the end; a widget that drew and then emptied, a page that reloaded
+    # under a test, a request that never answered are all in between, and a CI
+    # runner's artefacts are not always to hand. The journal is printed with
+    # the failure, so the log alone says.
+    journal = getattr(item, "page_journal", None)
+    if report.when == "call" and report.failed and journal:
+        report.sections.append(("page journal", "\n".join(journal[-80:])))
 
 
 def _capture_failure(page, name: str) -> None:
@@ -330,6 +339,19 @@ def _signed_in(browser, token: str, request, *, locale: str | None = None,
     # Waits for the redirect off /login rather than for a fixed interval.
     opened.wait_for_url(lambda url: "/login" not in url, timeout=FIRST_RENDER_MS)
     opened.console_errors = errors  # type: ignore[attr-defined]
+    journal: list[str] = []
+    started = time.monotonic()
+
+    def note(kind: str, text: str) -> None:
+        journal.append(f"{time.monotonic() - started:7.2f}s {kind}: {text[:300]}")
+
+    opened.on("framenavigated",
+              lambda frame: note("navigated", frame.url) if frame == opened.main_frame else None)
+    opened.on("pageerror", lambda error: note("page error", str(error)))
+    opened.on("console", lambda message: note(f"console.{message.type}", message.text))
+    opened.on("requestfailed",
+              lambda req: note("request failed", f"{req.method} {req.url} {req.failure}"))
+    request.node.page_journal = journal
     yield opened
     report = getattr(request.node, "report_call", None)
     if report is not None and report.failed:
