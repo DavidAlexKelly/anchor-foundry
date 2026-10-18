@@ -141,15 +141,38 @@ import { PropertyInlineEdit } from "@/components/property-inline-edit";
 import { constraintNote, fieldChoices, fieldNotes, multipleChoice } from "@/lib/parameter-constraint";
 import { conditionalStyle, cssFor } from "@/lib/conditional-format";
 
-/** A widget's settings panel, loaded the first time the builder shows one
- * (§995). The panels are `widget-settings.tsx`'s: only an author sees one,
- * and a reader's module loads the widgets without them. Dynamic for the
- * other reason too - the panels import from this file. */
-function settingsPanel(name: keyof typeof import("./widget-settings")) {
-  return dynamic(
-    () => import("./widget-settings").then((m) => m[name] as React.ComponentType),
-    { loading: () => <p className="canvas-settings-loading">Loading settings…</p> },
-  );
+/** The widgets' settings panels, by name, once `widget-settings.tsx` has
+ * registered them (§995).
+ *
+ * Only an author sees a panel, and the panels are close to half of this
+ * table's code, so a module's readers load the widgets without them. The
+ * builder imports `widget-settings.tsx` itself (`workshop-app.tsx`), so there
+ * every panel is here before a widget can be selected and draws at once - a
+ * panel that arrived a moment after its click would be a race for anything
+ * reading it, an author or a test. Anywhere else, a panel that is asked for
+ * loads the file then. */
+const SETTINGS_PANELS: Record<string, React.ComponentType> = {};
+
+export function registerSettingsPanels(panels: Record<string, React.ComponentType>) {
+  Object.assign(SETTINGS_PANELS, panels);
+}
+
+function settingsPanel(name: string): React.ComponentType {
+  function WidgetSettingsPanel() {
+    const [, loaded] = useState(0);
+    const Panel = SETTINGS_PANELS[name];
+    useEffect(() => {
+      if (Panel) return;
+      let current = true;
+      void import("./widget-settings").then(() => current && loaded((n) => n + 1));
+      return () => {
+        current = false;
+      };
+    }, [Panel]);
+    return Panel ? <Panel /> : <p className="canvas-settings-loading">Loading settings…</p>;
+  }
+  WidgetSettingsPanel.displayName = name;
+  return WidgetSettingsPanel;
 }
 
 /** The grid's own line height, in pixels (`globals.css`, `.data-grid td`).
