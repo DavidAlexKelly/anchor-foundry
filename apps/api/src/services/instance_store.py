@@ -66,6 +66,69 @@ INSTANCE_PAGE_SIZE = 50
 MAX_RESULT_WINDOW = 10_000
 
 
+def _exact(field: str, values: list[Any]) -> dict[str, Any]:
+    """`field` equal to one of `values`, as its whole value (§1004).
+
+    **A `term` on a string's own field is not an equality.** A string property
+    is `text`, analysed into lowercased words, and a term is compared with each
+    word - so `region = north` matched "north west" on a cluster, while the
+    reference, Postgres and the fixture all said no. The `.keyword` subfield
+    holds the whole value, and is the equality for a string.
+
+    A typed property (a long, a date, a boolean) has no `.keyword`, and is
+    compared as itself - through `match`, `lenient`, so a value its type cannot
+    hold ("north" against a long) matches nothing rather than failing the whole
+    query, as a `term` does. Which branch applies is the document's own mapping,
+    asked by `exists` on the subfield, so the store needs no declared type for
+    an equality - the rule `Filter.data_type` says equalities follow."""
+    keyword = "primary_key" if field == "primary_key" else f"{field}.keyword"
+    if keyword == field:
+        return {"terms": {field: values}}
+    return {"bool": {"should": [
+        {"terms": {keyword: values}},
+        {"bool": {
+            "must_not": [{"exists": {"field": keyword}}],
+            "should": [{"match": {field: {"query": v, "lenient": True}}} for v in values],
+            "minimum_should_match": 1,
+        }},
+    ], "minimum_should_match": 1}}
+
+
+def _keyword_field(mapping: dict[str, Any], index: str, field: str) -> str:
+    """`field` where it is a keyword, else its `.keyword` subfield if it has
+    one - what a dynamically mapped string gets - else `field` as it is."""
+    properties = (mapping.get(index) or next(iter(mapping.values()), {})).get(
+        "mappings", {}).get("properties", {})
+    declared = properties.get(field, {})
+    if declared.get("type") == "keyword":
+        return field
+    if declared.get("fields", {}).get("keyword", {}).get("type") == "keyword":
+        return f"{field}.keyword"
+    return field
+
+
+def _value_match(query: str, fields: list[str]) -> dict[str, Any]:
+    """A half-typed value against a type's properties: `phrase_prefix`, which
+    only a text field can answer.
+
+    **`lenient`, because since §220 most fields are not text** (§1004). A
+    type's index maps each property to its declared type, so `properties.*`
+    names integers, dates, booleans and points beside the strings, and a real
+    cluster refuses the whole search - "Can only use phrase prefix queries on
+    text fields" - for the first of them it meets. Lenient, each such field
+    matches nothing and the text fields answer. The fixture accepted it, which
+    is how every Explorer search would have been a 400 from the day the
+    platform moved to OpenSearch."""
+    return {"multi_match": {"query": query, "fields": fields, "type": "phrase_prefix",
+                            "lenient": True}}
+
+
+def _key_prefix(query: str) -> dict[str, Any]:
+    """The primary key, which is a `keyword` and so has no phrases: a prefix,
+    ignoring case, as the property match is (§1004)."""
+    return {"prefix": {"primary_key": {"value": query, "case_insensitive": True}}}
+
+
 def _scoped_search(query: str, scopes: dict[str, list[str]]) -> dict[str, Any]:
     """The free-text clause with p.251's Searchable honoured (§726): the key
     always; every value of a type nobody narrowed; and only the listed
@@ -73,10 +136,10 @@ def _scoped_search(query: str, scopes: dict[str, list[str]]) -> dict[str, Any]:
     because one index holds them all and a property searchable on one type
     may not be on another of the same name."""
     def match(fields: list[str]) -> dict[str, Any]:
-        return {"multi_match": {"query": query, "fields": fields, "type": "phrase_prefix"}}
+        return _value_match(query, fields)
 
     should: list[dict[str, Any]] = [
-        match(["primary_key"]),
+        _key_prefix(query),
         {"bool": {"must_not": [{"terms": {"object_type_id": sorted(scopes)}}],
                   "must": [match(["properties.*"])]}},
     ]
@@ -701,12 +764,22 @@ class OpenSearchInstanceStore:
             return 0
         target = _index_name(search_prefix, object_type_id)
         await self._ensure_index(target, declared)
+        # **The legacy index's own names for its identity fields** (§1004).
+        # Matching and sorting need keywords, and a workspace index that was
+        # left to dynamic mapping holds each as `text` with a `.keyword`
+        # beside it - which a real cluster refuses to sort on, and on which a
+        # `term` for a whole id matches nothing. The fixture did neither, so
+        # only a cluster could say.
+        live = await self._client.indices.get_mapping(index=legacy)
+        type_field = _keyword_field(live, legacy, "object_type_id")
+        source_field = _keyword_field(live, legacy, "source_id")
+        key_field = _keyword_field(live, legacy, "primary_key")
 
         moved = 0
         after: list[Any] | None = None
         while True:
             body: dict[str, Any] = {
-                "query": {"term": {"object_type_id": str(object_type_id)}},
+                "query": {"term": {type_field: str(object_type_id)}},
                 # **`search_after`, not `from`/`size`.** Offset paging stops at
                 # `index.max_result_window` — ten thousand documents — and a
                 # migration that silently moved the first ten thousand of a
@@ -723,7 +796,7 @@ class OpenSearchInstanceStore:
                 # datasets happen to share. It is the same rule `_sort_clause`
                 # already states for a viewer's page, where the symptom is a
                 # repeated row rather than a missing one.
-                "sort": [{"source_id": "asc"}, {"primary_key": "asc"}],
+                "sort": [{source_field: "asc"}, {key_field: "asc"}],
                 "size": self.MIGRATION_BATCH,
             }
             if after is not None:
@@ -959,13 +1032,10 @@ class OpenSearchInstanceStore:
         elif query:
             # phrase_prefix so a half-typed value still matches, across every
             # property plus the primary key - "search by any property value".
-            clauses["must"] = [{
-                "multi_match": {
-                    "query": query,
-                    "fields": ["properties.*", "primary_key"],
-                    "type": "phrase_prefix",
-                }
-            }]
+            clauses["must"] = [{"bool": {
+                "should": [_value_match(query, ["properties.*"]), _key_prefix(query)],
+                "minimum_should_match": 1,
+            }}]
         body: dict[str, Any] = {
             "query": {"bool": clauses} if clauses else {"match_all": {}},
             # Tied as Postgres's `instances.search` is: key, then type.
@@ -1017,11 +1087,11 @@ class OpenSearchInstanceStore:
                 else f"properties.{f.property}"
             )
             if f.op == "eq":
-                must.append({"term": {field: _text_value(f.value)}})
+                must.append(_exact(field, [_text_value(f.value)]))
             elif f.op == "neq":
-                must_not.append({"term": {field: _text_value(f.value)}})
+                must_not.append(_exact(field, [_text_value(f.value)]))
             elif f.op == "in":
-                must.append({"terms": {field: [_text_value(v) for v in f.value]}})
+                must.append(_exact(field, [_text_value(v) for v in f.value]))
             elif f.op == "starts_with":
                 must.append(_prefix_clause(field, f.value))
             elif f.op in object_sets.REGEX_OPERATORS:
@@ -1112,9 +1182,8 @@ class OpenSearchInstanceStore:
             # than leaving to dynamic mapping - a cardinality aggregation on
             # the analysed text field would count *tokens*, so "Aberdeen Yard"
             # and "Bristol Yard" would share one.
-            body["aggs"] = {
-                "distinct": {"cardinality": {"field": f"properties.{property_name}.keyword"}}
-            }
+            body["aggs"] = {"distinct": {"cardinality": {"field": await self._value_field(
+                _index_name(search_prefix, object_type_id), property_name)}}}
         resp = await self._client.search(
             index=_index_name(search_prefix, object_type_id), body=body,
             ignore_unavailable=True,
@@ -1132,6 +1201,24 @@ class OpenSearchInstanceStore:
             return int(resp["aggregations"]["distinct"]["value"])
         return int(resp["hits"]["total"]["value"])
 
+    async def _value_field(self, index: str, property_name: str) -> str:
+        """The field a `terms` or `cardinality` aggregation reads for one
+        property (§1004): the `.keyword` subfield of a string, and a typed
+        property itself.
+
+        Every aggregation here named `.keyword`, which a string has and a long,
+        a date or a boolean does not - so on a cluster, grouping a set by an
+        integer property or counting its distinct dates answered nothing at all.
+        The fixture read every `.keyword` as its field. Asked of the index's
+        own mapping rather than the declaration, because the mapping is what
+        the cluster will read."""
+        live = await self._client.indices.get_mapping(index=index, ignore_unavailable=True)
+        mapped = next(iter(live.values()), {}) if live else {}
+        declared = (mapped.get("mappings", {}).get("properties", {}).get("properties", {})
+                    .get("properties", {}).get(property_name, {}))
+        field = f"properties.{property_name}"
+        return field if declared.get("type") not in (None, "text") else f"{field}.keyword"
+
     async def group_object_set(
         self,
         *,
@@ -1148,7 +1235,8 @@ class OpenSearchInstanceStore:
         from .instances import _named, _number
 
         agg = _named(aggregation) if aggregation is not None else None
-        field = f"properties.{property_name}.keyword"
+        index = _index_name(search_prefix, object_type_id)
+        field = await self._value_field(index, property_name)
         clauses = self._set_clauses(object_type_id, filters)
         order: list[dict[str, str]] = [{"_count": "desc"}, {"_key": "asc"}]
         sub: dict[str, Any] = {}
@@ -1161,7 +1249,8 @@ class OpenSearchInstanceStore:
             metric_field = f"properties.{agg.property}"
             clauses = {**clauses, "filter": [*clauses.get("filter", []),
                                              {"exists": {"field": metric_field}}]}
-            sub = {"metric": {"cardinality": {"field": f"{metric_field}.keyword"}}}
+            sub = {"metric": {"cardinality": {
+                "field": await self._value_field(index, agg.property)}}}
             order = [{"metric": "desc"}, {"_key": "asc"}]
         elif agg is not None and agg.numeric:
             metric_field = f"properties.{agg.property}"
@@ -1187,12 +1276,11 @@ class OpenSearchInstanceStore:
                 "distinct": {"cardinality": {"field": field}},
             },
         }
-        resp = await self._client.search(
-            index=_index_name(search_prefix, object_type_id), body=body,
-            ignore_unavailable=True,
-        )
+        resp = await self._client.search(index=index, body=body, ignore_unavailable=True)
         buckets = [
-            (str(b["key"]), int(b["doc_count"]),
+            # A typed key arrives as a number - a date as epoch milliseconds,
+            # a boolean as 1 - with the value as text beside it.
+            (str(b.get("key_as_string", b["key"])), int(b["doc_count"]),
              _number(b["metric"]["value"], agg) if sub else None)
             for b in resp["aggregations"]["groups"]["buckets"]
         ]
@@ -1219,20 +1307,21 @@ class OpenSearchInstanceStore:
         """
         if not row_values or not column_values:
             return {}
+        index = _index_name(search_prefix, object_type_id)
         body: dict[str, Any] = {
             "query": {"bool": self._set_clauses(object_type_id, filters)},
             "size": 0,
             "aggs": {
                 "rows": {
                     "terms": {
-                        "field": f"properties.{row_property}.keyword",
+                        "field": await self._value_field(index, row_property),
                         "include": list(row_values),
                         "size": len(row_values),
                     },
                     "aggs": {
                         "cols": {
                             "terms": {
-                                "field": f"properties.{column_property}.keyword",
+                                "field": await self._value_field(index, column_property),
                                 "include": list(column_values),
                                 "size": len(column_values),
                             }
@@ -1246,7 +1335,8 @@ class OpenSearchInstanceStore:
             ignore_unavailable=True,
         )
         return {
-            (str(row["key"]), str(col["key"])): int(col["doc_count"])
+            (str(row.get("key_as_string", row["key"])),
+             str(col.get("key_as_string", col["key"]))): int(col["doc_count"])
             for row in resp["aggregations"]["rows"]["buckets"]
             for col in row["cols"]["buckets"]
         }
@@ -1389,19 +1479,11 @@ class OpenSearchInstanceStore:
             # primary_key is mapped keyword, so one exact term is the whole test.
             should: list[dict[str, Any]] = [{"term": {"primary_key": key}}]
         else:
-            field = f"properties.{property_name}"
-            # Two clauses because the property's mapping depends on what the
-            # first document put there: strings land on text + .keyword (the
-            # dynamic template above), numbers and booleans land on long /
-            # double / boolean with no subfield. Querying both and requiring
-            # one costs nothing - a term on a field that does not exist
-            # matches nothing rather than erroring - and avoids having to
-            # trust the object type's *declared* data_type, which describes
-            # the ontology, not what the mapper actually wrote.
-            should = [
-                {"term": {f"{field}.keyword": key}},
-                {"term": {field: value}},
-            ]
+            # The equality `_exact` is (§1004). Two `term`s, on the subfield
+            # and on the field, were meant to cover a string and a typed
+            # property alike - and the second, on a string's analysed field,
+            # matched any value holding the key as one of its words.
+            should = [_exact(f"properties.{property_name}", [key])]
         body = {
             "query": {
                 "bool": {

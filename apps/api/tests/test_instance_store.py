@@ -517,6 +517,8 @@ async def test_the_migration_refuses_to_spin_when_the_cursor_will_not_advance(st
     produce a reference nothing classifies. Found by a mutant that did exactly
     this and spun the harness for four minutes instead of failing.
     """
+    if os.environ.get("ANCHOR_OPENSEARCH_PROXY_TO"):
+        pytest.skip("drives a fault only the fixture can inject (`__ignore_search_after`)")
     prefix = "ws-split-stuck-"
     type_id = str(uuid.uuid4())
     await _seed_legacy(store, prefix, [
