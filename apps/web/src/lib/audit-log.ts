@@ -27,21 +27,33 @@ export function filterProblem(filters: AuditFilters): string {
   return "";
 }
 
-/** The API's query for these filters and a page after `beforeId`. A day's
- * `until` is the whole day: up to the start of the next. */
+/** The API's query for these filters and a page after `beforeId`.
+ *
+ * **A day is the reader's** (§994). The log shows each entry's time in the
+ * reader's zone, so From and To are days in it too - read as UTC days, From
+ * 18 October in New York began at 8pm on the 17th, and the entries above it
+ * on screen were dated a day the search had excluded. To is the whole day:
+ * up to the start of the next, which on the day a clock changes is 23 or 25
+ * hours away rather than 24. */
 export function auditQuery(filters: AuditFilters, beforeId?: number): string {
   const q = new URLSearchParams({ limit: String(AUDIT_PAGE) });
   if (filters.action.trim()) q.set("action", filters.action.trim());
   if (filters.userId) q.set("user_id", filters.userId);
   if (filters.resourceId.trim()) q.set("resource_id", filters.resourceId.trim());
-  if (filters.since) q.set("since", `${filters.since}T00:00:00Z`);
+  if (filters.since) q.set("since", startOfDay(filters.since).toISOString());
   if (filters.until) {
-    const next = new Date(`${filters.until}T00:00:00Z`);
-    next.setUTCDate(next.getUTCDate() + 1);
+    const next = startOfDay(filters.until);
+    next.setDate(next.getDate() + 1);
     q.set("until", next.toISOString());
   }
   if (beforeId !== undefined) q.set("before_id", String(beforeId));
   return q.toString();
+}
+
+/** Local midnight at the start of a `YYYY-MM-DD` day. A date-only string
+ * would be parsed as UTC; with a time and no zone it is local. */
+function startOfDay(day: string): Date {
+  return new Date(`${day}T00:00:00`);
 }
 
 /** The export's query (§989): the same filters, every page. */
