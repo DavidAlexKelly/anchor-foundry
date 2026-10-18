@@ -300,8 +300,7 @@ export function VariableBridge({
   }, [countViews, currentLayout, appId]);
 
   const resolve = useMutation({
-    mutationFn: (raw: Record<string, unknown>) => {
-      const ticket = ++latest.current;
+    mutationFn: ({ raw, ticket }: { raw: Record<string, unknown>; ticket: number }) => {
       // The layout on screen when this resolve is *sent*. Captured here rather
       // than read when the answer lands, for the reason the recorder's
       // `started` map gives: a resolve triggered by page one and answered
@@ -348,7 +347,9 @@ export function VariableBridge({
         );
       }
     },
-    onError: () => setPending(false),
+    onError: (_error, { ticket }) => {
+      if (ticket === latest.current) setPending(false);
+    },
   });
 
   const serialised = JSON.stringify(values);
@@ -356,16 +357,36 @@ export function VariableBridge({
   // definition changes what everything resolves to, the same as a reader
   // changing a value does.
   const draft = working ? JSON.stringify([declared, events ?? {}]) : "";
+  // What the values are computed *from*. Not the visible set: that says which
+  // values to compute, not what they are.
+  const inputs = JSON.stringify([serialised, draft, appId, bound ?? [], recomputeTick]);
+  const askedFor = useRef<string | null>(null);
   useEffect(() => {
     if (!enabled) {
+      askedFor.current = null;
       setPending(false);
       return;
     }
-    setPending(true);
-    const timer = setTimeout(() => resolve.mutate(values), DEBOUNCE_MS);
+    // **The ticket is taken when a resolve is scheduled, not when it is sent**
+    // (§998). Taken at send, an answer to the previous inputs that landed
+    // inside the debounce was still the latest, cleared `pending`, and drew
+    // the old filter's rows as the new filter's answer for as long as the
+    // debounce had left to run - exactly what `pending` is for.
+    const ticket = ++latest.current;
+    // **And only new inputs make the values pending.** A change to what is on
+    // screen alone - the builder's Preview, a page or tab switched - asks
+    // for the values it now shows, but every value already held is still
+    // right, so blanking each widget to "Resolving" until the answer lands
+    // would show nothing where the right rows were. A widget newly shown
+    // whose value has not been computed is unresolved by itself.
+    if (inputs !== askedFor.current) {
+      askedFor.current = inputs;
+      setPending(true);
+    }
+    const timer = setTimeout(() => resolve.mutate({ raw: values, ticket }), DEBOUNCE_MS);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [serialised, draft, enabled, appId, (bound ?? []).join(","), recomputeTick, visibleKey]);
+  }, [inputs, enabled, visibleKey]);
 
   // And running an action (roadmap 1.3), by the same argument.
   const queryClient = useQueryClient();
