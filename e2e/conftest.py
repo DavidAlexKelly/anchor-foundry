@@ -370,11 +370,23 @@ def _signed_in(browser, token: str, request, *, locale: str | None = None,
         const text = (document.body.innerText || "").replace(/\\s+/g, " ").slice(0, 1500);
         return JSON.stringify({url: location.href, ids, text});
     }""")
+    # **Every page keeps to the Content-Security-Policy** (§993), whatever the
+    # test is about. A load the policy refuses is a console message and
+    # nothing else - the image is missing, the frame is blank, the editor
+    # never starts - so a test that is not looking for it passes over it.
+    refused: list[str] = []
+    opened.on(
+        "console",
+        lambda message: refused.append(message.text)
+        if "Content Security Policy" in message.text else None,
+    )
+    opened.csp_violations = refused  # type: ignore[attr-defined]
     yield opened
     report = getattr(request.node, "report_call", None)
     if report is not None and report.failed:
         _capture_failure(opened, request.node.name)
     context.close()
+    assert not refused, f"the page broke its Content-Security-Policy: {refused}"
 
 
 @pytest.fixture
