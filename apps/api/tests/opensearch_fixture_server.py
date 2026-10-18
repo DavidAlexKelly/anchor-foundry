@@ -23,9 +23,10 @@ What this is **still not**: OpenSearch. There are no analyzers, no scoring, no
 refresh semantics, no sharding, and the mapping rules implemented are the ones
 this platform writes rather than the whole language. It proves the gateway
 forms correct requests, reads responses correctly, and does not contradict the
-mapping it declared; it cannot prove a real cluster agrees. That remaining gap
-is stated in STATUS rather than papered over, and decision 0006 lists checking
-it as a deployment step.
+mapping it declared; it cannot prove a real cluster agrees. **So it can stand
+in front of one** (§1004): with `ANCHOR_OPENSEARCH_PROXY_TO` set it forwards
+every request to that cluster and keeps only `/__reset`, which is how CI's
+`api (real OpenSearch)` job runs these same tests against OpenSearch 2.11.
 
 Endpoints:
   GET    /                        version banner (client handshake)
@@ -344,13 +345,67 @@ def _any(found, test) -> bool:
     return test(found)
 
 
+def _subfield_absent(index: str, field: str) -> bool:
+    """A `.keyword` the mapping does not have (§1004): a typed field - a long,
+    a date - has no keyword subfield on a cluster, so a query naming one
+    matches nothing and `exists` is false. `_resolve` reads every `.keyword`
+    as its field, which made a typed field look like it had one."""
+    if not field.endswith(".keyword"):
+        return False
+    base = _declared_type(index, field[: -len(".keyword")])
+    return base is not None and _declared_type(index, field) is None
+
+
+_FIELD_CLAUSES = ("term", "terms", "prefix", "regexp", "wildcard", "match")
+
+
+def _words(value) -> list[str]:
+    return re.findall(r"\w+", str(value).lower())
+
+
 def _match(source: dict, clause: dict, index: str = "") -> bool:
+    for kind in _FIELD_CLAUSES:
+        if kind in clause and _subfield_absent(index, next(iter(clause[kind]))):
+            return False
+    if "exists" in clause and _subfield_absent(index, clause["exists"]["field"]):
+        return False
+    if "match" in clause:
+        # A full-text `match`, as a cluster reads it by field type (§1004): on
+        # a text field, every word of the query among the value's words; on a
+        # typed field, the value coerced and compared. `lenient` makes a value
+        # the type cannot hold match nothing rather than fail the search.
+        field, spec = next(iter(clause["match"].items()))
+        query = spec.get("query") if isinstance(spec, dict) else spec
+        lenient = isinstance(spec, dict) and bool(spec.get("lenient"))
+        found = _resolve(source, field)
+        if found is MISSING:
+            return False
+        declared = _declared_type(index, field)
+        if declared in (None, "text"):
+            wanted = set(_words(query))
+            return _any(found, lambda v: wanted <= set(_words(v)))
+        try:
+            target = _comparable(query, declared)
+            return _any(found, lambda v: _comparable(v, declared) == target)
+        except (TypeError, ValueError) as exc:
+            if lenient:
+                return False
+            raise MappingError(
+                f"failed to parse query value for [{field}] of type [{declared}]: {query!r}"
+            ) from exc
     if "term" in clause:
         field, value = next(iter(clause["term"].items()))
         found = _resolve(source, field)
         if found is MISSING:
             return False
         declared = _declared_type(index, field)
+        if declared == "text":
+            # **A term is not analysed and a text field is** (§1004): the
+            # cluster compares the term with each word the analyser made of
+            # the value, lowercased - so `north` matches "north west" and
+            # `North` matches nothing. Treating it as the whole value is how
+            # an equality on a string passed here and over-matched on one.
+            return _any(found, lambda v: str(value) in _words(v))
         try:
             wanted = _comparable(value, declared)
             return _any(found, lambda v: _comparable(v, declared) == wanted)
@@ -412,6 +467,9 @@ def _match(source: dict, clause: dict, index: str = "") -> bool:
         if found is MISSING:
             return False
         declared = _declared_type(index, field)
+        if declared == "text":  # each value a term, as `term` above
+            words = {str(v) for v in values}
+            return _any(found, lambda v: bool(words & set(_words(v))))
         wanted = {_comparable(v, declared) for v in values}
         return _any(found, lambda v: _comparable(v, declared) in wanted)
     if "geo_bounding_box" in clause:
@@ -684,6 +742,8 @@ class Handler(BaseHTTPRequestHandler):
             # and the shape `instance_mapping._mapped_properties` has to read.
             found = {name: MAPPINGS.get(name, {}) for name in _matching_indices(parts[0])}
             if not found:
+                if "ignore_unavailable=true" in (urlparse(self.path).query or ""):
+                    return self._send(200, {})  # as a cluster answers it
                 return self._send(404, {"error": {"type": "index_not_found_exception"}})
             return self._send(200, found)
         self._send(404, {"error": f"fixture has no GET {path}"})
@@ -1170,9 +1230,90 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, {"_index": index, "_id": doc_id, "result": "updated"})
 
 
+# ---- or a real cluster behind the same port (§1004) ---------------------------
+#: Set to a cluster's URL and this process forwards every request to it instead
+#: of answering, keeping only `/__reset` for itself - so every test that starts
+#: this fixture runs, unchanged, against real OpenSearch. That is decision 0006
+#: §7's check "that a real cluster agrees", which the docstring above says this
+#: fixture cannot make, and which was waiting for a deployment to be made at all.
+PROXY_ENV = "ANCHOR_OPENSEARCH_PROXY_TO"
+
+
+def _cluster_opener():
+    """Straight to the cluster: a test machine's HTTP proxy is for the
+    internet, and a cluster on loopback is not on it."""
+    import urllib.request
+
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def reset_cluster(target: str) -> None:
+    """`/__reset` on a cluster: delete every index the tests could have made.
+    A dot-prefixed index is the cluster's own and is left alone."""
+    import urllib.request
+
+    opener = _cluster_opener()
+    with opener.open(f"{target}/_cat/indices?format=json&h=index", timeout=30) as resp:
+        names = [row["index"] for row in json.loads(resp.read())]
+    for name in names:
+        if not name.startswith("."):
+            opener.open(urllib.request.Request(f"{target}/{name}", method="DELETE"),
+                        timeout=30).read()
+
+
+class ProxyHandler(BaseHTTPRequestHandler):
+    """Forwards to `target`, which the server is given at start."""
+
+    protocol_version = "HTTP/1.1"
+    target = ""
+
+    def log_message(self, *args) -> None:  # noqa: D401 - quiet, as Handler is
+        pass
+
+    def _reply(self, status: int, data: bytes, content_type: str) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(data)
+
+    def _forward(self) -> None:
+        import urllib.error
+        import urllib.request
+
+        length = int(self.headers.get("Content-Length") or 0)
+        body = self.rfile.read(length) if length else None
+        if self.path == "/__reset":
+            reset_cluster(self.target)
+            self._reply(200, b'{"acknowledged":true}', "application/json")
+            return
+        request = urllib.request.Request(self.target + self.path, data=body, method=self.command)
+        if self.headers.get("Content-Type"):
+            request.add_header("Content-Type", self.headers["Content-Type"])
+        try:
+            with _cluster_opener().open(request, timeout=60) as resp:
+                status, data = resp.status, resp.read()
+                content_type = resp.headers.get("Content-Type", "application/json")
+        except urllib.error.HTTPError as exc:
+            status, data = exc.code, exc.read()
+            content_type = exc.headers.get("Content-Type", "application/json")
+        self._reply(status, data, content_type)
+
+    do_GET = do_HEAD = do_PUT = do_POST = do_DELETE = _forward  # noqa: N815
+
+
 if __name__ == "__main__":
+    import os
+
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 9209
+    target = os.environ.get(PROXY_ENV, "").rstrip("/")
+    if target:
+        ProxyHandler.target = target
+        handler: type[BaseHTTPRequestHandler] = ProxyHandler
+    else:
+        handler = Handler
     # Threading, not the plain HTTPServer: the opensearchpy client pools
     # keep-alive connections, and a single-threaded server serialises behind
     # whichever one it is currently holding open.
-    ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()
+    ThreadingHTTPServer(("127.0.0.1", port), handler).serve_forever()
