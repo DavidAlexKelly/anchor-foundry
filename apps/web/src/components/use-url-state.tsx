@@ -15,7 +15,7 @@
  * instead of replacing them.
  */
 
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
 export type UrlState = {
@@ -40,13 +40,14 @@ export type UrlState = {
 type Change = Record<string, string | string[] | undefined | null>;
 
 export function useUrlState(): UrlState {
-  const router = useRouter();
   const pathname = usePathname();
   const params = useSearchParams();
 
   /** The last thing written, until the router catches up.
    *
-   * `router.replace` does not land synchronously, so two writes in quick
+   * A write reaches `useSearchParams` a render later, not at once (it was
+   * `router.replace` when this was found; §1000 made it the history API,
+   * which is no different here), so two writes in quick
    * succession — typing a property name and then its value — would each build
    * on the same stale snapshot, and the second would drop the first. Found in
    * the browser check for item 0.4, which produced `?value=NO` with no
@@ -56,7 +57,7 @@ export function useUrlState(): UrlState {
    */
   const pending = useRef<string | null>(null);
   // **Forgotten once the write is committed, not when a render sees it**
-  // (§934). `router.replace` runs as a transition, so React may render the
+  // (§934). The router's update runs as a transition, so React may render the
   // new URL and then not commit that render yet; clearing this during render
   // let a click handled meanwhile - on the old, committed render - build on
   // the old URL with nothing pending. The explorer's regex tick did exactly
@@ -94,7 +95,17 @@ export function useUrlState(): UrlState {
       pending.current = qs;
       // replace, not push: flicking between tabs should not bury the page the
       // reader arrived from under a stack of back-button steps.
-      router.replace(qs ? `?${qs}` : pathname, { scroll: false });
+      //
+      // **The history API, not `router.replace`** (§1000). The router treats a
+      // new query as a navigation: in a production build it asks the server
+      // for the page again before the address changes, and a write that comes
+      // while one is in flight aborts it - so a module's routed filters, which
+      // write as the page settles, never reached the address bar on a deployed
+      // stack at all (`next dev` answers fast enough to hide it). Nothing the
+      // server renders reads the query - every page here is a client
+      // component - and Next keeps `useSearchParams` in step with
+      // `history.replaceState` itself.
+      window.history.replaceState(null, "", qs ? `?${qs}` : pathname);
     },
   };
 }
