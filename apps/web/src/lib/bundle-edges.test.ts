@@ -49,6 +49,7 @@ function reach(page: string): { files: Set<string>; packages: Set<string> } {
 }
 
 const WIDGETS = join(SRC, "components/canvas/widgets.tsx");
+const SETTINGS = join(SRC, "components/canvas/widget-settings.tsx");
 
 describe("pages that do not render a module load without the widget table", () => {
   it.each([
@@ -62,10 +63,22 @@ describe("pages that do not render a module load without the widget table", () =
     expect([...packages].filter((p) => p.startsWith("monaco-editor"))).toEqual([]);
   });
 
+  it("and a module's reader loads the widgets without their settings panels (§995)", () => {
+    for (const page of [
+      "components/canvas/widgets.tsx",
+      "components/canvas/published-module.tsx",
+      "app/kiosk/page.tsx",
+      "app/(platform)/[workspace]/apps/[appId]/page.tsx",
+    ]) {
+      expect(reach(page).files.has(SETTINGS), page).toBe(false);
+    }
+  });
+
   it("and the walk does find it where it is meant to be", () => {
     // Without this, a walk that found nothing would pass everything above.
     expect(reach("components/configured-object-view.tsx").files.has(WIDGETS)).toBe(true);
     expect(reach("components/applications/workshop-app.tsx").files.has(WIDGETS)).toBe(true);
     expect(reach("components/code-editor.tsx").packages.has("monaco-editor")).toBe(true);
+    expect(reach("components/canvas/widget-settings.tsx").files.has(WIDGETS)).toBe(true);
   });
 });
