@@ -9,7 +9,9 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { useWorkspaceBySlug } from "@/components/use-workspace";
-import { focusesSearch, hitHref, kindLabel, step, whereText } from "@/lib/workspace-search";
+import {
+  focusesSearch, hitHref, kindLabel, objectsHref, step, whereText,
+} from "@/lib/workspace-search";
 
 /** How long typing has to pause before it is asked about. */
 const SETTLE_MS = 200;
@@ -53,13 +55,18 @@ export function WorkspaceSearch({ slug }: { slug: string }) {
 
   useEffect(() => setHighlight(-1), [asked]);
 
+  // The rows a reader can choose: every hit, then the Object Explorer asked
+  // the same words (§991), which is where objects are searched.
+  const choices = asked ? found.length + 1 : 0;
+
   function choose(index: number) {
     const hit = found[index];
-    if (!hit) return;
+    const href = hit ? hitHref(hit) : index === found.length && asked ? objectsHref(slug, asked) : null;
+    if (!href) return;
     setOpen(false);
     setTyped("");
     input.current?.blur();
-    router.push(hitHref(hit));
+    router.push(href);
   }
 
   return (
@@ -92,7 +99,7 @@ export function WorkspaceSearch({ slug }: { slug: string }) {
             input.current?.blur();
           } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
             e.preventDefault();
-            setHighlight((h) => step(h, found.length, e.key === "ArrowDown" ? 1 : -1));
+            setHighlight((h) => step(h, choices, e.key === "ArrowDown" ? 1 : -1));
           } else if (e.key === "Enter") {
             e.preventDefault();
             choose(highlight >= 0 ? highlight : 0);
@@ -138,6 +145,26 @@ export function WorkspaceSearch({ slug }: { slug: string }) {
               <div className="slug">{kindLabel(hit.kind)} · {whereText(hit)}</div>
             </li>
           ))}
+          {hits.data && (
+            <li
+              id={`workspace-search-hit-${found.length}`}
+              role="option"
+              aria-selected={highlight === found.length}
+              data-testid="workspace-search-objects"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                choose(found.length);
+              }}
+              onMouseEnter={() => setHighlight(found.length)}
+              style={{
+                padding: "6px 8px", cursor: "pointer", borderRadius: 4,
+                borderTop: "1px solid var(--line, rgba(0,0,0,0.08))",
+                background: highlight === found.length ? "var(--surface-2, rgba(0,0,0,0.06))" : undefined,
+              }}
+            >
+              Search objects for &ldquo;{asked}&rdquo;
+            </li>
+          )}
         </ul>
       )}
     </div>

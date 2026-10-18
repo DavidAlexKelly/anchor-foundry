@@ -243,6 +243,13 @@ export function ObjectExplorer({
   // question anybody meant to ask, and the type-list filter is a way of
   // reading the form rather than part of what it asks.
   const [draft, setDraft] = useState(() => criteria.q);
+  // A question asked from outside the box - the workspace search handing its
+  // words over (§991), Back, a pasted link - is what the box then holds.
+  const [shownQ, setShownQ] = useState(criteria.q);
+  if (shownQ !== criteria.q) {
+    setShownQ(criteria.q);
+    setDraft(criteria.q);
+  }
   const [typeFilter, setTypeFilter] = useState("");
   const [saving, setSaving] = useState<Criteria | null>(null);
   // **The open object lives in the URL, not in `useState`** (§309). The

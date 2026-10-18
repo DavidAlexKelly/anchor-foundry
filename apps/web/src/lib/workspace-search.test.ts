@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { focusesSearch, hitHref, kindLabel, step, whereText, workspaceOf } from "./workspace-search";
+import {
+  focusesSearch, hitHref, kindLabel, objectsHref, step, whereText, workspaceOf,
+} from "./workspace-search";
 
 describe("the workspace search (§990)", () => {
   it("knows which workspace a page is in", () => {
@@ -32,5 +34,9 @@ describe("the workspace search (§990)", () => {
     expect(step(2, 3, 1)).toBe(0);
     expect(step(0, 3, -1)).toBe(2);
     expect(step(0, 0, 1)).toBe(-1);
+  });
+
+  it("hands the same words to the Object Explorer (§991)", () => {
+    expect(objectsHref("acme", "heathrow t5")).toBe("/acme/explore?q=heathrow%20t5");
   });
 });

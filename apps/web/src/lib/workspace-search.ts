@@ -52,3 +52,9 @@ export function step(current: number, count: number, by: 1 | -1): number {
   if (current < 0) return by === 1 ? 0 : count - 1;
   return (current + by + count) % count;
 }
+
+/** The Object Explorer, asked the same words (§991): objects are found there,
+ * by their properties, not here by a resource's name. */
+export function objectsHref(workspaceSlug: string, query: string): string {
+  return `/${workspaceSlug}/explore?q=${encodeURIComponent(query)}`;
+}
