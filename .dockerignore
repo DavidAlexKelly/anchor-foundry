@@ -5,3 +5,9 @@
 **/.pytest_cache
 **/cdk.out
 .git
+# **A developer machine's settings stay on it** (§1002). `apps/web/.env.local`
+# is committed for `next dev` and sets NEXT_PUBLIC_AUTH_MODE=dev, and `next
+# build` reads it - so every web image built from this context drew the
+# "Paste an access token" sign-in that `src/lib/auth.ts` says must never be
+# deployed. (A pasted token was still verified by the API; the box was there.)
+**/.env*.local
