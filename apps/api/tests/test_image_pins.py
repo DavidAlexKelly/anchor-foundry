@@ -57,3 +57,20 @@ def test_the_pattern_refuses_a_tag_alone() -> None:
     assert not PINNED.match("FROM --platform=linux/amd64 python:3.12-slim AS base")
     assert not PINNED.match("FROM python@sha256:" + "a" * 64)
     assert PINNED.match("FROM public.ecr.aws/sam/build-python3.12:latest@sha256:" + "a" * 64)
+
+
+def test_no_local_env_file_reaches_an_image() -> None:
+    """§1002: `apps/web/.env.local` turns on the development sign-in, and the
+    web image is built from the repository root, whose `.dockerignore` decides
+    what `next build` sees. Matched as Docker matches: a pattern is a path
+    glob from the context root, `**` any number of directories."""
+    import fnmatch
+
+    patterns = [line.strip() for line in (ROOT / ".dockerignore").read_text().splitlines()
+                if line.strip() and not line.strip().startswith("#")]
+    local = sorted(str(p.relative_to(ROOT)) for p in ROOT.rglob(".env*.local")
+                   if "node_modules" not in p.parts)
+    assert "apps/web/.env.local" in local, "the file this guards against has moved"
+    reached = [path for path in local
+               if not any(fnmatch.fnmatch(path, pattern) for pattern in patterns)]
+    assert reached == [], f"would be copied into an image: {reached}"
