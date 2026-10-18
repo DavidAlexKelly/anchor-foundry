@@ -20,10 +20,18 @@ describe("the audit log (§988)", () => {
     expect(q.get("action")).toBe("dataset.");
     expect(q.get("user_id")).toBe("u1");
     expect(q.has("resource_id")).toBe(false);
-    expect(q.get("since")).toBe("2026-10-01T00:00:00Z");
+    // Days in the reader's zone, which `npm test` sets to New York (§994).
+    expect(q.get("since")).toBe("2026-10-01T04:00:00.000Z");
     // The last day is the whole of it.
-    expect(q.get("until")).toBe("2026-10-17T00:00:00.000Z");
+    expect(q.get("until")).toBe("2026-10-17T04:00:00.000Z");
     expect(q.get("before_id")).toBe("42");
+  });
+
+  it("ends a day at the next midnight on the day the clocks go back", () => {
+    // New York leaves daylight time on 1 November 2026: that day is 25 hours.
+    const q = new URLSearchParams(auditQuery({ ...NO_FILTERS, since: "2026-11-01", until: "2026-11-01" }));
+    expect(q.get("since")).toBe("2026-11-01T04:00:00.000Z");
+    expect(q.get("until")).toBe("2026-11-02T05:00:00.000Z");
   });
 
   it("pages on while a page is full", () => {
