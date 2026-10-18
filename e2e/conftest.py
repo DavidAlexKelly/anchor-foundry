@@ -251,6 +251,12 @@ def pytest_runtest_makereport(item, call):
     # the failure, so the log alone says.
     journal = getattr(item, "page_journal", None)
     if report.when == "call" and report.failed and journal:
+        snapshot = getattr(item, "page_snapshot", None)
+        if snapshot is not None:
+            try:
+                journal.append("at failure: " + snapshot())
+            except Exception as error:  # a closed page has nothing to say
+                journal.append(f"at failure: no snapshot ({error})")
         report.sections.append(("page journal", "\n".join(journal[-80:])))
 
 
@@ -352,6 +358,18 @@ def _signed_in(browser, token: str, request, *, locale: str | None = None,
     opened.on("requestfailed",
               lambda req: note("request failed", f"{req.method} {req.url} {req.failure}"))
     request.node.page_journal = journal
+    # The page as it is when the test fails: which test ids are on it, how
+    # many of each, and what it says - the DOM a screenshot was taken of,
+    # small enough for a log.
+    request.node.page_snapshot = lambda: opened.evaluate("""() => {
+        const ids = {};
+        for (const el of document.querySelectorAll("[data-testid]")) {
+            const id = el.getAttribute("data-testid");
+            ids[id] = (ids[id] || 0) + 1;
+        }
+        const text = (document.body.innerText || "").replace(/\\s+/g, " ").slice(0, 1500);
+        return JSON.stringify({url: location.href, ids, text});
+    }""")
     yield opened
     report = getattr(request.node, "report_call", None)
     if report is not None and report.failed:
