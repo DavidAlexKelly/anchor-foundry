@@ -21,7 +21,7 @@ from __future__ import annotations
 from playwright.sync_api import expect
 
 from api import Module, layout, object_set
-from conftest import open_builder, open_module, settled
+from conftest import open_builder, open_module, settled, stays
 
 ROWS = [
     {"id": "S1", "name": "Alpha site", "region": "north", "note": ""},
@@ -218,3 +218,17 @@ def test_the_panel_names_the_properties_that_exist(page, api) -> None:
     hint = page.get_by_test_id("property-list-properties").locator("xpath=..")
     expect(hint).to_contain_text("region")
     expect(hint).to_contain_text("note")
+
+
+def test_switching_to_preview_keeps_what_is_already_shown(page, api) -> None:
+    """§998: Preview changes which widgets are on screen, not what any value
+    is, so the list it already shows stays shown. It used to blank to
+    "Resolving the object set…" until a second answer came, and the browser
+    tests that counted its rows and then read them read the gap."""
+    mod = one(api, "Property list kept through Preview")
+    open_builder(page, mod)
+    expect_labels(page, ["Id", "Name", "Region", "Note"])
+    page.get_by_role("button", name="Preview", exact=True).click()
+    expect(page.get_by_role("button", name="Back to editing", exact=True)).to_be_visible()
+    stays(lambda: rows(page).count(), lambda n: n == 4,
+          what="the list's rows after switching to Preview", for_ms=2000)
