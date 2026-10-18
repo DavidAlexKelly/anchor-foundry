@@ -55,3 +55,28 @@ def test_it_is_not_offered_outside_a_workspace(page) -> None:
     page.goto(f"{WEB_BASE}/home")
     expect(page.locator("header.topbar")).to_be_visible(timeout=30000)
     expect(page.get_by_test_id("workspace-search")).to_have_count(0)
+
+
+def test_its_words_are_handed_to_the_object_explorer(page, api) -> None:
+    """Objects are searched by what they hold, not by name - the last row
+    asks the Object Explorer the same words (§991), and asks it again from
+    the Explorer itself."""
+    here = Module(api, "Handing over")
+    page.goto(f"{WEB_BASE}/{here.workspace_slug}/{here.project_slug}")
+    box = page.get_by_test_id("workspace-search-input")
+    expect(box).to_be_visible(timeout=30000)
+    box.fill("heathrow t5")
+    objects = page.get_by_test_id("workspace-search-objects")
+    expect(objects).to_have_text("Search objects for “heathrow t5”", timeout=15000)
+    objects.click()
+    expect(page).to_have_url(re.compile(r"/explore\?q=heathrow(%20|\+)t5$"), timeout=30000)
+    explorer_box = page.get_by_role("searchbox", name="Search instances")
+    expect(explorer_box).to_have_value("heathrow t5", timeout=30000)
+
+    box.fill("gatwick")
+    expect(objects).to_have_text("Search objects for “gatwick”", timeout=15000)
+    box.press("ArrowUp")
+    expect(objects).to_have_attribute("aria-selected", "true")
+    box.press("Enter")
+    expect(page).to_have_url(re.compile(r"/explore\?q=gatwick$"), timeout=30000)
+    expect(explorer_box).to_have_value("gatwick")
