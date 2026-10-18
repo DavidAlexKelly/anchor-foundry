@@ -2,6 +2,7 @@
 elsewhere, and how much of a referrer to send (§836)."""
 from __future__ import annotations
 
+import os
 import urllib.request
 
 from conftest import WEB_BASE
@@ -41,10 +42,15 @@ def test_a_page_says_what_it_may_not_load(page) -> None:
     (conftest's `_signed_in`)."""
     [policy] = headers_of(f"{WEB_BASE}/").get("content-security-policy", [])
     got = directives(policy)
-    # `next dev`'s policy, which is the build's plus hot reload's eval and
-    # socket (apps/web/src/lib/csp.test.ts holds the two together).
-    assert got["script-src"] == ["'self'", "'unsafe-inline'", "'unsafe-eval'"]
-    assert got["connect-src"] == ["'self'", "https://*.amazoncognito.com", "ws:", "wss:"]
+    # A build's policy, or `next dev`'s, which is the build's plus hot
+    # reload's eval and socket (apps/web/src/lib/csp.test.ts holds the two
+    # together). Which one is serving is the suite's to say (§1001).
+    if os.environ.get("ANCHOR_WEB_BUILD") == "production":
+        assert got["script-src"] == ["'self'", "'unsafe-inline'"]
+        assert got["connect-src"] == ["'self'", "https://*.amazoncognito.com"]
+    else:
+        assert got["script-src"] == ["'self'", "'unsafe-inline'", "'unsafe-eval'"]
+        assert got["connect-src"] == ["'self'", "https://*.amazoncognito.com", "ws:", "wss:"]
     assert got["object-src"] == ["'none'"] and got["frame-ancestors"] == ["'self'"]
     violations: list[str] = []
     page.on("console", lambda m: violations.append(m.text)
