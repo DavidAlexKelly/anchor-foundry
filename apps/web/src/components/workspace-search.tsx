@@ -56,12 +56,27 @@ export function WorkspaceSearch({ slug }: { slug: string }) {
   useEffect(() => setHighlight(-1), [asked]);
 
   // The rows a reader can choose: every hit, then the Object Explorer asked
-  // the same words (§991), which is where objects are searched.
-  const choices = asked ? found.length + 1 : 0;
+  // the same words (§991), which is where objects are searched. **What is
+  // typed, not what was last searched** (§1001): that row asks the server
+  // nothing, so it need not wait for the pause the hits wait for - and a row
+  // naming the last search's words would send those, not these.
+  const words = typed.trim();
+  const choices = words ? found.length + 1 : 0;
+
+  // **The close a blur schedules is cancelled by coming back** (§1001).
+  // Choosing a row blurs the box, and a reader who typed again within the
+  // grace period had the list they had just reopened closed under them -
+  // a production build is quick enough to land there, and the browser
+  // suite found it.
+  const closing = useRef<ReturnType<typeof setTimeout> | null>(null);
+  function keepOpen() {
+    if (closing.current) clearTimeout(closing.current);
+    closing.current = null;
+  }
 
   function choose(index: number) {
     const hit = found[index];
-    const href = hit ? hitHref(hit) : index === found.length && asked ? objectsHref(slug, asked) : null;
+    const href = hit ? hitHref(hit) : index === found.length && words ? objectsHref(slug, words) : null;
     if (!href) return;
     setOpen(false);
     setTyped("");
@@ -79,7 +94,7 @@ export function WorkspaceSearch({ slug }: { slug: string }) {
         ref={input}
         type="text"
         role="combobox"
-        aria-expanded={open && !!asked}
+        aria-expanded={open && !!words}
         aria-controls="workspace-search-results"
         aria-autocomplete="list"
         aria-activedescendant={highlight >= 0 ? `workspace-search-hit-${highlight}` : undefined}
@@ -88,11 +103,18 @@ export function WorkspaceSearch({ slug }: { slug: string }) {
         aria-label="Search this workspace"
         value={typed}
         onChange={(e) => {
+          keepOpen();
           setTyped(e.target.value);
           setOpen(true);
         }}
-        onFocus={() => setOpen(true)}
-        onBlur={() => setTimeout(() => setOpen(false), 150)}
+        onFocus={() => {
+          keepOpen();
+          setOpen(true);
+        }}
+        // A moment's grace, so a click on a row lands before the list goes.
+        onBlur={() => {
+          closing.current = setTimeout(() => setOpen(false), 150);
+        }}
         onKeyDown={(e) => {
           if (e.key === "Escape") {
             setOpen(false);
@@ -107,7 +129,7 @@ export function WorkspaceSearch({ slug }: { slug: string }) {
         }}
         style={{ width: 280 }}
       />
-      {open && asked && (
+      {open && words && (
         <ul
           id="workspace-search-results"
           role="listbox"
@@ -118,7 +140,7 @@ export function WorkspaceSearch({ slug }: { slug: string }) {
             padding: 4, listStyle: "none", maxHeight: 360, overflowY: "auto",
           }}
         >
-          {hits.isPending && <li className="soft" style={{ padding: 6 }}>Searching…</li>}
+          {asked && hits.isPending && <li className="soft" style={{ padding: 6 }}>Searching…</li>}
           {hits.data && found.length === 0 && (
             <li className="soft" style={{ padding: 6 }} data-testid="workspace-search-none">
               Nothing in this workspace is called that.
@@ -145,26 +167,24 @@ export function WorkspaceSearch({ slug }: { slug: string }) {
               <div className="slug">{kindLabel(hit.kind)} · {whereText(hit)}</div>
             </li>
           ))}
-          {hits.data && (
-            <li
-              id={`workspace-search-hit-${found.length}`}
-              role="option"
-              aria-selected={highlight === found.length}
-              data-testid="workspace-search-objects"
-              onMouseDown={(e) => {
-                e.preventDefault();
-                choose(found.length);
-              }}
-              onMouseEnter={() => setHighlight(found.length)}
-              style={{
-                padding: "6px 8px", cursor: "pointer", borderRadius: 4,
-                borderTop: "1px solid var(--line, rgba(0,0,0,0.08))",
-                background: highlight === found.length ? "var(--surface-2, rgba(0,0,0,0.06))" : undefined,
-              }}
-            >
-              Search objects for &ldquo;{asked}&rdquo;
-            </li>
-          )}
+          <li
+            id={`workspace-search-hit-${found.length}`}
+            role="option"
+            aria-selected={highlight === found.length}
+            data-testid="workspace-search-objects"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              choose(found.length);
+            }}
+            onMouseEnter={() => setHighlight(found.length)}
+            style={{
+              padding: "6px 8px", cursor: "pointer", borderRadius: 4,
+              borderTop: "1px solid var(--line, rgba(0,0,0,0.08))",
+              background: highlight === found.length ? "var(--surface-2, rgba(0,0,0,0.06))" : undefined,
+            }}
+          >
+            Search objects for &ldquo;{words}&rdquo;
+          </li>
         </ul>
       )}
     </div>

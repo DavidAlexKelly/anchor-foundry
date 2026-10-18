@@ -340,14 +340,102 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  # **The web app as it ships, for the parts `next dev` has hidden** (§1001).
+  # Every shard above runs against `next dev`, and a production build is not
+  # the same program: its Content-Security-Policy has no `eval` (§993), it
+  # renders once rather than twice, and its timings differ. §1000 - a routed
+  # module whose Preview lost its routing - was red against a build and green
+  # under `next dev` for as long as the suite had only run there. Not the
+  # whole suite, which would double the shards: the files that cover what a
+  # build changes - the address bar, the policy, lazily loaded code (§992,
+  # §995, §999), Monaco, embedding.
+  browser-production:
+    name: browser (production build)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: platform
+          POSTGRES_PASSWORD: devpass
+          POSTGRES_DB: platform
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U platform" --health-interval 5s
+          --health-timeout 5s --health-retries 20
+    env:
+      DATABASE_URL: postgresql+psycopg://platform_app:devpass@localhost:5432/platform?sslmode=disable
+      TEST_ADMIN_DSN: postgresql://platform:devpass@localhost:5432/platform?sslmode=disable
+      STORAGE_ROOT: /tmp/anchor-storage
+      ANCHOR_PYTHON: python
+      ANCHOR_E2E_REQUIRED: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+      - run: >
+          pip install -r apps/api/requirements.txt -r apps/api/requirements-dev.txt
+          -r apps/worker/requirements.txt
+      - run: npm ci
+      - name: Install the browser
+        timeout-minutes: 20
+        run: |
+          for attempt in 1 2 3; do
+            timeout 300 python -m playwright install --with-deps chromium && exit 0
+            echo "::warning::playwright install attempt $attempt stalled or failed"
+            sudo dpkg --configure -a || true
+          done
+          exit 1
+      - name: Migrate
+        run: python packages/db/migrate.py
+        env:
+          DATABASE_URL: postgresql://platform:devpass@localhost:5432/platform?sslmode=disable
+          PLATFORM_APP_PASSWORD: devpass
+      # Built and copied out before the stack starts its dev server, which
+      # writes to the same `.next`.
+      - name: Build and serve the web app
+        run: scripts/serve-built-web.sh 3200
+      - name: Bring the stack up
+        run: scripts/dev-up.sh
+      - name: Browser suite, against the build
+        working-directory: e2e
+        env:
+          ANCHOR_WEB_BASE: http://127.0.0.1:3200
+          ANCHOR_WEB_BUILD: production
+        run: >
+          python -m pytest -q -ra
+          test_routing.py test_routed_selection.py test_security_headers.py
+          test_workspace_search.py test_explorer_panel.py test_configured_object_view.py
+          test_property_list.py test_geoshape_map.py test_embedded_module.py
+          test_kiosk_mode.py test_editor_tabs.py
+      - name: Server logs on failure
+        if: failure()
+        run: tail -n 40 /tmp/anchor-dev/api.log /tmp/anchor-web-build/server.log || true
+      - name: Failing pages on failure
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: e2e-failures-production
+          path: /tmp/anchor-e2e-failures
+          if-no-files-found: ignore
+          retention-days: 7
+
   # The shards as one answer, under the browser job's old name. `always()`
   # so a failed shard still reaches here and turns this red, rather than
   # skipping it: a skipped check reads as a pass to anything that only asks
   # whether it failed.
   browser:
-    needs: browser-shard
+    needs: [browser-shard, browser-production]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - run: test "${{ needs.browser-shard.result }}" = success
+      - run: test "${{ needs.browser-production.result }}" = success

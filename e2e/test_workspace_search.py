@@ -26,11 +26,13 @@ def test_a_resource_in_another_project_is_found_and_opened(page, api) -> None:
     page.goto(f"{WEB_BASE}/{here.workspace_slug}/{here.project_slug}")
     box = page.get_by_test_id("workspace-search-input")
     expect(box).to_be_visible(timeout=30000)
-    page.locator("body").click()
-
     def pressed() -> bool:
         # The box is drawn before the page hydrates, and `/` is heard only
         # after: a press in between lands on the page and does nothing.
+        # **Nothing focused first, rather than a click on the page** (§1001):
+        # what is under the middle of the page depends on how far it has
+        # drawn, and a press in a text box types a `/`, as it should.
+        page.evaluate("document.activeElement && document.activeElement.blur()")
         page.keyboard.press("/")
         return box.evaluate("el => el === document.activeElement")
 
@@ -82,6 +84,9 @@ def test_its_words_are_handed_to_the_object_explorer(page, api) -> None:
 
     box.fill("gatwick")
     expect(objects).to_have_text("Search objects for “gatwick”", timeout=15000)
+    # The search behind it settled - nothing is called that - before the
+    # arrows, which a new answer resets.
+    expect(page.get_by_test_id("workspace-search-none")).to_be_visible(timeout=15000)
     box.press("ArrowUp")
     expect(objects).to_have_attribute("aria-selected", "true")
     box.press("Enter")
