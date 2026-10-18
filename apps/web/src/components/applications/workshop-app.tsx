@@ -69,6 +69,9 @@ import { UsedColoursPanel } from "@/components/canvas/UsedColoursPanel";
 import { profilerHref, profilerOn } from "@/components/canvas/profiler";
 import { redactHref, redactOn } from "@/components/canvas/redact";
 import { CANVAS_RESOLVER, CanvasContainer, PALETTE, PaletteItem } from "@/components/canvas/widgets";
+// The settings panels, here and nowhere a module is only read (§995): the
+// builder is where they are shown, and they must be here before a widget is.
+import "@/components/canvas/widget-settings";
 import {
   emptyNote as paletteEmptyNote, grouped, matching,
 } from "@/lib/widget-palette";

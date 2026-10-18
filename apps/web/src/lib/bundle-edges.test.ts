@@ -80,5 +80,7 @@ describe("pages that do not render a module load without the widget table", () =
     expect(reach("components/applications/workshop-app.tsx").files.has(WIDGETS)).toBe(true);
     expect(reach("components/code-editor.tsx").packages.has("monaco-editor")).toBe(true);
     expect(reach("components/canvas/widget-settings.tsx").files.has(WIDGETS)).toBe(true);
+    // The builder has its panels before a widget can be selected.
+    expect(reach("components/applications/workshop-app.tsx").files.has(SETTINGS)).toBe(true);
   });
 });
