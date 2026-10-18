@@ -279,6 +279,14 @@ def test_the_child_reports_its_own_nodes_and_not_the_hosts(page, paged_embed):
     try:
         open_module(page, outer)
         expect(page.locator(".canvas-embedded").get_by_text("IN_ONE=ONE")).to_be_visible()
+        # **For the request, not for the text** (§998). The child's values
+        # are drawn in edit mode already and stay drawn through Preview, so
+        # the text is on screen before the resolve that names what is on
+        # screen has been sent. `evaluate` is the Playwright call that lets
+        # the route handler run.
+        eventually(
+            lambda: (page.evaluate("0"), sum(b.get("visible") is not None for b in sent))[1],
+            lambda n: n > 0, what="the child's resolve naming what is on screen")
     finally:
         page.unroute("**/variables/evaluate")
 
