@@ -70,6 +70,8 @@ def test_a_prominent_geoshape_gets_a_map(page, module):
     expect(page.get_by_test_id("sov-map-outline")).to_be_visible()
     # And the outline is in it, not just a map of nothing.
     expect(page.locator("[data-testid='map-shape-outline']")).to_have_count(1)
+    # And the land under it, which loads the first time a map is drawn (§999).
+    expect(page.get_by_test_id("sov-map-outline").get_by_test_id("map-land")).to_have_count(1)
 
 
 def test_a_line_draws_as_a_line_and_an_area_as_an_area(page, module):

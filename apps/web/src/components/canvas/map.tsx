@@ -20,7 +20,6 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { WORLD_OUTLINE } from "./basemap";
 import { boundsOf, onScreen, pathsFor } from "./map-shapes";
 import { allInside, boundsText, sameView, viewOfBounds } from "./map-view";
 import { lineLabels, measureLabels, type PerimeterMode } from "./map-measure";
@@ -193,6 +192,30 @@ export function clusterPoints(points: MapPoint[], view: MapView): { placed: Plac
   return { placed, offscreen };
 }
 
+/** The country outlines a map draws under its data, loaded the first time a
+ * map is (§999). They are 60 kB of coordinates (`basemap.ts`), and a page
+ * that may show a map - an object's standard view, a module with a Map
+ * widget - was loading them whether or not one was drawn. Held once loaded,
+ * so the next map has them at once. Until then the sea is drawn and the
+ * data on it; the land arrives a moment later. */
+let loadedOutline: string | null = null;
+
+function useWorldOutline(): string | null {
+  const [outline, setOutline] = useState(loadedOutline);
+  useEffect(() => {
+    if (outline) return;
+    let current = true;
+    void import("./basemap").then((m) => {
+      loadedOutline = m.WORLD_OUTLINE;
+      if (current) setOutline(loadedOutline);
+    });
+    return () => {
+      current = false;
+    };
+  }, [outline]);
+  return outline;
+}
+
 /** A geoshape to draw (§426; `object-views` p.11). The label is what a hover
  *  says; the value is whatever the property holds, and `map-shapes` decides
  *  whether there is anything in it to draw. */
@@ -302,6 +325,7 @@ export function MapCanvas({
    * Search around). */
   tools?: React.ReactNode;
 }) {
+  const worldOutline = useWorldOutline();
   const fill = color ?? "var(--accent, #2f6f4f)";
   const [view, setView] = useState<MapView | null>(null);
   const [panning, setPanning] = useState(false);
@@ -591,13 +615,16 @@ export function MapCanvas({
       >
         <rect width={WIDTH} height={HEIGHT} fill="var(--map-sea, #eef2f4)" />
         <g transform={`scale(${k}) translate(${-current.x} ${-current.y})`}>
-          <path
-            d={WORLD_OUTLINE}
-            fill="var(--map-land, #d9e0da)"
-            stroke="var(--map-border, #a9b6ad)"
-            strokeWidth={0.8}
-            vectorEffect="non-scaling-stroke"
-          />
+          {worldOutline && (
+            <path
+              data-testid="map-land"
+              d={worldOutline}
+              fill="var(--map-land, #d9e0da)"
+              stroke="var(--map-border, #a9b6ad)"
+              strokeWidth={0.8}
+              vectorEffect="non-scaling-stroke"
+            />
+          )}
         </g>
         {/* p.11's geoshapes. **In screen space, like the pins — not inside
             the basemap's transform**, and that distinction is the whole of

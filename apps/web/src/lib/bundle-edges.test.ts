@@ -50,6 +50,7 @@ function reach(page: string): { files: Set<string>; packages: Set<string> } {
 
 const WIDGETS = join(SRC, "components/canvas/widgets.tsx");
 const SETTINGS = join(SRC, "components/canvas/widget-settings.tsx");
+const BASEMAP = join(SRC, "components/canvas/basemap.ts");
 
 describe("pages that do not render a module load without the widget table", () => {
   it.each([
@@ -71,6 +72,17 @@ describe("pages that do not render a module load without the widget table", () =
       "app/(platform)/[workspace]/apps/[appId]/page.tsx",
     ]) {
       expect(reach(page).files.has(SETTINGS), page).toBe(false);
+    }
+  });
+
+  it("and no page loads the map's basemap before a map is drawn (§999)", () => {
+    for (const page of [
+      "app/(platform)/[workspace]/explore/page.tsx",
+      "app/(platform)/[workspace]/[project]/objects/[typeId]/page.tsx",
+      "components/canvas/published-module.tsx",
+      "components/canvas/map.tsx",
+    ]) {
+      expect(reach(page).files.has(BASEMAP), page).toBe(false);
     }
   });
 
