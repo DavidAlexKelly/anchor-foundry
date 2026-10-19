@@ -200,7 +200,7 @@ export default function ObjectInstancesPage() {
 
   usePageTitle(type.data?.display_name, project?.name);
   return (
-    <main>
+    <main id="main">
       <div className="page-head">
         <div>
           <p className="eyebrow">project · objects</p>

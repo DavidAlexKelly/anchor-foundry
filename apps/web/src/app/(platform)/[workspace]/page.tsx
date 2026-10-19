@@ -32,10 +32,10 @@ export default function WorkspacePage() {
   const total = projects.data?.pages[0]?.total ?? 0;
 
   usePageTitle(workspace?.name);
-  if (wsPending) return <main className="page"><div className="state">Loading…</div></main>;
+  if (wsPending) return <main id="main" className="page"><div className="state">Loading…</div></main>;
   if (notFound) {
     return (
-      <main className="page">
+      <main id="main" className="page">
         <div className="state error" role="alert">
           <h1>This workspace doesn&apos;t exist or you don&apos;t have access to it.</h1>
         </div>
@@ -44,7 +44,7 @@ export default function WorkspacePage() {
   }
 
   return (
-    <main className="page">
+    <main id="main" className="page">
       <nav className="crumbs" aria-label="Breadcrumb">
         <Link href="/home">Workspaces</Link>
         <span className="link-mark" />

@@ -30,7 +30,7 @@ export default function ProjectOverview() {
 
   usePageTitle(project?.name, workspace?.name);
   return (
-    <main>
+    <main id="main">
       <div className="page-head">
         <div>
           <p className="eyebrow">overview</p>

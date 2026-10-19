@@ -171,7 +171,7 @@ export default function OrgPage() {
 
   usePageTitle("Organisation", org.data?.name);
   return (
-    <main className="page">
+    <main id="main" className="page">
       <div className="page-head">
         <div>
           <p className="eyebrow">organisation</p>
