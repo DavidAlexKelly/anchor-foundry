@@ -774,6 +774,11 @@ class Handler(BaseHTTPRequestHandler):
                 "type": "resource_already_exists_exception",
                 "reason": f"index [{index}] already exists",
             }})
+        if index != index.lower():
+            # As a cluster refuses it (§1006): an index name is lowercase, so
+            # nothing upper-case can ever be on a domain for a store to find.
+            return self._send(400, {"error": {"type": "invalid_index_name_exception",
+                                              "reason": "must be lowercase"}})
         INDICES.setdefault(index, {})
         # Remembered rather than discarded: everything below compares by it.
         MAPPINGS[index] = json.loads(raw or "{}")

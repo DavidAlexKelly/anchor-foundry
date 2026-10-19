@@ -203,6 +203,14 @@ jobs:
           python -m pytest -q -ra -p no:cacheprovider
           tests/test_instance_store.py tests/test_object_sets.py
           tests/test_link_traversal.py tests/test_instance_cutover.py
+      # The worker writes the same indices - a scheduled sync, the orphaned
+      # index cleanup - through the same fixture, so it asks the cluster too.
+      - run: pip install -r apps/worker/requirements.txt -r apps/worker/requirements-dev.txt
+      - name: The worker's tests, against the cluster
+        run: scripts/check.sh worker
+        env:
+          ANCHOR_PYTHON: python
+          PLATFORM_APP_PASSWORD: devpass
 
   # **The images a deployment ships, built as `docs/deploying.md` builds
   # them** (§1006). Nothing here built one, so a Dockerfile that no longer
