@@ -238,6 +238,18 @@ def test_submit_asks_before_writing(page, api) -> None:
     # And the edit survives the cancellation - Cancel is not Undo.
     expect(page.get_by_test_id("inline-edit-count")).to_have_text("1 row edited")
 
+    # And from a keyboard (§1010): the dialog takes focus, Escape is Cancel,
+    # and focus goes back to the Submit that asked.
+    submit = page.get_by_test_id("inline-edit-submit")
+    submit.focus()
+    page.keyboard.press("Enter")
+    confirm = page.get_by_test_id("inline-edit-confirm")
+    expect(confirm).to_be_focused()
+    page.keyboard.press("Escape")
+    expect(confirm).to_have_count(0)
+    expect(submit).to_be_focused()
+    expect(page.get_by_test_id("inline-edit-count")).to_have_text("1 row edited")
+
 
 def test_one_click_submit_skips_the_dialog(page, api) -> None:
     """p.243: "If you prefer to use a one-click submit option and would like to

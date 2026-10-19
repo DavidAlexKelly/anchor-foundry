@@ -127,3 +127,14 @@ def test_the_check_finds_what_it_is_for(page) -> None:
     </main></body></html>""")
     found = {v.split(":")[0] for v in violations(page)}
     assert {"empty-table-header", "color-contrast"} <= found, found
+
+
+def test_a_dialog_is_named_by_its_title_and_passes_too(page, place) -> None:
+    """§1010: the platform's dialogs are one component, a native `<dialog>`,
+    which had a title and no name - a reader announced "dialog" and nothing
+    else on opening one."""
+    page.goto(f"{WEB_BASE}/{place['mod'].workspace_slug}")
+    page.get_by_role("button", name="New project").click()
+    dialog = page.get_by_role("dialog", name="New project")
+    expect(dialog).to_be_visible()
+    assert violations(page) == []
