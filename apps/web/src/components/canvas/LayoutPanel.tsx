@@ -129,6 +129,7 @@ function DerivedPropertiesField({
       <span className="field-label">Derived properties</span>
       <select
         value={typeId}
+        aria-label="Derived properties: object type"
         data-testid="derived-type"
         onChange={(e) => setTypeId(e.target.value)}
       >

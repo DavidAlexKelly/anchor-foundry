@@ -611,7 +611,7 @@ export function WebhooksPanel({
             <th>Webhook</th>
             <th>Request</th>
             <th>Source</th>
-            <th />
+            <th><span className="sr-only">Actions</span></th>
           </tr>
         </thead>
         <tbody>

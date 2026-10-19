@@ -1621,7 +1621,7 @@ export default function ConnectionsPage() {
               <th>Sharing</th>
               <th>Status</th>
               <th>Sync health</th>
-              <th aria-label="Actions" />
+              <th><span className="sr-only">Actions</span></th>
             </tr>
           </thead>
           <tbody>

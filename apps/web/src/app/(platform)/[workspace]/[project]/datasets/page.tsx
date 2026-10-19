@@ -233,7 +233,7 @@ function ChecksPanel({
               <th>Check</th>
               <th>Severity</th>
               <th>Result</th>
-              {canEdit && <th aria-label="Actions" />}
+              {canEdit && <th><span className="sr-only">Actions</span></th>}
             </tr>
           </thead>
           <tbody>
@@ -931,7 +931,7 @@ export default function DatasetsPage() {
               <th>Name</th>
               <th>Rows</th>
               <th>Origin</th>
-              <th aria-label="Actions" />
+              <th><span className="sr-only">Actions</span></th>
             </tr>
           </thead>
           <tbody>

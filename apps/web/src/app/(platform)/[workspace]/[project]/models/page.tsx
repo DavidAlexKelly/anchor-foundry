@@ -318,7 +318,7 @@ function RunsDialog({
                 <th>Rows</th>
                 <th>Took</th>
                 <th>When</th>
-                <th />
+                <th><span className="sr-only">Actions</span></th>
               </tr>
             </thead>
             <tbody>
@@ -464,7 +464,7 @@ function HistoryDialog({
               <th>Saved</th>
               <th>By</th>
               <th>Inputs</th>
-              <th />
+              <th><span className="sr-only">Actions</span></th>
             </tr>
           </thead>
           <tbody>
@@ -1289,11 +1289,11 @@ export default function ModelsPage() {
         <table className="table">
           <thead>
             <tr>
-              <th aria-label="Move together" />
+              <th><span className="sr-only">Move together</span></th>
               <th>Model</th>
               <th>Last run</th>
               <th>Trigger</th>
-              <th aria-label="Actions" />
+              <th><span className="sr-only">Actions</span></th>
             </tr>
           </thead>
           <tbody>

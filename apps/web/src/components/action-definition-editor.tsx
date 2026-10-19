@@ -956,7 +956,7 @@ export function ActionDefinitionEditor({
         <thead>
           <tr>
             <th>Name</th><th>Label</th><th>Type</th><th>Default</th>
-            <th>Required</th><th>Hidden</th><th aria-label="Remove" />
+            <th>Required</th><th>Hidden</th><th><span className="sr-only">Remove</span></th>
           </tr>
         </thead>
         <tbody>

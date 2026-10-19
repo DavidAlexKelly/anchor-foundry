@@ -370,7 +370,7 @@ export function SharedPropertiesPanel({
           <thead>
             <tr>
               <th>Property</th><th>Type</th><th>Visibility</th><th>Used by</th>
-              <th aria-label="Actions" />
+              <th><span className="sr-only">Actions</span></th>
             </tr>
           </thead>
           <tbody>

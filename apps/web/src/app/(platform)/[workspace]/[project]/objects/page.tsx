@@ -1634,8 +1634,8 @@ export default function ObjectsPage() {
           <table className="table" style={{ marginBottom: 28 }}>
             <thead>
               <tr>
-                <th aria-label="Select" />
-                <th>Object type</th><th>Sources</th><th>Issue</th><th aria-label="Actions" />
+                <th><span className="sr-only">Select</span></th>
+                <th>Object type</th><th>Sources</th><th>Issue</th><th><span className="sr-only">Actions</span></th>
               </tr>
             </thead>
             <tbody>
@@ -1882,7 +1882,7 @@ export default function ObjectsPage() {
           )}
           {linkTypes.data && linkTypes.data.length > 0 && (
             <table className="table" style={{ marginBottom: 28 }}>
-              <thead><tr><th>Link</th><th>From → To</th><th>Cardinality</th><th>Joins on</th><th>Usage</th><th aria-label="Actions" /></tr></thead>
+              <thead><tr><th>Link</th><th>From → To</th><th>Cardinality</th><th>Joins on</th><th>Usage</th><th><span className="sr-only">Actions</span></th></tr></thead>
               <tbody>
                 {linkTypes.data.map((lt: LinkType) => (
                   <tr key={lt.id}>
@@ -1948,7 +1948,7 @@ export default function ObjectsPage() {
           )}
           {actionTypes.data && actionTypes.data.length > 0 && (
             <table className="table" style={{ marginBottom: 28 }}>
-              <thead><tr><th>Action</th><th>Object type</th><th>Writes</th><th aria-label="Actions" /></tr></thead>
+              <thead><tr><th>Action</th><th>Object type</th><th>Writes</th><th><span className="sr-only">Actions</span></th></tr></thead>
               <tbody>
                 {actionTypes.data.map((a: ActionType) => (
                   <tr key={a.id}>
@@ -2077,7 +2077,7 @@ export default function ObjectsPage() {
           )}
           {sources.data && sources.data.length > 0 && workspace && project && (
             <table className="table">
-              <thead><tr><th>Object type</th><th>Dataset</th><th>Primary key</th><th>Status</th><th aria-label="Actions" /></tr></thead>
+              <thead><tr><th>Object type</th><th>Dataset</th><th>Primary key</th><th>Status</th><th><span className="sr-only">Actions</span></th></tr></thead>
               <tbody>
                 {sources.data.map((s) => (
                   <SourceRow

@@ -24,7 +24,7 @@ export default function SeriesAnalysisPage() {
   });
   const a = analysis.data;
   return (
-    <div>
+    <main>
       <p className="login-note">
         <Link href={`/${params.workspace}/${params.project}/series-analyses`}>Time series analyses</Link>
       </p>
@@ -44,6 +44,6 @@ export default function SeriesAnalysisPage() {
           {workspace && <SeriesAnalysisView workspaceId={workspace.id} analysis={a} />}
         </>
       )}
-    </div>
+    </main>
   );
 }
