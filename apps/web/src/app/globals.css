@@ -154,6 +154,34 @@ button { font: inherit; cursor: pointer; }
 }
 .topbar .identity button:hover { border-color: #7b8fa1; }
 
+/* §1014, WCAG 1.4.10: at a phone's width, or a desktop's at 400% zoom, the
+   bar was 896px wide in a 320px window - every page scrolled sideways to
+   reach Sign out. It wraps instead: the search takes a row of its own. */
+@media (max-width: 640px) {
+  .topbar { flex-wrap: wrap; height: auto; min-height: 52px; padding: 8px 12px; gap: 8px 12px; }
+  .topbar nav { margin-left: 0; }
+  .topbar .spacer { display: none; }
+  .topbar .identity { margin-left: auto; min-width: 0; }
+  .topbar .identity > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .topbar .workspace-search { order: 1; flex: 1 1 100%; }
+  .topbar .workspace-search input { width: 100% !important; }
+  .page { padding: 0 12px 48px; }
+  .content { padding: 0 12px 48px; }
+  /* A row of buttons is a row while it fits and wraps when it does not. */
+  .row-actions, .page-head { flex-wrap: wrap; }
+  /* A table is two-dimensional, which 1.4.10 lets scroll - but in its own
+     box, not by widening the page under the bar. Positioned, because a
+     header's `.sr-only` text is: it scrolls with its nearest positioned
+     ancestor, and without one it widened the page from inside the table. */
+  .table, .rb-table { display: block; overflow-x: auto; max-width: 100%; position: relative; }
+  /* An application's bar: the breadcrumb, then its name on a row of its own
+     rather than squeezed to nothing between the breadcrumb and the toolbar. */
+  .app-bar { flex-wrap: wrap; padding: 8px 12px; gap: 6px 12px; }
+  .app-title { flex: 1 1 100%; }
+  .app-bar .spacer { display: none; }
+  .app-body { padding: 16px 12px; }
+}
+
 /* ---- chain line: the hierarchy motif ------------------------------------- */
 .crumbs {
   display: flex;
@@ -416,16 +444,19 @@ button { font: inherit; cursor: pointer; }
   justify-content: center;
   padding: 48px;
 }
-.login-box { width: 340px; }
+.login-box { width: min(340px, 100%); }
 .login-box h2 { font-family: var(--font-display); font-weight: 600; font-size: 20px; margin: 0 0 6px; }
 .login-box .sub { color: var(--ink-soft); font-size: 13.5px; margin-bottom: 22px; }
 .login-box .btn { width: 100%; padding: 10px; text-align: center; }
 .login-note { margin-top: 16px; font-size: 12.5px; color: var(--ink-soft); }
 
 @media (max-width: 860px) {
+  .login-panel { padding: 32px 16px; }
   .login-split { grid-template-columns: 1fr; }
   .login-brand { display: none; }
-  .project-shell { grid-template-columns: 1fr; }
+  /* `minmax(0, …)`: a bare `1fr` is at least as wide as the widest thing in
+     the column, so one long table made the sidebar above it that wide too. */
+  .project-shell { grid-template-columns: minmax(0, 1fr); }
   .side { border-right: none; border-bottom: 1px solid var(--line); }
 }
 

@@ -188,3 +188,22 @@ def test_the_first_tab_offers_to_skip_to_the_page(page, place) -> None:
     # And the next stop is the page's, not the top bar's again.
     page.keyboard.press("Tab")
     assert page.evaluate("!!document.activeElement.closest('main')")
+
+
+@pytest.mark.parametrize("path", PAGES)
+def test_a_page_fits_a_narrow_window(page, place, path) -> None:
+    """§1014, WCAG 1.4.10: 320 CSS pixels wide - a phone, or a desktop at
+    400% zoom - with nothing to scroll sideways for. The top bar alone was
+    896px, so every page scrolled to reach Sign out. A table or a graph may
+    scroll, as two-dimensional content may, but in its own box."""
+    mod = place["mod"]
+    page.set_viewport_size({"width": 320, "height": 640})
+    page.goto(WEB_BASE + path.format(
+        ws=mod.workspace_slug, pj=mod.project_slug, type=mod.object_type_id,
+        dataset=f"r/{place['dataset']}", module=mod.url.lstrip("/")))
+    expect(page.locator("h1").first).to_be_visible(timeout=30000)
+    page.wait_for_load_state("networkidle")
+    expect(page.get_by_text("Loading…")).to_have_count(0, timeout=30000)
+    widths = page.evaluate(
+        "() => [document.documentElement.scrollWidth, document.documentElement.clientWidth]")
+    assert widths[0] <= widths[1], f"{path}: {widths[0]}px of page in a {widths[1]}px window"
