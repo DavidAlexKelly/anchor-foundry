@@ -290,7 +290,7 @@ export function ActionTable({
                   {c.required && <span aria-hidden> *</span>}
                 </th>
               ))}
-              <th aria-label="Row" />
+              <th><span className="sr-only">Row</span></th>
             </tr>
           </thead>
           <tbody>

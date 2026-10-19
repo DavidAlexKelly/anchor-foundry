@@ -21,7 +21,7 @@ export default function SeriesAnalysesPage() {
     enabled: !!workspace && !!project,
   });
   return (
-    <div>
+    <main>
       <h1>Time series analyses</h1>
       <p className="login-note">Analyses saved from a Time series analysis widget: your own, and those shared with the project.</p>
       {list.isError && (
@@ -45,6 +45,6 @@ export default function SeriesAnalysesPage() {
           </tbody>
         </table>
       )}
-    </div>
+    </main>
   );
 }

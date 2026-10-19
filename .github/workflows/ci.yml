@@ -519,7 +519,7 @@ jobs:
           test_routing.py test_routed_selection.py test_security_headers.py
           test_workspace_search.py test_explorer_panel.py test_configured_object_view.py
           test_property_list.py test_geoshape_map.py test_embedded_module.py
-          test_kiosk_mode.py test_editor_tabs.py
+          test_kiosk_mode.py test_editor_tabs.py test_accessibility.py
       - name: Server logs on failure
         if: failure()
         run: tail -n 40 /tmp/anchor-dev/api.log /tmp/anchor-web-build/server.log || true

@@ -176,7 +176,7 @@ export function ExportsPanel({
               <th>Dataset</th>
               <th>Destination</th>
               <th>State</th>
-              <th aria-label="Actions" />
+              <th><span className="sr-only">Actions</span></th>
             </tr>
           </thead>
           <tbody>

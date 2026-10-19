@@ -155,7 +155,7 @@ export default function PipelinePage() {
   }
 
   return (
-    <>
+    <main>
       <div className="page-head">
         <div>
           <p className="eyebrow">project · pipeline</p>
@@ -281,7 +281,7 @@ export default function PipelinePage() {
           onClose={() => setOpening(false)}
         />
       )}
-    </>
+    </main>
   );
 }
 

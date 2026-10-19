@@ -461,7 +461,7 @@ export function ValueTypesPanel({
           <thead>
             <tr>
               <th>Value type</th><th>Base type</th><th>Rule</th><th>Version</th>
-              <th>Used by</th><th aria-label="Actions" />
+              <th>Used by</th><th><span className="sr-only">Actions</span></th>
             </tr>
           </thead>
           <tbody>

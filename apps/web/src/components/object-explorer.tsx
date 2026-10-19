@@ -826,7 +826,7 @@ export function ObjectExplorer({
                     <th>Key</th>
                     {columns.map((c) => <th key={c}>{c}</th>)}
                     <th>Updated</th>
-                    <th aria-label="Actions" />
+                    <th><span className="sr-only">Actions</span></th>
                   </tr>
                 </thead>
                 <tbody>

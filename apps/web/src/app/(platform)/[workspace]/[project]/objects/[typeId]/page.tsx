@@ -250,7 +250,7 @@ export default function ObjectInstancesPage() {
                     <th key={p.api_name}>{p.display_name || p.api_name}</th>
                   ))}
                   <th>Updated</th>
-                  <th aria-label="Actions" />
+                  <th><span className="sr-only">Actions</span></th>
                 </tr>
               </thead>
               <tbody>

@@ -39,7 +39,7 @@ export default function HomePage() {
         <div className="grid">
           {workspaces.data.map((w) => (
             <Link key={w.id} className="card" href={`/${w.slug}`}>
-              <h3>{w.name}</h3>
+              <h2>{w.name}</h2>
               <span className="slug">{w.slug}</span>
               <p>{w.description || "No description."}</p>
               <div className="meta">

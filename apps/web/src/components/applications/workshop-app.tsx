@@ -200,7 +200,7 @@ function VersionsDialog({
       {failure && <p className="state error">{failure}</p>}
       <table className="rb-table" data-testid="versions-table">
         <thead>
-          <tr><th>Version</th><th>Saved</th><th>By</th><th>Description</th><th /></tr>
+          <tr><th>Version</th><th>Saved</th><th>By</th><th>Description</th><th><span className="sr-only">Actions</span></th></tr>
         </thead>
         <tbody>
           {(versions.data?.pages.flat() ?? []).map((v) => (

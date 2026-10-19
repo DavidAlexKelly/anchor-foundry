@@ -105,7 +105,7 @@ export function EgressDialog({
               <tr>
                 <th>Destination</th>
                 <th>From</th>
-                <th aria-label="Actions" />
+                <th><span className="sr-only">Actions</span></th>
               </tr>
             </thead>
             <tbody>
@@ -149,7 +149,7 @@ export function EgressDialog({
               <tr>
                 <th>Destination</th>
                 <th>Why</th>
-                <th aria-label="Actions" />
+                <th><span className="sr-only">Actions</span></th>
               </tr>
             </thead>
             <tbody>

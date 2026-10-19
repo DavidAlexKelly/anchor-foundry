@@ -4436,7 +4436,7 @@ export function CanvasObjectTable({
                       so the header above it is a blank cell rather than a
                       label - there is nothing to call a column of buttons. */}
                   {inEditMode && (
-                    <th className="canvas-table-check" style={stick(0)} aria-label="Undo" />
+                    <th className="canvas-table-check" style={stick(0)}><span className="sr-only">Undo</span></th>
                   )}
                   {multiSelect && selectedVariable && (
                     <th className="canvas-table-check" style={stick(inEditMode ? 1 : 0)}>
@@ -8666,7 +8666,7 @@ export function CanvasSeriesAnalysis({
               <tr>
                 <th>Plot</th><th>Canvas</th><th>Axis</th><th>Line</th><th>Width</th><th>Gradient</th><th>Points</th>
                 <th>Interpolation</th>
-                <th>Min</th><th>Max</th><th>Mean</th><th />
+                <th>Min</th><th>Max</th><th>Mean</th><th><span className="sr-only">Actions</span></th>
               </tr>
             </thead>
             <tbody>
@@ -8983,7 +8983,7 @@ export function CanvasSeriesAnalysis({
               )}
               {openable.data && openable.data.length > 0 && (
                 <table className="data-grid">
-                  <thead><tr><th>Analysis</th><th>By</th><th>Shared</th><th /></tr></thead>
+                  <thead><tr><th>Analysis</th><th>By</th><th>Shared</th><th><span className="sr-only">Actions</span></th></tr></thead>
                   <tbody>
                     {openable.data.map((a) => (
                       <tr key={a.id} data-label={a.name}>
@@ -9094,7 +9094,7 @@ export function CanvasSeriesAnalysis({
           )}
           {(eventSets.length > 0 || initial.length > 0) && (
             <table className="data-grid" data-testid="series-event-sets" style={{ marginTop: 6 }}>
-              <thead><tr><th>Event set</th><th>Events</th><th>Highlight</th><th /></tr></thead>
+              <thead><tr><th>Event set</th><th>Events</th><th>Highlight</th><th><span className="sr-only">Actions</span></th></tr></thead>
               <tbody>
                 {initial.map((set, n) => {
                   const read = initialRead[n]?.data;

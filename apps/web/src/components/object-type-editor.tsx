@@ -888,7 +888,7 @@ function VersionHistory({
       {versions.data && (
         <table className="table">
           <thead>
-            <tr><th>Version</th><th>Properties</th><th>Changed</th><th aria-label="Actions" /></tr>
+            <tr><th>Version</th><th>Properties</th><th>Changed</th><th><span className="sr-only">Actions</span></th></tr>
           </thead>
           <tbody>
             {versions.data.map((v, index) => (

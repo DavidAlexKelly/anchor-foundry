@@ -205,7 +205,7 @@ export default function OrgPage() {
               <th>Email</th>
               <th>Role</th>
               <th>Status</th>
-              <th aria-label="Actions" />
+              <th><span className="sr-only">Actions</span></th>
             </tr>
           </thead>
           <tbody>

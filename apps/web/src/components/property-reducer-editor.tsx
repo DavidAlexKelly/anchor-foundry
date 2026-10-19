@@ -111,10 +111,10 @@ export function PropertyReducerEditor({
       <table className="table" data-testid="reducer-rows">
         <thead>
           <tr>
-            <th aria-label="Order" />
+            <th><span className="sr-only">Order</span></th>
             {byStruct && <th>Field</th>}
             <th>Take the</th>
-            <th aria-label="Remove" />
+            <th><span className="sr-only">Remove</span></th>
           </tr>
         </thead>
         <tbody>

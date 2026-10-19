@@ -337,7 +337,7 @@ export function ObjectTypeGroupsPanel({
           <thead>
             <tr>
               <th>Group</th><th>Description</th><th>Contains</th>
-              <th aria-label="Actions" />
+              <th><span className="sr-only">Actions</span></th>
             </tr>
           </thead>
           <tbody>

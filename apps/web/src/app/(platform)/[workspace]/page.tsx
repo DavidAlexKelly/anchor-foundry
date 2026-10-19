@@ -35,7 +35,7 @@ export default function WorkspacePage() {
     return (
       <main className="page">
         <div className="state error">
-          This workspace doesn&apos;t exist or you don&apos;t have access to it.
+          <h1>This workspace doesn&apos;t exist or you don&apos;t have access to it.</h1>
         </div>
       </main>
     );
@@ -133,7 +133,7 @@ export default function WorkspacePage() {
         <div className="grid" data-testid="project-grid">
           {shown.map((p) => (
             <Link key={p.id} className="card" href={`/${params.workspace}/${p.slug}`}>
-              <h3>{p.name}</h3>
+              <h2>{p.name}</h2>
               <span className="slug">{p.slug}</span>
               <p>{p.description || "No description."}</p>
               <div className="meta">

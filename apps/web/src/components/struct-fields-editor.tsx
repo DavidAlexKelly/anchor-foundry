@@ -148,7 +148,7 @@ export function StructFieldsEditor({
           <tr>
             <th>Name</th><th>Label</th><th>Type</th><th>Description</th>
             <th title="p.169: the struct's core value, shown alone in tables and cards">Main</th>
-            <th aria-label="Remove" />
+            <th><span className="sr-only">Remove</span></th>
           </tr>
         </thead>
         <tbody>

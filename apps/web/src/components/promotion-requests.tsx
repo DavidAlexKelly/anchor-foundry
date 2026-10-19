@@ -154,7 +154,7 @@ export function PromotionRequestsPanel({
       </div>
       <table className="table" data-testid="promotion-requests" style={{ marginBottom: 28 }}>
         <thead>
-          <tr><th>Object type</th><th>Request</th><th aria-label="Decision" /></tr>
+          <tr><th>Object type</th><th>Request</th><th><span className="sr-only">Decision</span></th></tr>
         </thead>
         <tbody>
           {requests.data.map((r) => (

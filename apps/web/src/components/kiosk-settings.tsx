@@ -57,7 +57,7 @@ export function KioskSettings() {
         kiosk sessions, once kiosk mode is also turned on in the module&apos;s settings.
       </p>
       <table className="table" data-testid="kiosk-allowlist">
-        <thead><tr><th>Module</th><th>Added</th><th aria-label="Actions" /></tr></thead>
+        <thead><tr><th>Module</th><th>Added</th><th><span className="sr-only">Actions</span></th></tr></thead>
         <tbody>
           {(allowed.data ?? []).map((m) => (
             <tr key={m.app_id}>
@@ -114,7 +114,7 @@ export function KioskSettings() {
       <p className="eyebrow" style={{ margin: "20px 0 10px" }}>session launch history</p>
       <table className="table" data-testid="kiosk-sessions">
         <thead>
-          <tr><th>Module</th><th>Launched by</th><th>Started</th><th>Status</th><th aria-label="Actions" /></tr>
+          <tr><th>Module</th><th>Launched by</th><th>Started</th><th>Status</th><th><span className="sr-only">Actions</span></th></tr>
         </thead>
         <tbody>
           {(sessions.data ?? []).map((s) => (
