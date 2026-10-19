@@ -4,7 +4,7 @@
  * Native <dialog> for focus trapping and Escape handling; no portal library
  * needed at this size. */
 
-import { useEffect, useRef } from "react";
+import { useEffect, useId, useRef } from "react";
 
 export function Dialog({
   open,
@@ -20,6 +20,7 @@ export function Dialog({
   wide?: boolean;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
+  const titleId = useId();
 
   useEffect(() => {
     const el = ref.current;
@@ -32,6 +33,8 @@ export function Dialog({
     <dialog
       ref={ref}
       className={wide ? "dialog wide" : "dialog"}
+      // Named by its title, which a reader announces on opening it (§1010).
+      aria-labelledby={titleId}
       onClose={onClose}
       onClick={(e) => {
         // click on the backdrop (the dialog element itself) closes
@@ -39,7 +42,7 @@ export function Dialog({
       }}
     >
       <div className="dialog-body">
-        <h2>{title}</h2>
+        <h2 id={titleId}>{title}</h2>
         {children}
       </div>
     </dialog>
