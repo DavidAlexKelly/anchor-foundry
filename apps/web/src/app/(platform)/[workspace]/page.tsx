@@ -7,6 +7,7 @@ import { useState } from "react";
 import { api } from "@/lib/api";
 import { useWorkspaceBySlug } from "@/components/use-workspace";
 import { CreateProjectButton } from "@/components/create-project";
+import { usePageTitle } from "@/lib/page-title";
 
 export default function WorkspacePage() {
   const params = useParams<{ workspace: string }>();
@@ -30,6 +31,7 @@ export default function WorkspacePage() {
   const shown = projects.data?.pages.flatMap((p) => p.items) ?? [];
   const total = projects.data?.pages[0]?.total ?? 0;
 
+  usePageTitle(workspace?.name);
   if (wsPending) return <main className="page"><div className="state">Loading…</div></main>;
   if (notFound) {
     return (

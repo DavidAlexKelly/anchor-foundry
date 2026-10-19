@@ -6,6 +6,7 @@ import { api, objects as objectsApi } from "@/lib/api";
 import { useProjectBySlug, useWorkspaceBySlug } from "@/components/use-workspace";
 import { FirstRunChecklist } from "@/components/first-run";
 import { ResourceBrowser } from "@/components/resource-browser";
+import { usePageTitle } from "@/lib/page-title";
 
 export default function ProjectOverview() {
   const params = useParams<{ workspace: string; project: string }>();
@@ -27,6 +28,7 @@ export default function ProjectOverview() {
 
   const counts = detail.data?.resource_counts;
 
+  usePageTitle(project?.name, workspace?.name);
   return (
     <main>
       <div className="page-head">

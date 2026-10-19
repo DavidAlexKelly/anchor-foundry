@@ -9,6 +9,7 @@ import { PipelineGraphView } from "@/components/pipeline-graph";
 import { nodePath } from "@/lib/pipeline-graph";
 import { useProjectBySlug, useWorkspaceBySlug } from "@/components/use-workspace";
 import type { Dataset, DatasetHealth, TabularResult } from "@/lib/types";
+import { usePageTitle } from "@/lib/page-title";
 
 function ResultGrid({ result }: { result: TabularResult }) {
   return (
@@ -895,6 +896,7 @@ export default function DatasetsPage() {
 
   const canEdit = project ? project.effective_role !== "viewer" : false;
 
+  usePageTitle("Datasets", project?.name);
   return (
     <main>
       <div className="page-head">

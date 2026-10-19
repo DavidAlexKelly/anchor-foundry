@@ -71,6 +71,7 @@ import {
   type TypeIssueFilter,
   type ObjectTypeSuggestion,
 } from "@/lib/types";
+import { usePageTitle } from "@/lib/page-title";
 
 const CARDINALITIES: LinkCardinality[] = ["one_to_one", "one_to_many", "many_to_many"];
 
@@ -1421,6 +1422,7 @@ export default function ObjectsPage() {
   const canEditOntology = workspace ? workspace.effective_role !== "viewer" : false;
   const canEditSources = project ? project.effective_role !== "viewer" : false;
 
+  usePageTitle("Objects", project?.name);
   return (
     <main>
       <div className="page-head">

@@ -17,6 +17,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { canvas as canvasApi } from "@/lib/api";
 import { useWorkspaceBySlug } from "@/components/use-workspace";
+import { usePageTitle } from "@/lib/page-title";
 
 function when(value: string | null): string {
   if (!value) return "not published";
@@ -33,6 +34,7 @@ export default function PublishedAppsPage() {
     enabled: !!workspace,
   });
 
+  usePageTitle("Apps", workspace?.name);
   if (wsPending) return <main className="page"><div className="state">Loading…</div></main>;
   if (notFound) {
     return (

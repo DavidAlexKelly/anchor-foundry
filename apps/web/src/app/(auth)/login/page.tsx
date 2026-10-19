@@ -7,6 +7,7 @@ import { Suspense, useEffect, useState } from "react";
 import { bootstrap } from "@/lib/api";
 import { beginLogin, cognitoConfig, devAuthEnabled, establishSession, safeReturnPath } from "@/lib/auth";
 import { AnchorGlyph } from "@/components/glyph";
+import { usePageTitle } from "@/lib/page-title";
 
 function LoginInner() {
   const router = useRouter();
@@ -143,6 +144,7 @@ function LoginInner() {
 // prerenders this route - the callback page has the same wrapper for the same
 // reason.
 export default function LoginPage() {
+  usePageTitle("Sign in");
   return (
     <Suspense fallback={<div className="state">Loading…</div>}>
       <LoginInner />

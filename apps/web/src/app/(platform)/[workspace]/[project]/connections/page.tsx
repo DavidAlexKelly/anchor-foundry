@@ -34,6 +34,7 @@ import type {
   SourceTypeInfo,
   SyncHealth,
 } from "@/lib/types";
+import { usePageTitle } from "@/lib/page-title";
 
 function StatusBadge({ connection }: { connection: Connection }) {
   const label =
@@ -1568,6 +1569,7 @@ export default function ConnectionsPage() {
       null, "", withoutReturn(window.location.pathname, window.location.search));
   }, []);
 
+  usePageTitle("Connections", project?.name);
   return (
     <main>
       <div className="page-head">

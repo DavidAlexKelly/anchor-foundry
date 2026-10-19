@@ -20,6 +20,7 @@ import { useState } from "react";
 import { useWorkspaceBySlug } from "@/components/use-workspace";
 import { ApiError, resourceTags } from "@/lib/api";
 import { byCategory, usesText } from "@/lib/resource-tags";
+import { usePageTitle } from "@/lib/page-title";
 
 export default function TagsPage() {
   const params = useParams<{ workspace: string }>();
@@ -45,6 +46,7 @@ export default function TagsPage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["resource-tags", wid] }),
   });
 
+  usePageTitle("Tags", workspace?.name);
   if (isPending) return <main className="page"><div className="state">Loading…</div></main>;
   if (notFound || !workspace) {
     return (
