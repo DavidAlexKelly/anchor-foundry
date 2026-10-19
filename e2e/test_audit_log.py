@@ -34,6 +34,15 @@ def test_an_administrator_finds_what_was_done_and_narrows_to_it(page, api) -> No
     # The newest is the one just made, and opening it says which.
     rows.first.click()
     expect(page.get_by_test_id("audit-metadata").first).to_contain_text(f"audited-{tag}")
+    # And closing it, from a keyboard (§1009): a row takes no focus, so the
+    # action in it is the button a keyboard opens it with.
+    toggle = rows.first.get_by_role("button", name="project.create")
+    expect(toggle).to_have_attribute("aria-expanded", "true")
+    toggle.focus()
+    page.keyboard.press("Enter")
+    expect(page.get_by_test_id("audit-metadata")).to_have_count(0)
+    page.keyboard.press(" ")
+    expect(page.get_by_test_id("audit-metadata").first).to_contain_text(f"audited-{tag}")
 
     # A filter that cannot be asked is said before anything is.
     page.get_by_test_id("audit-resource").fill("not-an-id")

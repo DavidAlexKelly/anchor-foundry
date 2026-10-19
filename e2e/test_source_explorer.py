@@ -310,6 +310,15 @@ def test_the_graph_draws_a_foreign_key_and_syncs_from_a_right_click(page, api, s
     page.get_by_test_id("explore-node-orders").click()
     expect(page.get_by_test_id("explore-selected")).to_have_text("public/orders")
     expect(page.get_by_test_id("explore-edge-label-lines_order_fk")).to_be_visible()
+    # And from a keyboard (§1009): a node is a button that takes focus.
+    lines = page.get_by_test_id("explore-node-order_lines")
+    lines.focus()
+    page.keyboard.press("Enter")
+    expect(page.get_by_test_id("explore-selected")).to_have_text("public/order_lines")
+    expect(lines).to_have_attribute("aria-pressed", "true")
+    page.get_by_test_id("explore-node-orders").focus()
+    page.keyboard.press(" ")
+    expect(page.get_by_test_id("explore-selected")).to_have_text("public/orders")
 
     # Removing an end removes the edge.
     page.get_by_test_id("explore-node-order_lines").click(button="right")

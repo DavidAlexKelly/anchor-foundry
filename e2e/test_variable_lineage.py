@@ -346,3 +346,29 @@ def test_a_node_says_where_it_is_used_and_when_it_was_computed(page, api) -> Non
     # Selecting the selected node again lets it go, and the detail with it.
     select(page, "v_never")
     expect(detail).to_have_count(0)
+
+
+def test_the_graph_is_driven_from_a_keyboard(page, api) -> None:
+    """§1009: the chevrons said `role="button"` and took no focus, and a node
+    took neither. Each is now a button a keyboard reaches and presses - the
+    same graph, the same steps as the click test above."""
+    mod = module_with(api, "Lineage keys")
+    open_builder(page, mod)
+    settled(page)
+    open_variables(page)
+    open_variable(page, "Region")
+    open_lineage(page)
+    expect(nodes(page)).to_have_count(1)
+
+    upstream = page.get_by_role("button", name="Show upstream")
+    expect(upstream).to_have_attribute("tabindex", "0")
+    upstream.focus()
+    page.keyboard.press("Enter")
+    expect(page.get_by_test_id("lineage-node-widget")).to_have_count(1)
+
+    region = page.locator(".lineage-node[data-id='v_region']")
+    expect(region).to_have_attribute("aria-pressed", "false")
+    region.focus()
+    page.keyboard.press(" ")
+    expect(region).to_have_attribute("aria-pressed", "true")
+    expect(page.get_by_test_id("lineage-detail")).to_be_visible()

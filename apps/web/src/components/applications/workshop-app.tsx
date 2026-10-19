@@ -229,17 +229,21 @@ function VersionsDialog({
                       if (e.key === "Escape") setEditing(null);
                     }}
                   />
-                ) : (
-                  <span
-                    className={v.description ? "" : "soft"}
+                ) : canEdit ? (
+                  // A button, not a clickable span (§1009): a keyboard could
+                  // reach every other control in the dialog and not this one.
+                  <button
+                    type="button"
+                    className={v.description ? "inline-button" : "inline-button soft"}
                     onClick={() => {
-                      if (!canEdit) return;
                       setEditing(v.version_number);
                       setDraft(v.description);
                     }}
                   >
-                    {v.description || (canEdit ? "Add a description" : "—")}
-                  </span>
+                    {v.description || "Add a description"}
+                  </button>
+                ) : (
+                  <span className={v.description ? "" : "soft"}>{v.description || "—"}</span>
                 )}
               </td>
               <td>

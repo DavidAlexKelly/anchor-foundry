@@ -32,6 +32,7 @@
 import { useMemo, useState } from "react";
 
 import type { WorkshopVariable } from "@/lib/types";
+import { pressable } from "@/lib/pressable";
 import { useCanvasVariables } from "./context";
 import {
   buildGraph, clear, collapse, computedLine, expand, hasMore, initial, layers, placesOf, redo,
@@ -100,8 +101,8 @@ function Chevron({
     <g
       className="lineage-chevron"
       data-testid={testid}
-      role="button"
-      onClick={onSelect}
+      aria-label={title}
+      {...pressable(onSelect)}
       transform={`translate(${at}, ${(NODE_H - HIT) / 2})`}
     >
       <title>{title}</title>
@@ -229,7 +230,9 @@ export function VariableLineage({
                       data-testid={`lineage-node-${node.kind}`}
                       data-id={p.id}
                       width={NODE_W} height={NODE_H} rx={6}
-                      onClick={() => act({ selected: selected === p.id ? null : p.id })}
+                      aria-label={`${node.label}, ${node.kind}`}
+                      aria-pressed={selected === p.id}
+                      {...pressable(() => act({ selected: selected === p.id ? null : p.id }))}
                     >
                       <title>{node.label}</title>
                     </rect>
