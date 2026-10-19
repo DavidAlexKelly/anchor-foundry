@@ -205,7 +205,7 @@ export function TranslationsPanel({
         // Said here as well as on the Settings panel, because this is where
         // somebody has just spent ten minutes typing translations nobody is
         // being served (§214).
-        <p className="state error" data-testid="tr-off">
+        <p className="state error" role="alert" data-testid="tr-off">
           Translations are switched off in Settings, so no reader is being
           served any of this yet.
         </p>

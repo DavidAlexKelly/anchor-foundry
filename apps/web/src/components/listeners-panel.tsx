@@ -139,7 +139,7 @@ export function ListenersPanel({ workspaceId, projectId }: { workspaceId: string
           )}
           {problem && <p className="login-note" data-testid="listener-problem">{problem}</p>}
           {create.isError && (
-            <div className="form-error" data-testid="listener-error">
+            <div className="form-error" role="alert" data-testid="listener-error">
               {create.error instanceof ApiError ? create.error.message : "Couldn't create it."}
             </div>
           )}
@@ -221,7 +221,7 @@ function ListenerCard({
           {/* p.261's rate limit (§521): the remedy is to ask for more, which
               starts with knowing it has been reached. */}
           {throttledText(listener, (iso) => new Date(iso).toLocaleString()) && (
-            <p className="form-error" style={{ margin: "4px 0 0" }} data-testid="listener-throttled">
+            <p className="form-error" role="alert" style={{ margin: "4px 0 0" }} data-testid="listener-throttled">
               {throttledText(listener, (iso) => new Date(iso).toLocaleString())}
             </p>
           )}
@@ -302,7 +302,7 @@ function ListenerCard({
         )
       )}
       {endpointChange.isError && (
-        <div className="form-error" data-testid="listener-endpoint-error">
+        <div className="form-error" role="alert" data-testid="listener-endpoint-error">
           {endpointChange.error instanceof ApiError ? endpointChange.error.message : "Couldn't change the endpoint."}
         </div>
       )}
@@ -335,7 +335,7 @@ function ListenerCard({
             </span>
           </Field>
           {ingress.isError && (
-            <div className="form-error" data-testid="listener-ingress-error">
+            <div className="form-error" role="alert" data-testid="listener-ingress-error">
               {ingress.error instanceof ApiError ? ingress.error.message : "Couldn't save the allowlist."}
             </div>
           )}

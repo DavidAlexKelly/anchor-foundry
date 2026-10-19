@@ -137,7 +137,7 @@ export default function SetupPage() {
                   />
                 </Field>
                 {create.isError && (
-                  <div className="form-error">
+                  <div className="form-error" role="alert">
                     {create.error instanceof ApiError && create.error.status === 409
                       ? "This deployment was just set up by someone else. Sign in instead."
                       : "Couldn't create the organisation. Check the details and try again."}

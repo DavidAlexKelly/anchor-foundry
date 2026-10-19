@@ -109,7 +109,7 @@ export function PromotionRequestControl({
         </Field>
       )}
       {(ask.isError || withdraw.isError) && (
-        <p className="form-error" data-testid="promotion-error">
+        <p className="form-error" role="alert" data-testid="promotion-error">
           {errorText(ask.error ?? withdraw.error)}
         </p>
       )}
@@ -200,7 +200,7 @@ export function PromotionRequestsPanel({
         </tbody>
       </table>
       {decide.isError && (
-        <p className="form-error" data-testid="promotion-decide-error">
+        <p className="form-error" role="alert" data-testid="promotion-decide-error">
           {errorText(decide.error)}
         </p>
       )}

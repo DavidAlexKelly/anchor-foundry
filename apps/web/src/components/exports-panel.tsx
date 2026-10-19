@@ -459,7 +459,7 @@ function HistoryDialog({
                   {entry.detail && (
                     <div className="soft" data-testid="export-run-detail">{entry.detail}</div>
                   )}
-                  {entry.error && <div className="form-error">{entry.error}</div>}
+                  {entry.error && <div className="form-error" role="alert">{entry.error}</div>}
                 </td>
                 <td className="slug">
                   {entry.dataset_version === null ? "—" : `v${entry.dataset_version}`}

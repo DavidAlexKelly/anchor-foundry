@@ -531,7 +531,7 @@ export function VariablesPanel({
         />
       )}
 
-      {failure && <p className="state error">{failure}</p>}
+      {failure && <p className="state error" role="alert">{failure}</p>}
       {notice && (
         <p className="state" data-testid="variable-notice">{notice}</p>
       )}

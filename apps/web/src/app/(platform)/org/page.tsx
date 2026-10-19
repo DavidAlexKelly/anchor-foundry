@@ -70,7 +70,7 @@ function InviteButton() {
             </select>
           </Field>
           {invite.isError && (
-            <div className="form-error">
+            <div className="form-error" role="alert">
               {invite.error instanceof ApiError && invite.error.status === 409
                 ? "Someone with this email is already in the organisation."
                 : "Couldn't send the invite. Check the details and try again."}
@@ -195,7 +195,7 @@ export default function OrgPage() {
       <p className="eyebrow" style={{ marginBottom: 10 }}>members</p>
       {members.isPending && <div className="state">Loading members…</div>}
       {members.isError && (
-        <div className="state error">Couldn&apos;t load members. Refresh to try again.</div>
+        <div className="state error" role="alert">Couldn&apos;t load members. Refresh to try again.</div>
       )}
       {members.data && (
         <table className="table">

@@ -139,7 +139,7 @@ export default function AuditLogPage() {
 
       {log.isPending && <div className="state">Loading the log…</div>}
       {log.isError && (
-        <div className="state error" data-testid="audit-error">
+        <div className="state error" role="alert" data-testid="audit-error">
           {log.error instanceof ApiError && log.error.status === 403
             ? "Only an organisation's administrators can read its audit log."
             : "Couldn't load the log. Refresh to try again."}

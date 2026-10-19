@@ -671,7 +671,7 @@ export function PipelineGraphView({
   return (
     <>
       {graph.cycles.length > 0 && (
-        <div className="form-error" style={{ marginBottom: 12 }}>
+        <div className="form-error" role="alert" style={{ marginBottom: 12 }}>
           {graph.cycles.length === 1 ? "A cycle" : `${graph.cycles.length} cycles`} here:{" "}
           {graph.cycles.flat().length} resources feed each other in a loop. A model in a
           cycle set to run on new input data will re-trigger itself indefinitely.

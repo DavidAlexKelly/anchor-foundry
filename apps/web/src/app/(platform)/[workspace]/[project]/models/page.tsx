@@ -357,7 +357,7 @@ function RunsDialog({
             Build log
           </div>
           {run.error_message && (
-            <div className="form-error" data-testid="run-error">
+            <div className="form-error" role="alert" data-testid="run-error">
               {run.error_message}
             </div>
           )}
@@ -369,7 +369,7 @@ function RunsDialog({
               No log: {whyNoLog(run, model.language)}.
             </p>
           ) : log.isError ? (
-            <div className="form-error" data-testid="run-log-error">
+            <div className="form-error" role="alert" data-testid="run-log-error">
               {log.error instanceof ApiError ? log.error.message : "Couldn't read the log."}
             </div>
           ) : (
@@ -452,7 +452,7 @@ function HistoryDialog({
       </p>
       {history.isPending && <div className="state">Loading history…</div>}
       {restore.isError && (
-        <div className="form-error">
+        <div className="form-error" role="alert">
           {restore.error instanceof ApiError ? restore.error.message : "Couldn't restore."}
         </div>
       )}
@@ -827,7 +827,7 @@ function ModelDialog({
           </Field>
         )}
         {save.isError && (
-          <div className="form-error">
+          <div className="form-error" role="alert">
             {save.error instanceof ApiError ? save.error.message : "Couldn't save the model."}
           </div>
         )}
@@ -972,7 +972,7 @@ function AdoptDialog({
           // The server's sentence, not a summary of it. Its refusals name the
           // value that cannot be written, and a screen that replaced them with
           // "could not move" would throw away the only part that helps.
-          <div className="form-error" data-testid="adopt-error">
+          <div className="form-error" role="alert" data-testid="adopt-error">
             {adopt.error instanceof ApiError ? adopt.error.message : "Couldn't move it."}
           </div>
         )}
@@ -1075,7 +1075,7 @@ function ModelRow({
           </p>
         )}
         {result && result.status !== "queued" && result.status !== "running" && !result.ok && (
-          <div className="form-error" style={{ marginTop: 6 }}>{result.error}</div>
+          <div className="form-error" role="alert" style={{ marginTop: 6 }}>{result.error}</div>
         )}
         {result && result.status !== "queued" && result.ok && result.output_dataset && (
           <p className="login-note" style={{ margin: "6px 0 0" }}>
@@ -1257,7 +1257,7 @@ export default function ModelsPage() {
 
       {list.isPending && <div className="state">Loading models…</div>}
       {list.isError && (
-        <div className="state error">Couldn&apos;t load models. Refresh to try again.</div>
+        <div className="state error" role="alert">Couldn&apos;t load models. Refresh to try again.</div>
       )}
       {list.data && list.data.length === 0 && (
         <div className="empty">
@@ -1544,7 +1544,7 @@ function MoveTogetherBar({
         </p>
       )}
       {failure && (
-        <div className="form-error" data-testid="move-error">
+        <div className="form-error" role="alert" data-testid="move-error">
           {failure}
         </div>
       )}

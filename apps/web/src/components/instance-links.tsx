@@ -185,7 +185,7 @@ function LinkGroup({
       </div>
 
       {group.problem ? (
-        <p className="form-error" style={{ margin: "4px 0 0" }} data-testid={`link-problem-${group.link_type_id}`}>
+        <p className="form-error" role="alert" style={{ margin: "4px 0 0" }} data-testid={`link-problem-${group.link_type_id}`}>
           {group.problem}
         </p>
       ) : group.total === 0 && (
@@ -463,7 +463,7 @@ export function LinkExplorerDialog({
 
       <h3 className="sov-section">Linked objects</h3>
       {links.isPending && <div className="state">Following links…</div>}
-      {links.isError && <div className="state error">Couldn&apos;t load this object&apos;s links.</div>}
+      {links.isError && <div className="state error" role="alert">Couldn&apos;t load this object&apos;s links.</div>}
       {links.data && links.data.length === 0 && (
         <div className="empty" style={{ padding: "18px 0" }}>
           <h2 style={{ fontSize: 14 }}>No traversable links</h2>
