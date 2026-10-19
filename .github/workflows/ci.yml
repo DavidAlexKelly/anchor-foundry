@@ -204,6 +204,40 @@ jobs:
           tests/test_instance_store.py tests/test_object_sets.py
           tests/test_link_traversal.py tests/test_instance_cutover.py
 
+  # **The images a deployment ships, built as `docs/deploying.md` builds
+  # them** (§1006). Nothing here built one, so a Dockerfile that no longer
+  # matched the tree - a moved file, a dependency that will not install -
+  # was found by whoever deployed next. Each is built and then asked the one
+  # thing that needs no stack: that its program loads. And the web image is
+  # checked for §1002's development sign-in: a build that read
+  # `apps/web/.env.local` inlines NEXT_PUBLIC_AUTH_MODE, while one that did
+  # not leaves the bundle reading the unset variable at run time - which is
+  # what a shipped image must do.
+  images:
+    name: images
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+      - name: API
+        run: docker build --platform=linux/amd64 -t anchor-api apps/api
+      - name: Worker
+        run: docker build --platform=linux/amd64 -t anchor-worker apps/worker
+      - name: Web
+        run: docker build --platform=linux/amd64 -f apps/web/Dockerfile -t anchor-web .
+      - name: Control plane
+        run: >
+          docker build --platform=linux/amd64 -f apps/control-plane/Dockerfile
+          -t anchor-control-plane .
+      - name: Each loads
+        run: |
+          docker run --rm --entrypoint python anchor-api -c "import src.main"
+          docker run --rm --entrypoint python anchor-worker -c "import anchor_worker.definitions"
+      - name: The web image has no development sign-in (§1002)
+        run: >
+          docker run --rm --entrypoint sh anchor-web -c
+          'grep -rq "env.NEXT_PUBLIC_AUTH_MODE" apps/web/.next/static/chunks'
+
   # §263. There was no worker job because there was no worker target, and there
   # was no worker target because nothing installed what the worker's 78 tests
   # need - three absences that each explained the next and none of which
