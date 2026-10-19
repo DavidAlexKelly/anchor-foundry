@@ -149,6 +149,16 @@ def test_viewing_the_published_version_shows_no_warning(page, published_view):
     expect(page.get_by_test_id("unpublished-banner")).to_have_count(0)
 
 
+def test_a_description_is_reached_from_a_keyboard(page, module):
+    """§1009: "Add a description" was a clickable span, the one control in
+    the dialog a keyboard could not reach. It is a button."""
+    open_versions(page, module)
+    add = rows(page).first.get_by_role("button", name="Add a description")
+    add.focus()
+    page.keyboard.press("Enter")
+    expect(page.get_by_test_id("description-input")).to_be_visible()
+
+
 def test_a_description_can_be_added_from_the_dialog(page, module):
     """p.192: descriptions "can be viewed, added, and edited in the module's
     Versions dialog"."""

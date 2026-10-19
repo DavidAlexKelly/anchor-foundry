@@ -31,6 +31,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { ApiError, connections as connApi } from "@/lib/api";
 import type { Connection, DiscoveredTable } from "@/lib/types";
+import { pressKeys } from "@/lib/pressable";
 import {
   bySchema,
   cell,
@@ -369,11 +370,19 @@ function RelationGraph({
               className={active ? "explore-node active" : "explore-node"}
               data-testid={`explore-node-${t.name}`}
               transform={`translate(${p.x - NODE_W / 2},${p.y - NODE_H / 2})`}
+              role="button"
+              tabIndex={0}
+              aria-label={tableLabel(t)}
+              aria-pressed={active}
               onClick={(e) => {
                 e.stopPropagation();
                 setMenu(null);
                 onSelect(t);
               }}
+              onKeyDown={pressKeys(() => {
+                setMenu(null);
+                onSelect(t);
+              })}
               onContextMenu={(e) => {
                 // p.143: "create a sync from the graph by right-clicking on
                 // the table".
