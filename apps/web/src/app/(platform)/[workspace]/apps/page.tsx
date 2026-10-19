@@ -78,7 +78,7 @@ export default function PublishedAppsPage() {
         <div className="grid">
           {apps.data.map((app) => (
             <Link key={app.id} className="card" href={`/${params.workspace}/apps/${app.id}`}>
-              <h3>{app.name}</h3>
+              <h2>{app.name}</h2>
               <span className="slug">{app.slug}</span>
               <p>{app.description || "No description."}</p>
               <div className="meta">

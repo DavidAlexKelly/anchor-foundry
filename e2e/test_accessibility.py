@@ -19,7 +19,7 @@ import pytest
 from playwright.sync_api import expect
 
 from api import Module, layout
-from conftest import WEB_BASE
+from conftest import WEB_BASE, publish
 
 ROOT = Path(__file__).resolve().parents[1]
 # npm hoists a workspace's dev dependency to the root; apps/web's own
@@ -47,8 +47,8 @@ def violations(page) -> list[str]:
 
 @pytest.fixture(scope="module")
 def place(api) -> dict:
-    """A project with a dataset, an object type and a module in it, so the
-    tables have rows and their Actions columns are drawn."""
+    """A project with a dataset, an object type and a published module in it,
+    so the tables have rows and their Actions columns are drawn."""
     mod = Module(api, "Accessible")
     name = f"accessible_{uuid.uuid4().hex[:6]}"
     api.upload_csv(f"{mod.base}/datasets/upload", name=name, csv=b"id,region\n1,north\n2,south\n")
@@ -65,6 +65,9 @@ def place(api) -> dict:
         }),
         "variables": {},
     })
+    # Published, so the workspace's Apps page has a card to draw: its titles
+    # were a level too deep, and a page with no apps had none to get wrong.
+    publish(mod)
     return {"mod": mod, "dataset": dataset["id"], "name": name}
 
 
