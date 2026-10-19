@@ -190,14 +190,14 @@ export default function PipelinePage() {
       </div>
 
       {graph.isPending && <div className="state">Loading the pipeline…</div>}
-      {graph.isError && <div className="state error">Couldn&apos;t load the pipeline.</div>}
+      {graph.isError && <div className="state error" role="alert">Couldn&apos;t load the pipeline.</div>}
       {/* **A refused build has to land somewhere.** The button is at the
           bottom of the graph and this is at the top, which is the one thing
           worth saying about the placement: the message names the transform
           that refused, so it is readable without hunting for which of six
           builds stopped (§386, §214). */}
       {build.isError && (
-        <div className="state error" data-testid="pipeline-build-error">
+        <div className="state error" role="alert" data-testid="pipeline-build-error">
           {(build.error as Error).message}
         </div>
       )}
@@ -205,7 +205,7 @@ export default function PipelinePage() {
           `lib/cron.py` parses it with `croniter` and refuses it by name — so
           its refusal is shown as it came rather than restated here (§387). */}
       {schedule.isError && (
-        <div className="state error" data-testid="pipeline-schedule-error">
+        <div className="state error" role="alert" data-testid="pipeline-schedule-error">
           {(schedule.error as Error).message}
         </div>
       )}
@@ -345,7 +345,7 @@ function SaveGraphDialog({
           <p className="login-note" data-testid="graph-replace-note">{replaceNote(existing)}</p>
         )}
         {save.isError && (
-          <div className="form-error" data-testid="graph-save-error">
+          <div className="form-error" role="alert" data-testid="graph-save-error">
             {save.error instanceof ApiError ? save.error.message : "Couldn't save."}
           </div>
         )}

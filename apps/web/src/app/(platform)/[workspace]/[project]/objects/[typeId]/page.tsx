@@ -117,12 +117,12 @@ function EditInstanceDialog({
           </Field>
         ))}
         {execute.isError && (
-          <div className="form-error">
+          <div className="form-error" role="alert">
             {execute.error instanceof ApiError ? execute.error.message : "Couldn't save this change."}
           </div>
         )}
         {execute.data && !execute.data.ok && (
-          <div className="form-error">{execute.data.error}</div>
+          <div className="form-error" role="alert">{execute.data.error}</div>
         )}
         <div className="form-actions">
           <button type="button" className="btn quiet" onClick={onClose}>Cancel</button>
@@ -211,7 +211,7 @@ export default function ObjectInstancesPage() {
 
       {(type.isPending || instances.isPending) && <div className="state">Loading instances…</div>}
       {(type.isError || instances.isError) && (
-        <div className="state error">Couldn&apos;t load instances. Refresh to try again.</div>
+        <div className="state error" role="alert">Couldn&apos;t load instances. Refresh to try again.</div>
       )}
 
       {type.data && instances.data && total === 0 && (

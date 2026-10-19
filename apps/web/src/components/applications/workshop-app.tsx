@@ -197,7 +197,7 @@ function VersionsDialog({
 
   return (
     <Dialog open title={`Versions of ${app.name}`} onClose={onClose}>
-      {failure && <p className="state error">{failure}</p>}
+      {failure && <p className="state error" role="alert">{failure}</p>}
       <table className="rb-table" data-testid="versions-table">
         <thead>
           <tr><th>Version</th><th>Saved</th><th>By</th><th>Description</th><th><span className="sr-only">Actions</span></th></tr>
@@ -415,7 +415,7 @@ function ViewingVersion({
       )}
       {detail.isPending && <div className="state">Loading that version…</div>}
       {detail.isError && (
-        <div className="state error">Couldn&apos;t load v{version}.</div>
+        <div className="state error" role="alert">Couldn&apos;t load v{version}.</div>
       )}
       {definition && (
         <Editor resolver={CANVAS_RESOLVER} enabled={false} onRender={CanvasNode}>
@@ -511,7 +511,7 @@ function PublishDialog({
         </Field>
       )}
       {publish.isError && (
-        <div className="form-error">
+        <div className="form-error" role="alert">
           {publish.error instanceof ApiError ? publish.error.message : "Couldn't update publishing."}
         </div>
       )}
@@ -976,7 +976,7 @@ function ActionBar({
           ` · viewers see v${app.published_version ?? 0}`}
         {save.isSuccess && !failure && " · saved"}
       </p>
-      {failure && <p className="state error">{failure}</p>}
+      {failure && <p className="state error" role="alert">{failure}</p>}
       <div className="spacer" />
       <div className="row-actions">
         <button
@@ -1671,13 +1671,13 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
   // a registry row that disagrees with its own table, and saying so beats
   // rendering a builder whose every write would 404.
   if (!projectId) {
-    return <div className="state error">This module is not in a project, so it cannot be opened.</div>;
+    return <div className="state error" role="alert">This module is not in a project, so it cannot be opened.</div>;
   }
   if (appQuery.isPending) {
     return <div className="state">Loading app…</div>;
   }
   if (appQuery.isError) {
-    return <div className="state error">Couldn&apos;t load this app. It may have been deleted.</div>;
+    return <div className="state error" role="alert">Couldn&apos;t load this app. It may have been deleted.</div>;
   }
 
   if (branchName && branchQuery.isPending) {
@@ -1685,7 +1685,7 @@ export function WorkshopApplication({ resource }: { resource: ResolvedResource }
   }
   if (branchName && branchQuery.isError) {
     return (
-      <div className="state error">
+      <div className="state error" role="alert">
         Couldn&apos;t load branch {branchName}. It may have been merged or deleted.{" "}
         <button type="button" className="btn quiet" onClick={() => setBranchName(null)}>
           Open main

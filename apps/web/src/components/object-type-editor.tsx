@@ -811,7 +811,7 @@ function ImpactList({ impacts }: { impacts: ObjectTypeImpact[] }) {
   return (
     <>
       {blocking.length > 0 && (
-        <div className="form-error" style={{ textAlign: "left" }}>
+        <div className="form-error" role="alert" style={{ textAlign: "left" }}>
           <strong>This change breaks {blocking.length} existing consumer{blocking.length === 1 ? "" : "s"}.</strong>
           <ul style={{ margin: "6px 0 0 18px", padding: 0 }}>
             {blocking.map((i, n) => (
@@ -928,7 +928,7 @@ function VersionHistory({
         </table>
       )}
       {restore.isError && (
-        <div className="form-error" style={{ textAlign: "left" }}>
+        <div className="form-error" role="alert" style={{ textAlign: "left" }}>
           {restore.error instanceof ApiError ? restore.error.message : "Couldn't restore."}
           {blocked && confirming !== null && (
             <div className="row-actions" style={{ marginTop: 8 }}>
@@ -1309,7 +1309,7 @@ export function EditObjectTypeDialog({
           </label>
         )}
         {save.isError && (
-          <div className="form-error">
+          <div className="form-error" role="alert">
             {save.error instanceof ApiError ? save.error.message : "Couldn't save the object type."}
           </div>
         )}

@@ -124,7 +124,7 @@ export function OntologyTransfer({
         </button>
       </div>
       {exporting.isError && (
-        <p className="form-error" data-testid="ontology-export-error">
+        <p className="form-error" role="alert" data-testid="ontology-export-error">
           {exporting.error instanceof ApiError
             ? exporting.error.message
             : "Couldn't export this ontology."}
@@ -153,13 +153,13 @@ export function OntologyTransfer({
       {filename && <p className="slug" data-testid="ontology-import-name">{filename}</p>}
 
       {readError && (
-        <p className="form-error" data-testid="ontology-import-unreadable">
+        <p className="form-error" role="alert" data-testid="ontology-import-unreadable">
           {readError}
         </p>
       )}
       {planning.isPending && <p className="state">Reading the file…</p>}
       {planning.isError && (
-        <p className="form-error" data-testid="ontology-import-refused">
+        <p className="form-error" role="alert" data-testid="ontology-import-refused">
           {refusalText(
             planning.error instanceof ApiError ? planning.error.message : null,
           )}
@@ -212,7 +212,7 @@ export function OntologyTransfer({
             </button>
           </div>
           {applying.isError && (
-            <p className="form-error" data-testid="ontology-apply-error">
+            <p className="form-error" role="alert" data-testid="ontology-apply-error">
               {refusalText(
                 applying.error instanceof ApiError
                   ? applying.error.message

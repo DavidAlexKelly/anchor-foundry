@@ -105,7 +105,7 @@ function UploadDialog({ workspaceId, projectId }: { workspaceId: string; project
             />
           </Field>
           {upload.isError && (
-            <div className="form-error">
+            <div className="form-error" role="alert">
               {upload.error instanceof ApiError
                 ? upload.error.message
                 : "Couldn't upload the file. Check it and try again."}
@@ -352,7 +352,7 @@ function ChecksPanel({
             </select>
           </Field>
           {add.isError && (
-            <div className="form-error">
+            <div className="form-error" role="alert">
               {add.error instanceof ApiError ? add.error.message : "Couldn't add the check."}
             </div>
           )}
@@ -389,7 +389,7 @@ function ProfilePanel({
   if (profile.isPending) return <div className="state">Profiling columns…</div>;
   if (profile.isError) {
     return (
-      <div className="form-error">
+      <div className="form-error" role="alert">
         {profile.error instanceof ApiError
           ? profile.error.message
           : "Couldn't profile this dataset."}
@@ -519,7 +519,7 @@ function ForkDialog({
           </select>
         </Field>
         {fork.isError && (
-          <div className="form-error">
+          <div className="form-error" role="alert">
             {fork.error instanceof ApiError ? fork.error.message : "Couldn't fork."}
           </div>
         )}
@@ -563,7 +563,7 @@ function LineageDialog({
         node is this one.
       </p>
       {graph.isPending && <div className="state">Loading lineage…</div>}
-      {graph.isError && <div className="state error">Couldn&apos;t load lineage.</div>}
+      {graph.isError && <div className="state error" role="alert">Couldn&apos;t load lineage.</div>}
       {graph.data && (
         <PipelineGraphView
           graph={graph.data}
@@ -637,7 +637,7 @@ function SchemaPolicyControl({
         anything reading this dataset.
       </span>
       {save.isError && (
-        <div className="form-error" style={{ width: "100%" }}>
+        <div className="form-error" role="alert" style={{ width: "100%" }}>
           {save.error instanceof ApiError ? save.error.message : "Couldn't save."}
         </div>
       )}
@@ -712,7 +712,7 @@ function ExploreDialog({
             </button>
           </div>
           {run.isError && (
-            <div className="form-error" style={{ marginBottom: 10 }}>
+            <div className="form-error" role="alert" style={{ marginBottom: 10 }}>
               {run.error instanceof ApiError ? run.error.message : "Query failed."}
             </div>
           )}
@@ -909,7 +909,7 @@ export default function DatasetsPage() {
 
       {list.isPending && <div className="state">Loading datasets…</div>}
       {list.isError && (
-        <div className="state error">Couldn&apos;t load datasets. Refresh to try again.</div>
+        <div className="state error" role="alert">Couldn&apos;t load datasets. Refresh to try again.</div>
       )}
       {list.data && list.data.length === 0 && (
         <div className="empty">

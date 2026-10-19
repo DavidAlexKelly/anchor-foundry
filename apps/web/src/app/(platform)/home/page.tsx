@@ -24,7 +24,7 @@ export default function HomePage() {
 
       {workspaces.isPending && <div className="state">Loading workspaces…</div>}
       {workspaces.isError && (
-        <div className="state error">Couldn&apos;t load workspaces. Refresh to try again.</div>
+        <div className="state error" role="alert">Couldn&apos;t load workspaces. Refresh to try again.</div>
       )}
       {workspaces.data && workspaces.data.length === 0 && (
         <div className="empty">

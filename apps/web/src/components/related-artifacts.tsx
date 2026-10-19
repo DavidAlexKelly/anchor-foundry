@@ -87,7 +87,7 @@ export function RelatedArtifacts({
       {asked.length > 0 && related.isPending ? (
         <div className="slug">Looking for what links to the selection…</div>
       ) : related.isError ? (
-        <div className="state error">Couldn&apos;t read what links to the selection.</div>
+        <div className="state error" role="alert">Couldn&apos;t read what links to the selection.</div>
       ) : entries.length === 0 ? (
         <div className="slug" data-testid="related-empty">{emptyNote(asked.length, found.length)}</div>
       ) : (

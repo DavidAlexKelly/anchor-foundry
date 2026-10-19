@@ -136,7 +136,7 @@ export function ActionLogDialog({
         </Field>
       )}
       {save.isError && (
-        <div className="form-error" data-testid="log-error">
+        <div className="form-error" role="alert" data-testid="log-error">
           {save.error instanceof ApiError ? save.error.message : "Couldn't save the action log."}
         </div>
       )}

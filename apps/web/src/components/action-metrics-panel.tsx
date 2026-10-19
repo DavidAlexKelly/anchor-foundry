@@ -135,7 +135,7 @@ export function ActionMetricsPanel({
     // indistinguishable from "nobody has run this action", and those are
     // opposite answers to the question somebody is asking.
     return (
-      <p className="state error" data-testid="metrics-error">
+      <p className="state error" role="alert" data-testid="metrics-error">
         Couldn&apos;t load metrics for this action.
       </p>
     );
@@ -222,7 +222,7 @@ export function ActionMetricsPanel({
       </div>
 
       {history.isError ? (
-        <p className="state error" data-testid="history-error">
+        <p className="state error" role="alert" data-testid="history-error">
           Couldn&apos;t load this action&apos;s run history.
         </p>
       ) : (history.data ?? []).length === 0 ? (

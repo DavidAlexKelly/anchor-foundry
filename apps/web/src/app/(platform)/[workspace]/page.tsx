@@ -34,7 +34,7 @@ export default function WorkspacePage() {
   if (notFound) {
     return (
       <main className="page">
-        <div className="state error">
+        <div className="state error" role="alert">
           <h1>This workspace doesn&apos;t exist or you don&apos;t have access to it.</h1>
         </div>
       </main>
@@ -115,7 +115,7 @@ export default function WorkspacePage() {
       </div>
       {projects.isPending && <div className="state">Loading projects…</div>}
       {projects.isError && (
-        <div className="state error">Couldn&apos;t load projects. Refresh to try again.</div>
+        <div className="state error" role="alert">Couldn&apos;t load projects. Refresh to try again.</div>
       )}
       {projects.data && total === 0 && search.trim() !== "" && (
         <div className="state">No projects match.</div>

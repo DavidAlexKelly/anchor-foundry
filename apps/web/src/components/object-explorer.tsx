@@ -754,7 +754,7 @@ export function ObjectExplorer({
         )}
         {page.isPending && <div className="state">Searching…</div>}
         {page.isError && (
-          <div className="state error">
+          <div className="state error" role="alert">
             {page.error instanceof ApiError
               ? page.error.message
               : "Couldn't search instances."}
@@ -801,7 +801,7 @@ export function ObjectExplorer({
               </button>
             )}
             {(save.isError || (save.data && !save.data.ok)) && (
-              <span className="form-error" data-testid="explorer-edit-error">
+              <span className="form-error" role="alert" data-testid="explorer-edit-error">
                 {failureMessage(
                   save.data && !save.data.ok
                     ? save.data.error
@@ -1217,7 +1217,7 @@ function SavedSearches({
         ))}
       </ul>
       {remove.isError && (
-        <p className="form-error">
+        <p className="form-error" role="alert">
           {remove.error instanceof ApiError
             ? remove.error.message
             : "Couldn't delete that search."}
@@ -1308,7 +1308,7 @@ function SaveSearchDialog({
           )}
         </dl>
         {create.isError && (
-          <div className="form-error">
+          <div className="form-error" role="alert">
             {create.error instanceof ApiError
               ? create.error.message
               : "Couldn't save that search."}

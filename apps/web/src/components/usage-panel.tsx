@@ -48,7 +48,7 @@ export function UsagePanel({
     // **Said, not hidden.** A panel that vanished on failure would be
     // indistinguishable from p.33's "No usage for the last 30 days" — and
     // those are opposite answers to the question somebody is asking.
-    return <p className="state error">Couldn&apos;t load usage for this type.</p>;
+    return <p className="state error" role="alert">Couldn&apos;t load usage for this type.</p>;
   }
 
   const data = usage.data;

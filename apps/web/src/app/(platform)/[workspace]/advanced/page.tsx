@@ -29,7 +29,7 @@ export default function AdvancedSettingsPage() {
   if (notFound || !workspace) {
     return (
       <main className="page">
-        <div className="state error">
+        <div className="state error" role="alert">
           This workspace doesn&apos;t exist or you don&apos;t have access to it.
         </div>
       </main>

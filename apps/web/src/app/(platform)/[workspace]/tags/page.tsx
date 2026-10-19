@@ -49,7 +49,7 @@ export default function TagsPage() {
   if (notFound || !workspace) {
     return (
       <main className="page">
-        <div className="state error">
+        <div className="state error" role="alert">
           This workspace doesn&apos;t exist or you don&apos;t have access to it.
         </div>
       </main>
@@ -116,7 +116,7 @@ export default function TagsPage() {
         </p>
       )}
       {failure && (
-        <div className="form-error" data-testid="tag-error">
+        <div className="form-error" role="alert" data-testid="tag-error">
           {failure instanceof ApiError ? failure.message : "Couldn't change the tags."}
         </div>
       )}

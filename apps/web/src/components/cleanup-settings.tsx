@@ -150,7 +150,7 @@ export function CleanupSettings({ workspaceId }: { workspaceId: string }) {
           </span>
         )}
         {save.isError && (
-          <span className="state error">Couldn&apos;t save: {String(save.error.message)}</span>
+          <span className="state error" role="alert">Couldn&apos;t save: {String(save.error.message)}</span>
         )}
       </div>
     </details>

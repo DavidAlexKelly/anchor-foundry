@@ -37,7 +37,7 @@ export default function PublishedAppsPage() {
   if (notFound) {
     return (
       <main className="page">
-        <div className="state error">
+        <div className="state error" role="alert">
           This workspace doesn&apos;t exist or you don&apos;t have access to it.
         </div>
       </main>
@@ -63,7 +63,7 @@ export default function PublishedAppsPage() {
 
       {apps.isPending && <div className="state">Loading apps…</div>}
       {apps.isError && (
-        <div className="state error">Couldn&apos;t load published apps. Refresh to try again.</div>
+        <div className="state error" role="alert">Couldn&apos;t load published apps. Refresh to try again.</div>
       )}
       {apps.data && apps.data.length === 0 && (
         <div className="empty">

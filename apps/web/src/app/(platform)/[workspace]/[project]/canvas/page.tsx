@@ -53,7 +53,7 @@ function NewAppDialog({
           <textarea value={description} onChange={(e) => setDescription(e.target.value)} maxLength={2000} />
         </Field>
         {create.isError && (
-          <div className="form-error">
+          <div className="form-error" role="alert">
             {create.error instanceof ApiError ? create.error.message : "Couldn't create the app."}
           </div>
         )}
@@ -153,7 +153,7 @@ export default function CanvasListPage() {
       </div>
 
       {list.isPending && <div className="state">Loading apps…</div>}
-      {list.isError && <div className="state error">Couldn&apos;t load apps. Refresh to try again.</div>}
+      {list.isError && <div className="state error" role="alert">Couldn&apos;t load apps. Refresh to try again.</div>}
       {list.data && list.data.length === 0 && (
         <div className="empty">
           <h2>No apps yet</h2>

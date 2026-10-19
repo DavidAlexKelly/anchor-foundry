@@ -29,7 +29,7 @@ export default function SeriesAnalysisPage() {
         <Link href={`/${params.workspace}/${params.project}/series-analyses`}>Time series analyses</Link>
       </p>
       {analysis.isError && (
-        <p className="form-error">
+        <p className="form-error" role="alert">
           {analysis.error instanceof ApiError ? analysis.error.message : "Couldn't open this analysis."}
         </p>
       )}

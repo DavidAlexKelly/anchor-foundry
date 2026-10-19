@@ -62,7 +62,7 @@ export function CreateWorkspaceButton() {
             />
           </Field>
           {create.isError && (
-            <div className="form-error">
+            <div className="form-error" role="alert">
               {create.error instanceof ApiError && create.error.status === 409
                 ? "A workspace with this name already exists. Pick a different name."
                 : "Couldn't create the workspace. Check the name and try again."}

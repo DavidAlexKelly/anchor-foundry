@@ -350,7 +350,7 @@ function VersionDialog({ workspaceId, existing, onClose }: {
       </Field>
 
       {problem && <p className="field-hint" data-testid="fn-problem">{problem}</p>}
-      {save.isError && <p className="form-error" data-testid="fn-error">{errorText(save.error)}</p>}
+      {save.isError && <p className="form-error" role="alert" data-testid="fn-error">{errorText(save.error)}</p>}
       <div className="row-actions" style={{ justifyContent: "flex-end", marginTop: 12 }}>
         <button type="button" className="btn" onClick={onClose}>Cancel</button>
         <button
@@ -427,7 +427,7 @@ function RunDialog({ workspaceId, fn, onClose }: {
           Run
         </button>
       </div>
-      {run.isError && <p className="form-error" data-testid="fn-run-error">{errorText(run.error)}</p>}
+      {run.isError && <p className="form-error" role="alert" data-testid="fn-run-error">{errorText(run.error)}</p>}
       {result && (
         <div data-testid="fn-result" style={{ marginTop: 12 }}>
           <p className="field-hint" data-testid="fn-result-line">{resultLine(result)}</p>

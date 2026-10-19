@@ -945,7 +945,7 @@ export function ActionDefinitionEditor({
 
   return (
     <Dialog open wide title={`Parameters and rules · ${action.display_name}`} onClose={onClose}>
-      {failure && <p className="state error" data-testid="definition-error">{failure}</p>}
+      {failure && <p className="state error" role="alert" data-testid="definition-error">{failure}</p>}
 
       <h3 className="field-label" style={{ marginTop: 0 }}>Parameters</h3>
       <p className="field-hint">
@@ -2399,7 +2399,7 @@ export function ActionDefinitionEditor({
           rule sits relative to another. A message pinned to either rule would
           be blaming a line that is fine on its own. */}
       {sectionsProblem && (
-        <p className="state error" data-testid="definition-sections-problem">
+        <p className="state error" role="alert" data-testid="definition-sections-problem">
           {sectionsProblem}
         </p>
       )}
@@ -2408,7 +2408,7 @@ export function ActionDefinitionEditor({
         const said = webhookListProblem(rules, outputsFor);
         return said ? (
           <p
-            className="state error"
+            className="state error" role="alert"
             data-testid="definition-rules-problem"
           >
             {said}

@@ -83,7 +83,7 @@ export default function PublishedAppPage() {
   if (notFound) {
     return (
       <main className="page">
-        <div className="state error">
+        <div className="state error" role="alert">
           This workspace doesn&apos;t exist or you don&apos;t have access to it.
         </div>
       </main>
@@ -92,7 +92,7 @@ export default function PublishedAppPage() {
   if (app.isError || !app.data) {
     return (
       <main className="page">
-        <div className="state error">
+        <div className="state error" role="alert">
           {version === "saved"
             ? "There's no saved version here for you. Either this app doesn't exist, or you don't have permission to see work that hasn't been published — which is the same answer on purpose."
             : "This app isn't published to you. It may have been unpublished, or shared only with groups you're not in."}

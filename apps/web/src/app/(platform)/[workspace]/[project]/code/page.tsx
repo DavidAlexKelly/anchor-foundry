@@ -93,7 +93,7 @@ function NewRepository({
           />
         </Field>
         {create.isError && (
-          <p className="state error" data-testid="repository-error">
+          <p className="state error" role="alert" data-testid="repository-error">
             {create.error instanceof ApiError
               ? create.error.message
               : (create.error as Error).message}
@@ -164,7 +164,7 @@ export default function CodePage() {
 
       {list.isPending && <div className="state">Loading…</div>}
       {list.isError && (
-        <div className="state error">Couldn&apos;t load this project&apos;s repositories.</div>
+        <div className="state error" role="alert">Couldn&apos;t load this project&apos;s repositories.</div>
       )}
 
       <div data-testid="repository-list">

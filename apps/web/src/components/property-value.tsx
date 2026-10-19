@@ -435,7 +435,7 @@ export function PropertyInput({
   if (dataType === "array") {
     if (!arrayOf) {
       return (
-        <p className="form-error" data-testid="array-element-unknown">
+        <p className="form-error" role="alert" data-testid="array-element-unknown">
           {label} is a list, and this form was not told what it holds.
         </p>
       );
@@ -528,7 +528,7 @@ export function PropertyInput({
           }}
         />
         {uploading && <p className="login-note">Uploading…</p>}
-        {uploadError && <div className="form-error">{uploadError}</div>}
+        {uploadError && <div className="form-error" role="alert">{uploadError}</div>}
         {current && <p className="login-note">Attached: {current.filename}</p>}
       </div>
     );
@@ -556,7 +556,7 @@ export function PropertyInput({
   if (dataType === "struct") {
     if (!structFields || structFields.length === 0) {
       return (
-        <p className="form-error" data-testid="struct-fields-unknown">
+        <p className="form-error" role="alert" data-testid="struct-fields-unknown">
           {unknownFieldsNote(label)}
         </p>
       );

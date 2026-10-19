@@ -182,7 +182,7 @@ export function StateBar({
       )}
       {note && <p className="canvas-widget-empty" data-testid="state-note">{note}</p>}
       {failure && (
-        <p className="state error" data-testid="state-failure">
+        <p className="state error" role="alert" data-testid="state-failure">
           {failure}
         </p>
       )}

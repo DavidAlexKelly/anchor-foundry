@@ -116,7 +116,7 @@ function CommentsPanel({
         // Said rather than drawn as an empty thread: "nobody has commented"
         // and "we could not tell you" are opposite answers, and the second one
         // is the one somebody would act on wrongly.
-        <p className="state error" data-testid="comments-error">
+        <p className="state error" role="alert" data-testid="comments-error">
           Couldn&apos;t load the comments on this object.
         </p>
       )}
@@ -172,7 +172,7 @@ function CommentsPanel({
             onChange={(e) => setDraft(e.target.value)}
           />
           {post.isError && (
-            <div className="form-error">
+            <div className="form-error" role="alert">
               {post.error instanceof ApiError
                 ? post.error.message
                 : "Couldn't post this comment."}

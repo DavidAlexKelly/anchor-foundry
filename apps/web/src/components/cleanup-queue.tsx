@@ -90,7 +90,7 @@ export function CleanupQueue({
     // delete things — a reader who believes the first is a reader who stops
     // checking.
     return (
-      <div className="state error" data-testid="cleanup-error">
+      <div className="state error" role="alert" data-testid="cleanup-error">
         Couldn&apos;t work out which object types need cleaning up.
       </div>
     );
@@ -209,7 +209,7 @@ export function CleanupQueue({
                        p.71's delete removes "associated data from object
                        storage" and is the one action here that cannot be
                        undone, so the sentence says both. */
-                    <div className="form-error" data-testid="cleanup-confirm">
+                    <div className="form-error" role="alert" data-testid="cleanup-confirm">
                       <p>{deleteWarning(row)}</p>
                       <div className="row-actions">
                         <button
