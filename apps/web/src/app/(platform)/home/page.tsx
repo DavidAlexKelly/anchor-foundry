@@ -14,7 +14,7 @@ export default function HomePage() {
 
   usePageTitle("Workspaces");
   return (
-    <main className="page">
+    <main id="main" className="page">
       <div className="page-head">
         <div>
           <p className="eyebrow">workspaces</p>

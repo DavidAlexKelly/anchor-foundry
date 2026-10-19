@@ -1057,6 +1057,15 @@ button { font: inherit; cursor: pointer; }
   stroke: var(--accent); stroke-width: 3;
 }
 
+/* Off the page until a keyboard reaches it, then over the top bar's corner. */
+.skip-link {
+  position: absolute; left: 8px; top: -48px; z-index: 1000;
+  padding: 8px 12px; border-radius: var(--radius);
+  background: var(--accent); color: #fff; font-weight: 600; text-decoration: none;
+}
+.skip-link:focus { top: 8px; }
+main:focus { outline: none; }
+
 .app-viewport { min-height: 100vh; display: flex; flex-direction: column; }
 .app-shell { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
 

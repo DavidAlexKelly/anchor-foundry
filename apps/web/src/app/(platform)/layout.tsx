@@ -8,6 +8,7 @@ import { api } from "@/lib/api";
 import { clearSignedIn, isSignedIn, loginHrefFor } from "@/lib/auth";
 import { AnchorGlyph } from "@/components/glyph";
 import { NotificationBell } from "@/components/notification-bell";
+import { SkipLink } from "@/components/skip-link";
 import { WorkspaceSearch } from "@/components/workspace-search";
 import { workspaceOf } from "@/lib/workspace-search";
 
@@ -75,6 +76,9 @@ function Topbar({
   return (
     <>
       <header className="topbar">
+        {/* Inside the banner, as its first stop: a page with no chrome to
+            skip (an embedded one) has no link either. */}
+        <SkipLink />
         <Link className="wordmark" href="/home">
           <AnchorGlyph /> ANCHOR
         </Link>

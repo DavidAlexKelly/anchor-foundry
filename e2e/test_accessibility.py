@@ -168,3 +168,23 @@ def test_a_page_names_itself_in_the_tab(page, place, api, path) -> None:
     }
     page.goto(WEB_BASE + path.format(**names))
     expect(page).to_have_title(TITLES[path].format(**names), timeout=30000)
+
+
+def test_the_first_tab_offers_to_skip_to_the_page(page, place) -> None:
+    """§1013, WCAG 2.4.1: a project's page begins with the top bar and the
+    project's sidebar, a dozen stops before the page itself."""
+    mod = place["mod"]
+    page.goto(f"{WEB_BASE}/{mod.workspace_slug}/{mod.project_slug}/datasets")
+    expect(page.get_by_role("heading", name="Datasets")).to_be_visible(timeout=30000)
+    skip = page.get_by_role("link", name="Skip to content")
+    # Not on screen until it is reached.
+    assert skip.bounding_box()["y"] < 0
+    page.evaluate("document.activeElement && document.activeElement.blur()")
+    page.keyboard.press("Tab")
+    expect(skip).to_be_focused()
+    assert skip.bounding_box()["y"] >= 0
+    page.keyboard.press("Enter")
+    expect(page.locator("main")).to_be_focused()
+    # And the next stop is the page's, not the top bar's again.
+    page.keyboard.press("Tab")
+    assert page.evaluate("!!document.activeElement.closest('main')")

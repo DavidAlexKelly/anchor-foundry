@@ -43,13 +43,13 @@ export default function CanvasAppRedirectPage() {
 
   if (appQuery.isError) {
     return (
-      <main>
+      <main id="main">
         <div className="state error" role="alert">Couldn&apos;t load this app. It may have been deleted.</div>
       </main>
     );
   }
   return (
-    <main>
+    <main id="main">
       <div className="state">Opening…</div>
     </main>
   );

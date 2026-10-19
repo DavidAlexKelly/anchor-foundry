@@ -137,7 +137,7 @@ export default function CodePage() {
 
   usePageTitle("Code", project?.name);
   return (
-    <main>
+    <main id="main">
       <div className="page-head">
         <div>
           <p className="eyebrow">project · code</p>

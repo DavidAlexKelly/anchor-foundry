@@ -898,7 +898,7 @@ export default function DatasetsPage() {
 
   usePageTitle("Datasets", project?.name);
   return (
-    <main>
+    <main id="main">
       <div className="page-head">
         <div>
           <p className="eyebrow">project · datasets</p>
