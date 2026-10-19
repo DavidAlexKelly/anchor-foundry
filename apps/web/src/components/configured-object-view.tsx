@@ -78,7 +78,7 @@ export function ConfiguredObjectView({
   if (app.isError || !app.data) {
     return (
       <>
-        <p className="state error" data-testid="configured-object-view-failed">
+        <p className="state error" role="alert" data-testid="configured-object-view-failed">
           This object type&apos;s configured view couldn&apos;t be loaded, so here is the
           standard one.
         </p>
@@ -162,7 +162,7 @@ export function ConfiguredSetPanel({
   if (app.isError || !app.data) {
     return (
       <>
-        <p className="state error" data-testid="configured-set-panel-failed">
+        <p className="state error" role="alert" data-testid="configured-set-panel-failed">
           This object type&apos;s object set panel couldn&apos;t be loaded, so here is the
           standard one.
         </p>

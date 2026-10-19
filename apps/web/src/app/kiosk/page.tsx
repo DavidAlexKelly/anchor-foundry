@@ -75,7 +75,7 @@ export default function KioskPage() {
     );
   }
   if (current.isError || app.isError) {
-    return <main className="page"><div className="state error">Couldn&apos;t open the kiosk.</div></main>;
+    return <main className="page"><div className="state error" role="alert">Couldn&apos;t open the kiosk.</div></main>;
   }
   if (!current.data || !app.data) {
     return <main className="page"><div className="state">Opening kiosk…</div></main>;

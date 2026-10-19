@@ -348,7 +348,7 @@ export function ActionTable({
                     </button>
                   )}
                   {(row.message || checked.get(row.key)) && row.status !== "done" && (
-                    <p className="form-error" data-testid="action-table-problem">
+                    <p className="form-error" role="alert" data-testid="action-table-problem">
                       {row.message ?? checked.get(row.key)}
                     </p>
                   )}

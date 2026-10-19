@@ -56,6 +56,6 @@ export function SyncFollow({
       {ended.text}
     </p>
   ) : (
-    <div className="form-error" data-testid="sync-result">{ended.text}</div>
+    <div className="form-error" role="alert" data-testid="sync-result">{ended.text}</div>
   );
 }

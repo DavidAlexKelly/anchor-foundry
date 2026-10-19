@@ -157,7 +157,7 @@ function ObjectTypeDialog({
           onChange={setTitleProperty}
         />
         {create.isError && (
-          <div className="form-error">
+          <div className="form-error" role="alert">
             {create.error instanceof ApiError && create.error.status === 409
               ? "An object type with this name already exists."
               : create.error instanceof ApiError ? create.error.message : "Couldn't create the object type."}
@@ -307,7 +307,7 @@ function SuggestDialog({
       )}
 
       {createAndMap.isError && (
-        <div className="form-error">
+        <div className="form-error" role="alert">
           {createAndMap.error instanceof ApiError ? createAndMap.error.message : "Couldn't create the object type."}
         </div>
       )}
@@ -520,7 +520,7 @@ function JoinTableFields({
           Generate join table
         </button>
         {generate.isError && (
-          <div className="form-error">
+          <div className="form-error" role="alert">
             {generate.error instanceof ApiError ? generate.error.message : "Couldn't make the join table."}
           </div>
         )}
@@ -653,11 +653,11 @@ function LinkTypeDialog({
           </>
         )}
         {halfJoin && (
-          <div className="form-error">Set the property on both ends, or on neither.</div>
+          <div className="form-error" role="alert">Set the property on both ends, or on neither.</div>
         )}
-        {tableProblem && <div className="form-error">{tableProblem}</div>}
+        {tableProblem && <div className="form-error" role="alert">{tableProblem}</div>}
         {create.isError && (
-          <div className="form-error">
+          <div className="form-error" role="alert">
             {create.error instanceof ApiError ? create.error.message : "Couldn't create the link type."}
           </div>
         )}
@@ -781,9 +781,9 @@ function LinkJoinDialog({
           </>
         )}
         {halfJoin && (
-          <div className="form-error">Set the property on both ends, or on neither.</div>
+          <div className="form-error" role="alert">Set the property on both ends, or on neither.</div>
         )}
-        {tableProblem && <div className="form-error">{tableProblem}</div>}
+        {tableProblem && <div className="form-error" role="alert">{tableProblem}</div>}
         {/* p.217: "Visibility: An indication to user applications for how
             prominently to display the side of the link type" - each side, as
             each has its own name (§714). */}
@@ -816,7 +816,7 @@ function LinkJoinDialog({
           />
         </Field>
         {classes.bad.length > 0 && (
-          <div className="form-error" data-testid="link-type-classes-bad">
+          <div className="form-error" role="alert" data-testid="link-type-classes-bad">
             {`Not kind:name: ${classes.bad.join(", ")}`}
           </div>
         )}
@@ -831,7 +831,7 @@ function LinkJoinDialog({
         />
         {capped && <p className="field-hint" data-testid="link-status-capped">{capped}</p>}
         {save.isError && (
-          <div className="form-error">
+          <div className="form-error" role="alert">
             {save.error instanceof ApiError ? save.error.message : "Couldn't save the join."}
           </div>
         )}
@@ -920,7 +920,7 @@ function ActionTypeDialog({
           </Field>
         )}
         {create.isError && (
-          <div className="form-error">
+          <div className="form-error" role="alert">
             {create.error instanceof ApiError ? create.error.message : "Couldn't create the action."}
           </div>
         )}
@@ -1032,7 +1032,7 @@ function SourceDialog({
         </Field>
       )}
       {create.isError && (
-        <div className="form-error">
+        <div className="form-error" role="alert">
           {create.error instanceof ApiError ? create.error.message : "Couldn't create the mapping."}
         </div>
       )}
@@ -1128,7 +1128,7 @@ function SourceScheduleDialog({
           />
         </Field>
         {save.isError && (
-          <div className="form-error">
+          <div className="form-error" role="alert">
             {save.error instanceof ApiError ? save.error.message : "Couldn't save the schedule."}
           </div>
         )}
@@ -1184,7 +1184,7 @@ function SourceRow({
           <div className="slug">{new Date(source.last_synced_at).toLocaleString()}</div>
         )}
         {source.last_error && (
-          <div className="form-error" style={{ marginTop: 4 }}>{source.last_error}</div>
+          <div className="form-error" role="alert" style={{ marginTop: 4 }}>{source.last_error}</div>
         )}
         {result && result.ok && (
           <p className="login-note" style={{ margin: "4px 0 0" }}>
@@ -1198,7 +1198,7 @@ function SourceRow({
             this has to be visible: counted and not shown is the same as not
             counted. */}
         {result && result.ok && Object.keys(result.missing_required ?? {}).length > 0 && (
-          <p className="form-error" style={{ margin: "4px 0 0" }} data-testid="missing-required">
+          <p className="form-error" role="alert" style={{ margin: "4px 0 0" }} data-testid="missing-required">
             {Object.entries(result.missing_required)
               .map(([name, count]) => `${count} row${count === 1 ? "" : "s"} with no ${name}`)
               .join(", ")}
@@ -1451,7 +1451,7 @@ export default function ObjectsPage() {
       )}
 
       {types.isPending && <div className="state">Loading the ontology…</div>}
-      {types.isError && <div className="state error">Couldn&apos;t load object types. Refresh to try again.</div>}
+      {types.isError && <div className="state error" role="alert">Couldn&apos;t load object types. Refresh to try again.</div>}
 
       {/* **An empty filter result is not an empty ontology.** Falling through
           to "The ontology starts here" because a group happens to hold nothing

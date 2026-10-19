@@ -213,7 +213,7 @@ function PreviewTab({
   });
   const editor = canEditProject(project.data?.effective_role ?? "viewer");
   if (preview.isPending) return <p className="state">Loading rows…</p>;
-  if (preview.isError) return <p className="state error">{(preview.error as Error).message}</p>;
+  if (preview.isError) return <p className="state error" role="alert">{(preview.error as Error).message}</p>;
   // p.24 puts the Edit Schema UI on the preview tab, which is the right place
   // for the same reason p.4's Create branch belongs on a History row: this is
   // where somebody is looking at the parse that went wrong.
@@ -358,7 +358,7 @@ function UploadFilePanel({
             {intent.text}
           </p>
           {send.isError && (
-            <div className="form-error" data-testid="file-upload-error">
+            <div className="form-error" role="alert" data-testid="file-upload-error">
               {(send.error as Error).message}
             </div>
           )}
@@ -566,7 +566,7 @@ function ParsePanel({
       </div>
 
       {problem && (
-        <p className="form-error" data-testid="parse-problem">{problem}</p>
+        <p className="form-error" role="alert" data-testid="parse-problem">{problem}</p>
       )}
       {willDo.length > 0 && (
         <p className="soft ds-note" data-testid="parse-summary">
@@ -574,7 +574,7 @@ function ParsePanel({
         </p>
       )}
       {(rehearse.isError || keep.isError) && (
-        <div className="form-error" data-testid="parse-error">
+        <div className="form-error" role="alert" data-testid="parse-error">
           {(rehearse.error ?? keep.error) instanceof ApiError
             ? ((rehearse.error ?? keep.error) as ApiError).message
             : "Couldn't read the file that way."}
@@ -642,7 +642,7 @@ function SchemaTab({
     queryFn: () => datasetApi.profile(wid, pid, did, version ?? undefined),
   });
   if (profile.isPending) return <p className="state">Profiling columns…</p>;
-  if (profile.isError) return <p className="state error">{(profile.error as Error).message}</p>;
+  if (profile.isError) return <p className="state error" role="alert">{(profile.error as Error).message}</p>;
 
   const rows = profile.data.row_count;
   return (
@@ -748,7 +748,7 @@ function BranchDialog({
             />
           </Field>
           {branch.isError && (
-            <div className="form-error" data-testid="branch-error">
+            <div className="form-error" role="alert" data-testid="branch-error">
               {branch.error instanceof ApiError
                 ? branch.error.message
                 : "Couldn't branch."}
@@ -829,7 +829,7 @@ function RollbackDialog({
         ))}
       </ul>
       {roll.isError && (
-        <div className="form-error" data-testid="rollback-error">
+        <div className="form-error" role="alert" data-testid="rollback-error">
           {roll.error instanceof ApiError ? roll.error.message : "Couldn't roll back."}
         </div>
       )}
@@ -899,7 +899,7 @@ function HistoryTab({
     queryFn: () => datasetApi.retention(wid, pid, did),
   });
   if (versions.isPending) return <p className="state">Loading history…</p>;
-  if (versions.isError) return <p className="state error">{(versions.error as Error).message}</p>;
+  if (versions.isError) return <p className="state error" role="alert">{(versions.error as Error).message}</p>;
   // The version the dataset is on, bound once. `[0]` rather than a second
   // query: the list is ordered newest first, so the answer is already here,
   // and a separate source for it could disagree with the rows being drawn.
@@ -1167,7 +1167,7 @@ function RetentionPanel({ wid, pid, did, report }: {
             <p className="soft" data-testid="retention-preview">{previewText(preview.data, keep)}</p>
           )}
           {save.isError && (
-            <p className="form-error" data-testid="retention-error">{(save.error as Error).message}</p>
+            <p className="form-error" role="alert" data-testid="retention-error">{(save.error as Error).message}</p>
           )}
         </form>
       )}
@@ -1218,7 +1218,7 @@ function NextSync({ wid, pid, did, connectionId }: {
         </>
       )}
       {force.isError && (
-        <p className="form-error" data-testid="force-snapshot-error">
+        <p className="form-error" role="alert" data-testid="force-snapshot-error">
           {(force.error as Error).message}
         </p>
       )}
@@ -1237,7 +1237,7 @@ function LineageTab({ resource }: { resource: ResolvedResource }) {
       modelApi.pipeline(resource.workspace_id, resource.project_id!, `dataset:${resource.kind_id}`),
   });
   if (graph.isPending) return <p className="state">Loading lineage…</p>;
-  if (graph.isError) return <p className="state error">{(graph.error as Error).message}</p>;
+  if (graph.isError) return <p className="state error" role="alert">{(graph.error as Error).message}</p>;
 
   return (
     <>
@@ -1359,7 +1359,7 @@ function RenameDataset({
       {problem && typed.trim() !== current && (
         <p className="login-note" data-testid="rename-problem">{problem}</p>
       )}
-      {failure && <p className="form-error" data-testid="rename-failure">{failure}</p>}
+      {failure && <p className="form-error" role="alert" data-testid="rename-failure">{failure}</p>}
       {done && (
         <p className="login-note" data-testid="rename-done">
           Renamed to {done}. Its link has not changed.
@@ -1467,7 +1467,7 @@ function ResourceTags({ wid, pid, rid }: { wid: string; pid: string; rid: string
         </select>
       )}
       {change.isError && (
-        <div className="form-error" data-testid="ds-tag-error">
+        <div className="form-error" role="alert" data-testid="ds-tag-error">
           {change.error instanceof ApiError ? change.error.message : "Couldn't change the tags."}
         </div>
       )}
@@ -1509,7 +1509,7 @@ function DetailsTab({ wid, pid, did, rid }: { wid: string; pid: string; did: str
     enabled: detail.data?.origin === "upload",
   });
   if (detail.isPending) return <p className="state">Loading…</p>;
-  if (detail.isError) return <p className="state error">{(detail.error as Error).message}</p>;
+  if (detail.isError) return <p className="state error" role="alert">{(detail.error as Error).message}</p>;
 
   const d = detail.data;
   return (

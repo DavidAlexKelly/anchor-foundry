@@ -92,12 +92,12 @@ export function ActionOverviewDialog({
       </p>
 
       {refusal && (
-        <p className="form-error" data-testid="action-overview-refusal">
+        <p className="form-error" role="alert" data-testid="action-overview-refusal">
           {refusal}
         </p>
       )}
       {saving.isError && (
-        <p className="form-error" data-testid="action-overview-error">
+        <p className="form-error" role="alert" data-testid="action-overview-error">
           {saving.error instanceof ApiError
             ? saving.error.message
             : "Couldn't save this."}

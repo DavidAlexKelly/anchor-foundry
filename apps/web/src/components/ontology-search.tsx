@@ -227,7 +227,7 @@ export function OntologySearch({
         <div className="ontology-search-results" data-testid="ontology-search-results">
           {results.isPending && <p className="state">Searching…</p>}
           {results.isError && (
-            <p className="state error">Couldn&apos;t search the ontology.</p>
+            <p className="state error" role="alert">Couldn&apos;t search the ontology.</p>
           )}
           {results.data && hits.length === 0 && (
             <p className="login-note" style={{ margin: 0 }}>

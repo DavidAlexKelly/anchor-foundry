@@ -187,7 +187,7 @@ export function ReviewSurface({
   });
 
   if (detail.isPending) return <p className="state">Loading review…</p>;
-  if (detail.isError) return <p className="state error">{(detail.error as Error).message}</p>;
+  if (detail.isError) return <p className="state error" role="alert">{(detail.error as Error).message}</p>;
 
   const p = detail.data;
   const open = p.state === "open";
@@ -325,7 +325,7 @@ export function ReviewSurface({
           ))}
         </ul>
       )}
-      {failure && <p className="state error">{failure}</p>}
+      {failure && <p className="state error" role="alert">{failure}</p>}
 
       {canReview && open && (
         <div className="review-actions">
@@ -420,7 +420,7 @@ function PipelineReview({
     return <div className="state">Drawing the pipeline…</div>;
   }
   if (impact.isError || graph.isError) {
-    return <div className="state error">Couldn&apos;t draw the pipeline for this review.</div>;
+    return <div className="state error" role="alert">Couldn&apos;t draw the pipeline for this review.</div>;
   }
 
   const review = reviewByNode(impact.data, files, myId);
@@ -590,7 +590,7 @@ function ImpactPanel({
 
   if (impact.isPending) return <div className="state">Working out the impact…</div>;
   if (impact.isError) {
-    return <div className="state error">Couldn&apos;t work out what this changes.</div>;
+    return <div className="state error" role="alert">Couldn&apos;t work out what this changes.</div>;
   }
 
   return (

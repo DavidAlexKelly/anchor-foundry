@@ -96,7 +96,7 @@ export function ObjectViewEditor({
 
   return (
     <Dialog open title={`Object view · ${typeName}`} onClose={onClose}>
-      {failure && <p className="state error" data-testid="object-view-error">{failure}</p>}
+      {failure && <p className="state error" role="alert" data-testid="object-view-error">{failure}</p>}
       <Field label="Form factor">
         <select
           value={form}

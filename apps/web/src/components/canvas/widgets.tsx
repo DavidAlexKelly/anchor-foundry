@@ -5082,12 +5082,12 @@ export function CanvasObjectTable({
                 </>
               )}
               {limitNotice(staged, rowLimit) && (
-                <span className="form-error" data-testid="inline-edit-limit">
+                <span className="form-error" role="alert" data-testid="inline-edit-limit">
                   {limitNotice(staged, rowLimit)}
                 </span>
               )}
               {submitError && (
-                <span className="form-error" data-testid="inline-edit-error">
+                <span className="form-error" role="alert" data-testid="inline-edit-error">
                   {submitError}
                 </span>
               )}
@@ -12473,7 +12473,7 @@ export function CanvasActionForm({
           )}
           {!live && <p className="canvas-widget-empty">Submitting is disabled while editing - use Preview to try it.</p>}
           {execute.isSuccess && execute.data.ok && <p className="login-note">Saved.</p>}
-          {execute.isSuccess && !execute.data.ok && <div className="form-error">{execute.data.error}</div>}
+          {execute.isSuccess && !execute.data.ok && <div className="form-error" role="alert">{execute.data.error}</div>}
           {/* **A refused submission, in the criterion's own words** (p.56).
               The server sends back the failure message the builder wrote, and
               this draws it unchanged. The form deliberately does *not*
@@ -12482,7 +12482,7 @@ export function CanvasActionForm({
               in another language, free to disagree with the first - and this
               repo has already paid for mirrored logic more than once. */}
           {execute.isError && (
-            <div className="form-error" data-testid="action-form-refused">
+            <div className="form-error" role="alert" data-testid="action-form-refused">
               {(execute.error as Error).message}
             </div>
           )}

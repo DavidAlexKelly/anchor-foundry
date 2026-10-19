@@ -78,7 +78,7 @@ export function CheckAccessPanel({
       )}
       {access.isPending && userId !== "" && <p className="soft">Checking…</p>}
       {access.isError && (
-        <p className="state error" data-testid="access-error">
+        <p className="state error" role="alert" data-testid="access-error">
           Couldn&apos;t check this user&apos;s access.
         </p>
       )}

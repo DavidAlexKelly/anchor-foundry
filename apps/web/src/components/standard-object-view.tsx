@@ -95,7 +95,7 @@ function TrackCard({
       <h3 className="sov-card-label">{label}</h3>
       {track.isPending && <p className="canvas-widget-empty">Loading positions…</p>}
       {track.isError && (
-        <p className="state error" style={{ margin: 0 }}>
+        <p className="state error" role="alert" style={{ margin: 0 }}>
           Couldn&apos;t read this track.
         </p>
       )}
@@ -171,7 +171,7 @@ function SeriesCard({
       <h3 className="sov-card-label">{property.display_name || property.api_name}</h3>
       {series.isPending && <p className="canvas-widget-empty">Loading readings…</p>}
       {series.isError && (
-        <p className="state error" style={{ margin: 0 }}>
+        <p className="state error" role="alert" style={{ margin: 0 }}>
           Couldn&apos;t read this series.
         </p>
       )}
@@ -323,7 +323,7 @@ export function StandardObjectView({
     return (
       <div className="sov" data-testid="standard-object-view" data-state={type.isError ? "error" : "loading"}>
         {type.isError ? (
-          <p className="state error">Couldn&apos;t load this object type&apos;s configuration.</p>
+          <p className="state error" role="alert">Couldn&apos;t load this object type&apos;s configuration.</p>
         ) : (
           <p className="state">Loading the object type…</p>
         )}

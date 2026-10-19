@@ -69,7 +69,7 @@ export function CreateProjectButton({
             />
           </Field>
           {create.isError && (
-            <div className="form-error">
+            <div className="form-error" role="alert">
               {create.error instanceof ApiError && create.error.status === 409
                 ? "A project with this name already exists in this workspace."
                 : "Couldn't create the project. Check the name and try again."}

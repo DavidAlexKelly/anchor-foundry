@@ -94,7 +94,7 @@ export function MetricsPanel({
 
       {metrics.isPending && <p className="soft">Loading…</p>}
       {metrics.isError && (
-        <p className="state error">Couldn&apos;t load this module&apos;s metrics.</p>
+        <p className="state error" role="alert">Couldn&apos;t load this module&apos;s metrics.</p>
       )}
 
       {metrics.data && empty && <p className="soft" data-testid="metrics-empty">{empty}</p>}
@@ -177,7 +177,7 @@ export function MetricsPanel({
       {/* Said, not swallowed: a save that failed reverts the box, and a box
           that reverts without a word reads as a control that does nothing. */}
       {setTracking.isError && (
-        <p className="state error" data-testid="metrics-tracking-error">
+        <p className="state error" role="alert" data-testid="metrics-tracking-error">
           Couldn&apos;t change whether layout views are recorded.
         </p>
       )}

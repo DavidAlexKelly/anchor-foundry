@@ -33,7 +33,7 @@ function CallbackInner() {
 
   if (error) {
     return (
-      <div className="state error" data-testid="sign-in-error">
+      <div className="state error" role="alert" data-testid="sign-in-error">
         {error} - <a href="/login" style={{ textDecoration: "underline" }}>back to sign in</a>
       </div>
     );

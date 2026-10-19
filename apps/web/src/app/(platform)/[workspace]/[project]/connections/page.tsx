@@ -188,7 +188,7 @@ function HistoryDialog({
                         <span className="status-dot" />
                         <span className="status-label">{run.status}</span>
                       </span>
-                      {run.error && <div className="form-error">{run.error}</div>}
+                      {run.error && <div className="form-error" role="alert">{run.error}</div>}
                       {drift && run.schema_changes && (
                         <details>
                           <summary className="chip">schema changed ({drift})</summary>
@@ -376,7 +376,7 @@ function AddConnectionWizard({
                 <p>
                   <strong>{result.connection.name}</strong> was saved, but the test failed:
                 </p>
-                <div className="form-error">{result.error}</div>
+                <div className="form-error" role="alert">{result.error}</div>
                 <p className="login-note">
                   Fix the details from the connection list and test again - nothing is lost.
                 </p>
@@ -504,7 +504,7 @@ function AddConnectionWizard({
               </Field>
             )}
             {create.isError && (
-              <div className="form-error">
+              <div className="form-error" role="alert">
                 {create.error instanceof ApiError
                   ? create.error.message
                   : "Couldn't save the connection. Check the details and try again."}
@@ -605,7 +605,7 @@ function SyncDialog({
               Find it under Datasets.
             </p>
           ) : (
-            <div className="form-error">{result.error}</div>
+            <div className="form-error" role="alert">{result.error}</div>
           )}
           <div className="form-actions">
             <button className="btn" onClick={onClose}>
@@ -625,7 +625,7 @@ function SyncDialog({
           </p>
           {discover.isPending && <div className="state">Reading the source schema…</div>}
           {discover.isError && (
-            <div className="form-error">
+            <div className="form-error" role="alert">
               {discover.error instanceof ApiError
                 ? discover.error.message
                 : "Couldn't read the source schema."}
@@ -662,7 +662,7 @@ function SyncDialog({
             />
           </Field>
           {run.isError && (
-            <div className="form-error">
+            <div className="form-error" role="alert">
               {run.error instanceof ApiError ? run.error.message : "Sync failed."}
             </div>
           )}
@@ -946,7 +946,7 @@ function ScheduledSyncDialog({
                       {result.dataset ? ` → ${result.dataset.name} v${result.dataset.current_version}` : ""}.
                     </p>
                   ) : (
-                    <div className="form-error">{result.error}</div>
+                    <div className="form-error" role="alert">{result.error}</div>
                   )}
                 </div>
               )}
@@ -1025,14 +1025,14 @@ function ScheduledSyncDialog({
               />
             )}
             {fileProblem && files && (
-              <div className="form-error" data-testid="file-sync-problem">{fileProblem}</div>
+              <div className="form-error" role="alert" data-testid="file-sync-problem">{fileProblem}</div>
             )}
             {!files && discover.isPending && <div className="state">Reading the source schema…</div>}
             {/* Said here as well as in `SyncNowDialog`, because Save is now
                 disabled until the source schema arrives: a discovery that
                 failed would otherwise leave a dead button and no reason. */}
             {!files && discover.isError && (
-              <div className="form-error">
+              <div className="form-error" role="alert">
                 {discover.error instanceof ApiError
                   ? discover.error.message
                   : "Couldn't read the source schema."}
@@ -1128,7 +1128,7 @@ function ScheduledSyncDialog({
               />
             </Field>
             {save.isError && (
-              <div className="form-error">
+              <div className="form-error" role="alert">
                 {save.error instanceof ApiError ? save.error.message : "Couldn't save the schedule."}
               </div>
             )}
@@ -1172,7 +1172,7 @@ function DiagnoseDialog({
   return (
     <Dialog open title={`Diagnose · ${connection.name}`} onClose={onClose}>
       {run.isPending && <p className="state">Checking…</p>}
-      {run.isError && <p className="state error">{String(run.error)}</p>}
+      {run.isError && <p className="state error" role="alert">{String(run.error)}</p>}
       {result && (
         <>
           <p data-testid="diagnose-summary" className={result.ok ? "state" : "state error"}>
@@ -1230,7 +1230,7 @@ function AuthorizeButton({
         {start.isPending || start.isSuccess ? "Going to the provider…" : label}
       </button>
       {start.isError && (
-        <div className="form-error">
+        <div className="form-error" role="alert">
           {start.error instanceof ApiError
             ? start.error.message
             : "Couldn't start the authorization. Try again."}
@@ -1595,7 +1595,7 @@ export default function ConnectionsPage() {
       )}
       {list.isPending && <div className="state">Loading connections…</div>}
       {list.isError && (
-        <div className="state error">Couldn&apos;t load connections. Refresh to try again.</div>
+        <div className="state error" role="alert">Couldn&apos;t load connections. Refresh to try again.</div>
       )}
       {list.data && list.data.length === 0 && (
         <div className="empty">

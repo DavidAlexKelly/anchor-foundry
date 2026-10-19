@@ -717,7 +717,7 @@ function FilesTab({
   });
 
   if (pending) return <p className="state">Loading files…</p>;
-  if (error) return <p className="state error">{error.message}</p>;
+  if (error) return <p className="state error" role="alert">{error.message}</p>;
 
   const paths = Object.keys(working).sort();
   // Pruned on the way out rather than in an effect: a file leaves the working
@@ -1049,7 +1049,7 @@ function FilesTab({
           that matters. This appears when the browser is not storing drafts at
           all, or when these edits are too large to keep. */}
       {draftWarning && (
-        <p className="state error" data-testid="draft-warning">{draftWarning}</p>
+        <p className="state error" role="alert" data-testid="draft-warning">{draftWarning}</p>
       )}
       {/* p.15's status bar (§307), under the editor and above the commit bar:
           it reports on the editor and on the branch, and the commit bar is the
@@ -1064,7 +1064,7 @@ function FilesTab({
         draftWarning={draftWarning}
         onOpenProblems={() => setProblemsOpen(true)}
       />
-      {failure && <p className="state error">{failure}</p>}
+      {failure && <p className="state error" role="alert">{failure}</p>}
     </div>
   );
 }
@@ -1245,8 +1245,8 @@ function PublishTab({
         )}
       </div>
 
-      {refusal && <p className="state error">{refusal}</p>}
-      {failure && <p className="state error">{failure}</p>}
+      {refusal && <p className="state error" role="alert">{refusal}</p>}
+      {failure && <p className="state error" role="alert">{failure}</p>}
       {opened && (
         <p className="state">
           Proposal opened. Review it under Code in this project; applying it
@@ -1581,7 +1581,7 @@ function BranchesTab({
         )}
         {comparison.isPending && !!headBranch && <p className="state">Comparing…</p>}
         {comparison.isError && (
-          <p className="state error">{(comparison.error as Error).message}</p>
+          <p className="state error" role="alert">{(comparison.error as Error).message}</p>
         )}
 
         {seen && (
@@ -1643,7 +1643,7 @@ function BranchesTab({
       />
 
       {note && <p className="state">{note}</p>}
-      {failure && <p className="state error">{failure}</p>}
+      {failure && <p className="state error" role="alert">{failure}</p>}
     </div>
   );
 }
@@ -1844,8 +1844,8 @@ function TagsSection({
           <span className="soft" data-testid="tag-will-pin">{willPin(branch, undefined)}</span>
         </form>
       )}
-      {problem && <p className="state error" data-testid="tag-name-problem">{problem}</p>}
-      {failure && <p className="state error" data-testid="tag-failure">{failure}</p>}
+      {problem && <p className="state error" role="alert" data-testid="tag-name-problem">{problem}</p>}
+      {failure && <p className="state error" role="alert" data-testid="tag-failure">{failure}</p>}
     </section>
   );
 }
@@ -1918,7 +1918,7 @@ function HistoryTab({
     queryFn: () => repoApi.commits(wid, pid, rid, branch),
   });
   if (commits.isPending) return <p className="state">Loading history…</p>;
-  if (commits.isError) return <p className="state error">{(commits.error as Error).message}</p>;
+  if (commits.isError) return <p className="state error" role="alert">{(commits.error as Error).message}</p>;
   if (commits.data.length === 0) return <p className="state">No commits on {branch} yet.</p>;
 
   return (
@@ -2085,7 +2085,7 @@ function PreviewPanel({
         </span>
       </div>
 
-      {failure && <p className="state error">{failure}</p>}
+      {failure && <p className="state error" role="alert">{failure}</p>}
       {status && (
         <p
           className={runIsAProblem(current) ? "state error" : "state"}
@@ -2463,7 +2463,7 @@ function SettingsTab({ wid, pid }: { wid: string; pid: string }) {
       {locked && (
         <p className="login-note" data-testid="settings-review-locked">{locked}</p>
       )}
-      {failure && <div className="form-error">{failure}</div>}
+      {failure && <div className="form-error" role="alert">{failure}</div>}
     </section>
   );
 }
@@ -2516,7 +2516,7 @@ function ChecksTab({
   });
 
   if (checks.isPending) return <p className="state">Loading checks…</p>;
-  if (checks.error) return <p className="state error">{(checks.error as Error).message}</p>;
+  if (checks.error) return <p className="state error" role="alert">{(checks.error as Error).message}</p>;
 
   const data = checks.data!;
   const rows = worstFirst(data.checks);
@@ -2648,7 +2648,7 @@ function ProblemsPanel({
         )}
       </div>
       {open && pending && <p className="state">Checking…</p>}
-      {open && error && <p className="state error">{error.message}</p>}
+      {open && error && <p className="state error" role="alert">{error.message}</p>}
       {open && problems && problems.length === 0 && !pending && (
         <p className="state">{problemsEmptyNote(sourceFileCount)}</p>
       )}
@@ -2799,7 +2799,7 @@ function TestsPanel({
         )}
       </div>
       {open && failure && (
-        <p className="state error" data-testid="tests-error">{failure}</p>
+        <p className="state error" role="alert" data-testid="tests-error">{failure}</p>
       )}
       {open && current?.outcomes && current.outcomes.length > 0 && (
         <ul className="repo-problem-list" data-testid="tests-list">
@@ -2957,7 +2957,7 @@ function BuildPanel({
         <p className="state" data-testid="build-blocked">{blocked}</p>
       )}
       {open && failure && (
-        <p className="state error" data-testid="build-error">{failure}</p>
+        <p className="state error" role="alert" data-testid="build-error">{failure}</p>
       )}
       {open && model && (
         <ul className="repo-problem-list" data-testid="build-runs">
@@ -3214,7 +3214,7 @@ function ScratchpadPanel({
                 {run.isPending ? "Running…" : "Run"}
               </button>
               {refused && (
-                <p className="state error" data-testid="scratchpad-refused">
+                <p className="state error" role="alert" data-testid="scratchpad-refused">
                   {refused}
                 </p>
               )}
@@ -3404,14 +3404,14 @@ function ExplorerPanel({
             placeholder="Search"
           />
           {refused && (
-            <p className="state error" data-testid="explorer-refused">
+            <p className="state error" role="alert" data-testid="explorer-refused">
               {refused}
             </p>
           )}
           {listing.isPending ? (
             <p className="state">Looking…</p>
           ) : listing.error ? (
-            <p className="state error">{(listing.error as Error).message}</p>
+            <p className="state error" role="alert">{(listing.error as Error).message}</p>
           ) : nothing ? (
             <p className="state" data-testid="explorer-empty">
               {nothing}
@@ -3558,7 +3558,7 @@ function FileChangesPanel({
 
       {open && changes.isFetching && <p className="state">Comparing…</p>}
       {open && changes.error && (
-        <p className="state error">{(changes.error as Error).message}</p>
+        <p className="state error" role="alert">{(changes.error as Error).message}</p>
       )}
       {open && data && !hasChanges(data) && !changes.isFetching && (
         <p className="state">{headline(data)}</p>
@@ -3650,7 +3650,7 @@ function DocsTab({
   }, [ids, named]);
 
   if (tree.isPending) return <p className="state">Loading the documentation…</p>;
-  if (tree.isError) return <p className="state error">{(tree.error as Error).message}</p>;
+  if (tree.isError) return <p className="state error" role="alert">{(tree.error as Error).message}</p>;
   if (source === null || !source.trim()) {
     return <p className="state repo-docs-empty" data-testid="docs-empty">{readmeEmpty()}</p>;
   }

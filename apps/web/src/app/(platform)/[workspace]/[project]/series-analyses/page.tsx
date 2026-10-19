@@ -25,7 +25,7 @@ export default function SeriesAnalysesPage() {
       <h1>Time series analyses</h1>
       <p className="login-note">Analyses saved from a Time series analysis widget: your own, and those shared with the project.</p>
       {list.isError && (
-        <p className="form-error">{list.error instanceof ApiError ? list.error.message : "Couldn't list the analyses."}</p>
+        <p className="form-error" role="alert">{list.error instanceof ApiError ? list.error.message : "Couldn't list the analyses."}</p>
       )}
       {list.data && list.data.length === 0 && <p className="login-note">No analyses have been saved here.</p>}
       {list.data && list.data.length > 0 && (

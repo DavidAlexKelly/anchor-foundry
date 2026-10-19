@@ -103,7 +103,7 @@ export function ExploreDialog({
 
       {discover.isPending && <div className="state">Reading the source schema…</div>}
       {discover.isError && (
-        <div className="form-error" data-testid="explore-error">
+        <div className="form-error" role="alert" data-testid="explore-error">
           {discover.error instanceof ApiError
             ? discover.error.message
             : "Couldn't read the schema."}
@@ -570,7 +570,7 @@ function TableDetails({
       </div>
 
       {preview.isError && (
-        <div className="form-error" data-testid="explore-preview-error">
+        <div className="form-error" role="alert" data-testid="explore-preview-error">
           {preview.error instanceof ApiError
             ? preview.error.message
             : "Couldn't read a sample."}

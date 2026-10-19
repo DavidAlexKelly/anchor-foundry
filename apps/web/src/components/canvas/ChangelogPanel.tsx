@@ -190,7 +190,7 @@ export function ChangelogPanel({
     return <p className="state">Reading both versions…</p>;
   }
   if (before.isError || after.isError) {
-    return <p className="state error">Couldn&apos;t read one of these versions.</p>;
+    return <p className="state error" role="alert">Couldn&apos;t read one of these versions.</p>;
   }
 
   const beforeDoc = before.data.definition as Doc;

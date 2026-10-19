@@ -192,7 +192,7 @@ export function ResourceBrowser({
       </div>
 
       {listing.isError && (
-        <p className="state error">{(listing.error as Error).message}</p>
+        <p className="state error" role="alert">{(listing.error as Error).message}</p>
       )}
 
       {rows.length === 0 && !listing.isPending ? (

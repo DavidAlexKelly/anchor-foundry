@@ -90,7 +90,7 @@ function ObjectsTab({ wid, typeId }: { wid: string; typeId: string }) {
   if (type.isPending || page.isPending || !type.data) {
     return <p className="state">Loading objects…</p>;
   }
-  if (page.isError) return <p className="state error">{(page.error as Error).message}</p>;
+  if (page.isError) return <p className="state error" role="alert">{(page.error as Error).message}</p>;
   if (page.data.total === 0) {
     return (
       <p className="state">
@@ -174,7 +174,7 @@ function PropertiesTab({ wid, typeId }: { wid: string; typeId: string }) {
     queryFn: () => objectsApi.getType(wid, typeId),
   });
   if (type.isPending) return <p className="state">Loading properties…</p>;
-  if (type.isError) return <p className="state error">{(type.error as Error).message}</p>;
+  if (type.isError) return <p className="state error" role="alert">{(type.error as Error).message}</p>;
 
   const titleId = type.data.title_property_id;
   return (
@@ -228,7 +228,7 @@ function LinksTab({ wid, typeId }: { wid: string; typeId: string }) {
     queryFn: () => objectsApi.listLinkTypes(wid),
   });
   if (links.isPending) return <p className="state">Loading links…</p>;
-  if (links.isError) return <p className="state error">{(links.error as Error).message}</p>;
+  if (links.isError) return <p className="state error" role="alert">{(links.error as Error).message}</p>;
 
   // Both directions: a link this type is the *target* of is as much a fact
   // about it as one it is the source of, and showing only one side makes half
@@ -307,7 +307,7 @@ function HistoryTab({ wid, typeId }: { wid: string; typeId: string }) {
   });
 
   if (versions.isPending) return <p className="state">Loading history…</p>;
-  if (versions.isError) return <p className="state error">{(versions.error as Error).message}</p>;
+  if (versions.isError) return <p className="state error" role="alert">{(versions.error as Error).message}</p>;
   if (versions.data.length === 0) return <p className="state">No versions recorded yet.</p>;
 
   // Newest first, and the list is non-empty by the guard above.
@@ -319,7 +319,7 @@ function HistoryTab({ wid, typeId }: { wid: string; typeId: string }) {
         including properties the type no longer has, which is what a change
         history is for.
       </p>
-      {failure && <p className="state error">{failure}</p>}
+      {failure && <p className="state error" role="alert">{failure}</p>}
       <ul className="ot-history">
         {versions.data.map((v) => (
           <VersionRow
