@@ -26,7 +26,7 @@ export default function SeriesAnalysisPage() {
   const a = analysis.data;
   usePageTitle(analysis.data?.name, project?.name);
   return (
-    <main>
+    <main id="main">
       <p className="login-note">
         <Link href={`/${params.workspace}/${params.project}/series-analyses`}>Time series analyses</Link>
       </p>

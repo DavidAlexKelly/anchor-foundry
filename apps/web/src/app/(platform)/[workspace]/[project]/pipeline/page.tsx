@@ -157,7 +157,7 @@ export default function PipelinePage() {
 
   usePageTitle("Pipeline", project?.name);
   return (
-    <main>
+    <main id="main">
       <div className="page-head">
         <div>
           <p className="eyebrow">project · pipeline</p>

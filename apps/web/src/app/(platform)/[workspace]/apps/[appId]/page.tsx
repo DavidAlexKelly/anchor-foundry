@@ -78,11 +78,11 @@ export default function PublishedAppPage() {
   useModuleTitle(readerLayout(app.data?.definition), app.data?.name ?? "");
 
   if (wsPending || app.isPending) {
-    return <main className="page"><div className="state">Loading app…</div></main>;
+    return <main id="main" className="page"><div className="state">Loading app…</div></main>;
   }
   if (notFound) {
     return (
-      <main className="page">
+      <main id="main" className="page">
         <div className="state error" role="alert">
           This workspace doesn&apos;t exist or you don&apos;t have access to it.
         </div>
@@ -91,7 +91,7 @@ export default function PublishedAppPage() {
   }
   if (app.isError || !app.data) {
     return (
-      <main className="page">
+      <main id="main" className="page">
         <div className="state error" role="alert">
           {version === "saved"
             ? "There's no saved version here for you. Either this app doesn't exist, or you don't have permission to see work that hasn't been published — which is the same answer on purpose."
@@ -111,7 +111,7 @@ export default function PublishedAppPage() {
   // attribute and the banner, not the feature.
   const redacting = redactOn(search.toString());
   return (
-    <main className="page" data-redact={redacting ? "on" : undefined}>
+    <main id="main" className="page" data-redact={redacting ? "on" : undefined}>
       {redacting && (
         <RedactBanner
           href={redactHref(

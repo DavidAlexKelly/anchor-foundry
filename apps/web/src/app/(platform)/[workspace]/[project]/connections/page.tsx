@@ -1571,7 +1571,7 @@ export default function ConnectionsPage() {
 
   usePageTitle("Connections", project?.name);
   return (
-    <main>
+    <main id="main">
       <div className="page-head">
         <div>
           <p className="eyebrow">project · connections</p>

@@ -31,10 +31,10 @@ export default function CleanupPage() {
   const { workspace, isPending, notFound } = useWorkspaceBySlug(params.workspace);
 
   usePageTitle("Ontology cleanup", workspace?.name);
-  if (isPending) return <main className="page"><div className="state">Loading…</div></main>;
+  if (isPending) return <main id="main" className="page"><div className="state">Loading…</div></main>;
   if (notFound || !workspace) {
     return (
-      <main className="page">
+      <main id="main" className="page">
         <div className="state error" role="alert">
           This workspace doesn&apos;t exist or you don&apos;t have access to it.
         </div>
@@ -43,7 +43,7 @@ export default function CleanupPage() {
   }
 
   return (
-    <main className="page">
+    <main id="main" className="page">
       <nav className="crumbs" aria-label="Breadcrumb">
         <Link href="/home">Workspaces</Link>
         <span className="link-mark" />

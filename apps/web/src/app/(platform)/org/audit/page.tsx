@@ -52,7 +52,7 @@ export default function AuditLogPage() {
 
   usePageTitle("Audit log", "Organisation");
   return (
-    <main className="page">
+    <main id="main" className="page">
       <div className="page-head">
         <div>
           <p className="eyebrow">
