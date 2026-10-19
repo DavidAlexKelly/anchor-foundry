@@ -16,10 +16,9 @@
  * stable tab name is worth more than a live one.
  */
 
-import { useEffect } from "react";
-
 // Relative, not `@/`: a **value** import, and vitest resolves no path alias.
 import { headerProps } from "./module-header";
+import { useDocumentTitle } from "../../lib/page-title";
 
 /** The Craft.js node map, as stored. */
 type Layout = Record<string, unknown>;
@@ -61,12 +60,8 @@ export function useModuleTitle(
   layout: Layout | null | undefined,
   resourceName: string,
 ): void {
-  const title = moduleTitle(layout, resourceName);
-  useEffect(() => {
-    // Nothing to say yet: on the published route the module's name arrives
-    // with the fetch, and blanking the tab in the meantime is worse than
-    // leaving `Anchor` in place until it does.
-    if (!title) return;
-    document.title = title;
-  }, [title]);
+  // Nothing to say yet: on the published route the module's name arrives
+  // with the fetch, and blanking the tab in the meantime is worse than
+  // leaving `Anchor` in place until it does.
+  useDocumentTitle(moduleTitle(layout, resourceName) || null);
 }

@@ -53,6 +53,7 @@ def place(api) -> dict:
     name = f"accessible_{uuid.uuid4().hex[:6]}"
     api.upload_csv(f"{mod.base}/datasets/upload", name=name, csv=b"id,region\n1,north\n2,south\n")
     mod.object_type(columns=["id", "region"], rows=[{"id": "1", "region": "north"}], key="id")
+    declared = api.call("GET", f"/workspaces/{mod.workspace_id}/object-types/{mod.object_type_id}")
     resources = api.call("GET", f"{mod.base}/resources")["resources"]
     dataset = next(r for r in resources if r["name"] == name)
     mod.define({
@@ -68,7 +69,8 @@ def place(api) -> dict:
     # Published, so the workspace's Apps page has a card to draw: its titles
     # were a level too deep, and a page with no apps had none to get wrong.
     publish(mod)
-    return {"mod": mod, "dataset": dataset["id"], "name": name}
+    return {"mod": mod, "dataset": dataset["id"], "name": name,
+            "type_name": declared["display_name"]}
 
 
 # Every page a signed-in editor reaches from the platform's navigation.
@@ -138,3 +140,31 @@ def test_a_dialog_is_named_by_its_title_and_passes_too(page, place) -> None:
     dialog = page.get_by_role("dialog", name="New project")
     expect(dialog).to_be_visible()
     assert violations(page) == []
+
+
+TITLES = {
+    "/home": "Workspaces · Anchor",
+    "/org/audit": "Audit log · Organisation · Anchor",
+    "/{ws}": "{ws_name} · Anchor",
+    "/{ws}/explore": "Explore · {ws_name} · Anchor",
+    "/{ws}/{pj}": "{pj_name} · {ws_name} · Anchor",
+    "/{ws}/{pj}/datasets": "Datasets · {pj_name} · Anchor",
+    "/{ws}/{pj}/objects/{type}": "{type_name} · {pj_name} · Anchor",
+    "/{dataset}": "{dataset_name} · {pj_name} · Anchor",
+}
+
+
+@pytest.mark.parametrize("path", TITLES)
+def test_a_page_names_itself_in_the_tab(page, place, api, path) -> None:
+    """§1012, WCAG 2.4.2: every page but a module's was titled "Anchor",
+    and a screen reader reads the title first on each page it opens."""
+    mod = place["mod"]
+    workspace = next(w for w in api.call("GET", "/workspaces") if w["id"] == mod.workspace_id)
+    names = {
+        "ws": mod.workspace_slug, "pj": mod.project_slug, "type": mod.object_type_id,
+        "dataset": f"r/{place['dataset']}", "ws_name": workspace["name"],
+        "pj_name": f"Accessible {mod.tag}", "type_name": place["type_name"],
+        "dataset_name": place["name"],
+    }
+    page.goto(WEB_BASE + path.format(**names))
+    expect(page).to_have_title(TITLES[path].format(**names), timeout=30000)

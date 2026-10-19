@@ -24,11 +24,13 @@ import { useParams } from "next/navigation";
 import { CleanupQueue } from "@/components/cleanup-queue";
 import { CleanupSettings } from "@/components/cleanup-settings";
 import { useWorkspaceBySlug } from "@/components/use-workspace";
+import { usePageTitle } from "@/lib/page-title";
 
 export default function CleanupPage() {
   const params = useParams<{ workspace: string }>();
   const { workspace, isPending, notFound } = useWorkspaceBySlug(params.workspace);
 
+  usePageTitle("Ontology cleanup", workspace?.name);
   if (isPending) return <main className="page"><div className="state">Loading…</div></main>;
   if (notFound || !workspace) {
     return (

@@ -8,6 +8,7 @@ import { ApiError, canvas as canvasApi } from "@/lib/api";
 import { Dialog, Field } from "@/components/dialog";
 import { useProjectBySlug, useWorkspaceBySlug } from "@/components/use-workspace";
 import type { CanvasApp } from "@/lib/types";
+import { usePageTitle } from "@/lib/page-title";
 
 function NewAppDialog({
   workspaceId,
@@ -138,6 +139,7 @@ export default function CanvasListPage() {
 
   const canEdit = project ? project.effective_role !== "viewer" : false;
 
+  usePageTitle("Canvas", project?.name);
   return (
     <main>
       <div className="page-head">

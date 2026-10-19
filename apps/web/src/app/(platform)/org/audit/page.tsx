@@ -12,6 +12,7 @@ import {
   type AuditFilters,
 } from "@/lib/audit-log";
 import { Field } from "@/components/dialog";
+import { usePageTitle } from "@/lib/page-title";
 
 export default function AuditLogPage() {
   const members = useQuery({ queryKey: ["org-members"], queryFn: () => api.orgMembers() });
@@ -49,6 +50,7 @@ export default function AuditLogPage() {
     }
   }
 
+  usePageTitle("Audit log", "Organisation");
   return (
     <main className="page">
       <div className="page-head">

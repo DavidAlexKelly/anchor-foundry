@@ -92,3 +92,19 @@ def test_leaving_the_module_puts_the_platform_title_back(page, titled):
     page.locator(".app-crumbs a").first.click()
     eventually(page.title, lambda t: t != "Fleet status",
                what="the tab to stop naming the module we left")
+
+
+def test_coming_back_to_a_module_names_it_again(page, titled):
+    """§1012: the application shell names a resource's tab by its name, and a
+    module is the one it must leave alone. Coming back to a module whose data
+    is already cached, its own title is set once, on mounting - before the
+    shell's, which would be the last word if it spoke for a module too."""
+    open_builder(page, titled)
+    tab(page, "Fleet status")
+    page.locator(".app-crumbs a").first.click()
+    eventually(page.title, lambda t: t != "Fleet status", what="the tab to name the page we went to")
+    page.go_back()
+    tab(page, "Fleet status")
+    # And it stays: nothing later takes it back.
+    page.wait_for_timeout(1500)
+    assert page.title() == "Fleet status"

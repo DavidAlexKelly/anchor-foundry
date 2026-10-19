@@ -13,6 +13,7 @@ import { replaceNote, saveLabel, savedNamed } from "@/lib/saved-graph-save";
 import { CopyLinkButton, useUrlState } from "@/components/use-url-state";
 import { useProjectBySlug, useWorkspaceBySlug } from "@/components/use-workspace";
 import type { PipelineGraph, PipelineNode, SavedGraph } from "@/lib/types";
+import { usePageTitle } from "@/lib/page-title";
 
 export default function PipelinePage() {
   const params = useParams<{ workspace: string; project: string }>();
@@ -154,6 +155,7 @@ export default function PipelinePage() {
     router.push(nodePath(node, params.workspace, params.project));
   }
 
+  usePageTitle("Pipeline", project?.name);
   return (
     <main>
       <div className="page-head">
