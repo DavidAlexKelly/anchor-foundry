@@ -13,6 +13,7 @@ import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/rea
 import React, { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { actions as actionApi, api, ApiError, canvas as canvasApi, datasets as dsApi, objects as objApi, seriesAnalyses as seriesAnalysisApi, type SeriesAnalysis } from "@/lib/api";
 import { eventsOf, variablesOf } from "@/lib/workshop-module";
+import { useModalFocus } from "@/lib/use-modal-focus";
 import { TypePicker } from "@/components/type-picker";
 import { VariableBridge } from "./VariableBridge";
 import { useSavedColours } from "./use-saved-colours";
@@ -4268,6 +4269,7 @@ export function CanvasObjectTable({
   const [editOpen, setEditOpen] = useState<boolean | null>(null);
   const [staged, setStaged] = useState<Staged>({});
   const [confirming, setConfirming] = useState(false);
+  const { ref: confirmRef, ...confirmKeys } = useModalFocus<HTMLDivElement>(confirming, () => setConfirming(false));
   const [submitError, setSubmitError] = useState<string | null>(null);
   const inEditMode = mode === "run" && !!liveAction
     && Object.keys(editMapping).length > 0 && editing(editOpen, inlineEditByDefault);
@@ -5095,7 +5097,8 @@ export function CanvasObjectTable({
             /* p.243: "A confirmation dialog will appear where you will again
                press Submit to submit your changes." */
             <div className="canvas-confirm" role="dialog" aria-modal="true"
-              aria-label="Submit these edits" data-testid="inline-edit-confirm">
+              aria-label="Submit these edits" data-testid="inline-edit-confirm"
+              ref={confirmRef} {...confirmKeys}>
               <p>
                 Submit {stagedCount(staged) === 1
                   ? "1 edited row" : `${stagedCount(staged)} edited rows`}?
@@ -13929,16 +13932,21 @@ export function CanvasOverlay({
   const { mode } = useCanvasEnv();
   const { overlay, closeOverlay } = useCanvasPage();
   const open = overlay === nodeId;
+  const modal = useModalFocus<HTMLElement>(mode === "run" && open, closeOverlay);
 
   if (mode === "run" && !open) return null;
 
   const body = (
     <section
-      ref={(ref) => connectDragDrop(ref, connect, drag)}
+      ref={(ref) => {
+        connectDragDrop(ref, connect, drag);
+        modal.ref.current = mode === "run" ? ref : null;
+      }}
       className={`canvas-overlay canvas-overlay--${variant}`}
       role={mode === "run" ? "dialog" : undefined}
       aria-modal={mode === "run" ? true : undefined}
       aria-label={title}
+      {...(mode === "run" ? { tabIndex: modal.tabIndex, onKeyDown: modal.onKeyDown } : {})}
     >
       <div className="canvas-overlay-head">
         <strong>{title}</strong>
