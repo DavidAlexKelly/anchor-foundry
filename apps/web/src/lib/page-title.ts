@@ -23,10 +23,23 @@ export function pageTitle(...parts: (string | null | undefined)[]): string {
  * Next puts the route's own title back on every client-side navigation.
  * `null` leaves the tab to something else to name - a module, inside the
  * application shell, which would otherwise be overwritten: a parent's effect
- * runs after its child's. */
+ * runs after its child's.
+ *
+ * **And puts it back while the page is open.** Next writes the root layout's
+ * "Anchor" into `<title>` when its metadata arrives, which on a cold load
+ * can be after this effect has run - one load in eight, in the browser
+ * suite, left the tab saying Anchor. Whatever writes it, the page that is on
+ * screen says what the tab reads. */
 export function useDocumentTitle(title: string | null): void {
   useEffect(() => {
-    if (title !== null) document.title = title;
+    if (title === null) return;
+    const assign = () => {
+      if (document.title !== title) document.title = title;
+    };
+    assign();
+    const watch = new MutationObserver(assign);
+    watch.observe(document.head, { subtree: true, childList: true, characterData: true });
+    return () => watch.disconnect();
   }, [title]);
 }
 
