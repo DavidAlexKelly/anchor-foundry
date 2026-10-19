@@ -97,10 +97,13 @@ def test_a_deleted_workspaces_indices_are_deleted_and_a_live_ones_kept(domain: s
 def test_a_name_that_is_not_a_workspaces_is_left(domain: str) -> None:
     """The prefix shape is checked twice, here and in the database: an index
     an operator made on the domain is not the cleanup's to delete."""
-    for name in ("ws-notaworkspace-objects-x", "ws-ABCDEF012345-object-instances"):
+    # Twelve characters that are not hex, rather than hex in capitals: a
+    # cluster refuses an upper-case index name, so that one could not exist.
+    names = {"ws-notaworkspace-objects-x", "ws-ghijklmnopqr-object-instances"}
+    for name in names:
         call(domain, "PUT", f"/{name}", {})
     assert _run() == []
-    assert {"ws-notaworkspace-objects-x", "ws-ABCDEF012345-object-instances"} <= _indices(domain)
+    assert names <= _indices(domain)
 
 
 def test_without_an_index_there_is_nothing_to_do(monkeypatch) -> None:
