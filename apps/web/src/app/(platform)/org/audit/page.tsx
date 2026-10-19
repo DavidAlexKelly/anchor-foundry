@@ -170,7 +170,19 @@ export default function AuditLogPage() {
                 <td title={entry.created_at}>{new Date(entry.created_at).toLocaleString()}</td>
                 <td>{actorText(entry)}</td>
                 <td>
-                  <code>{entry.action}</code>
+                  {/* The row opens on a click anywhere in it; this is the
+                      same, for a keyboard, which a row cannot take (§1009). */}
+                  <button
+                    type="button"
+                    className="inline-button"
+                    aria-expanded={open === entry.id}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setOpen(open === entry.id ? null : entry.id);
+                    }}
+                  >
+                    <code>{entry.action}</code>
+                  </button>
                   {open === entry.id && Object.keys(entry.metadata).length > 0 && (
                     <pre className="soft" data-testid="audit-metadata" style={{ whiteSpace: "pre-wrap" }}>
                       {JSON.stringify(entry.metadata, null, 2)}
