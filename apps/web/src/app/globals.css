@@ -19,7 +19,10 @@
      different alphas - drift, not a decision, and on a dark panel a black
      wash is invisible. Defined once so the dark block below can answer it. */
   --surface-2: rgba(0, 0, 0, 0.03);
-  --brass: #8a6d3b;
+  /* #8a6d3b until §1008: 4.15:1 on its own wash, under the 4.5:1 WCAG AA asks
+     of small text, and brass is mostly small text - a role chip, a warning
+     line. This is the same hue darker, 5.6:1 on the wash. */
+  --brass: #735a2d;
   --brass-wash: #f3ede1;
   --danger: #8c2f22;
   --danger-wash: #f6e9e6;
@@ -218,7 +221,7 @@ button { font: inherit; cursor: pointer; }
   transition: box-shadow 120ms ease;
 }
 .card:hover { box-shadow: var(--shadow-card-hover); }
-.card h3 {
+.card h2, .card h3 {
   margin: 0 0 2px;
   font-family: var(--font-display);
   font-weight: 600;
@@ -373,6 +376,9 @@ button { font: inherit; cursor: pointer; }
 /* ---- states -------------------------------------------------------------- */
 .state { padding: 48px 0; text-align: center; color: var(--ink-soft); font-size: 13.5px; }
 .state.error { color: var(--danger); }
+/* A page that is only a state - no such workspace, no such address - still
+   says what it is in a heading (§1008), at the size of the state's text. */
+.state h1 { font-size: 16px; font-weight: 600; margin: 0 0 6px; color: inherit; }
 
 /* ---- login --------------------------------------------------------------- */
 .login-split {
@@ -1026,6 +1032,15 @@ button { font: inherit; cursor: pointer; }
 
 /* ---- application shell (ROADMAP phase 2, 0.3) -----------------------------
    Full viewport, no platform chrome: an application owns the whole window. */
+/* Text a screen reader reads and the page does not show: a header above a
+   column of buttons, which has nothing to say to the eye (§1008). An
+   `aria-label` on an empty cell names it, but leaves the header with no text,
+   and that is what some readers announce. */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
+
 .app-viewport { min-height: 100vh; display: flex; flex-direction: column; }
 .app-shell { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
 

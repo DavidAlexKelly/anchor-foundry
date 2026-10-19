@@ -96,7 +96,7 @@ function AppCard({
 
   return (
     <div className="card">
-      <h3>{app.name}</h3>
+      <h2>{app.name}</h2>
       <div className="slug">{app.slug}</div>
       <p>{app.description || "No description yet."}</p>
       <div className="meta">

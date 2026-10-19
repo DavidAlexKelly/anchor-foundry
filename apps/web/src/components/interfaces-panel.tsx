@@ -304,7 +304,7 @@ function InterfaceDialog({
           <thead>
             <tr>
               <th>Name</th><th>API name</th><th>Type</th><th>Required</th>
-              <th aria-label="Actions" />
+              <th><span className="sr-only">Actions</span></th>
             </tr>
           </thead>
           <tbody>
@@ -404,7 +404,7 @@ function InterfaceDialog({
           <thead>
             <tr>
               <th>Name</th><th>API name</th><th>Links to</th><th>Required</th>
-              <th aria-label="Actions" />
+              <th><span className="sr-only">Actions</span></th>
             </tr>
           </thead>
           <tbody>
@@ -1107,7 +1107,7 @@ export function InterfacesPanel({
           <thead>
             <tr>
               <th>Interface</th><th>Properties</th><th>Implemented by</th>
-              <th aria-label="Actions" />
+              <th><span className="sr-only">Actions</span></th>
             </tr>
           </thead>
           <tbody>

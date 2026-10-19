@@ -586,7 +586,7 @@ export function FunctionsPanel({ workspaceId, canEdit, openId: asked = null, onO
       {list.data && list.data.length > 0 && (
         <table className="table" style={{ marginBottom: 28 }} data-testid="functions-table">
           <thead>
-            <tr><th>Function</th><th>Version</th><th aria-label="Actions" /></tr>
+            <tr><th>Function</th><th>Version</th><th><span className="sr-only">Actions</span></th></tr>
           </thead>
           <tbody>
             {list.data.map((f: FunctionSummary) => (

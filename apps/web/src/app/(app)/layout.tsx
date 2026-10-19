@@ -26,5 +26,8 @@ export default function ApplicationLayout({ children }: { children: React.ReactN
     if (!isSignedIn()) router.replace(loginHrefFor(pathname, window.location.search));
   }, [router, pathname]);
 
-  return <div className="app-viewport">{children}</div>;
+  // The page's one `main`: the platform's pages each draw their own, and an
+  // application's content had none, so a reader's "skip to content" had
+  // nowhere to go (§1008).
+  return <main className="app-viewport">{children}</main>;
 }
