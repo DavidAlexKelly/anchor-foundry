@@ -439,6 +439,8 @@ The sync pays for it: the trigger, one more index and the `ANALYZE` add about 17
 
 **E.51 — Every web image drew the development sign-in. Done (§1002), S.** `apps/web/.env.local` is committed for `next dev`, sets `NEXT_PUBLIC_AUTH_MODE=dev`, and was in the image's build context, so every deployed sign-in page also offered "Paste an access token" (still verified by the API). `.dockerignore` excludes `.env*.local`, and `test_image_pins.py` holds it.
 
+**E.52 — Nothing checked the platform against WCAG. Done (§1008-§1014), S each.** An audit with axe-core, then by keyboard and at a phone's width, found: brass text under AA contrast on every role chip; 41 empty column headers; headings a level too deep; pages and applications with no `main`; graph nodes, an audit entry and a version's description that a click reached and a keyboard did not; a module's overlay that said `aria-modal` and kept none of its promises; dialogs with no name; 198 of 202 error messages that a screen reader was never told about; every page but a module's titled "Anchor"; no way past the top bar; and a top bar 896px wide in a 320px window. Each is fixed. `e2e/test_accessibility.py` runs axe on 22 pages, holds each to a 320px window and its own tab title, and runs in the production build's job too; `lib/errors-announced.test.ts` holds the error messages. **Not covered:** a module's own content, whose headings and colours are its author's, and a map's points, which stay a pointer's - a map draws thousands.
+
 ## Suggested order
 
 **First, out of band:** E.1.
