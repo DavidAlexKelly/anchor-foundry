@@ -7,6 +7,7 @@ import { ApiError, api, mutations } from "@/lib/api";
 import { Dialog, Field } from "@/components/dialog";
 import { KioskSettings } from "@/components/kiosk-settings";
 import type { OrgUser } from "@/lib/types";
+import { usePageTitle } from "@/lib/page-title";
 
 function InviteButton() {
   const [open, setOpen] = useState(false);
@@ -168,6 +169,7 @@ export default function OrgPage() {
 
   const isAdmin = me.data?.org_role === "owner" || me.data?.org_role === "admin";
 
+  usePageTitle("Organisation", org.data?.name);
   return (
     <main className="page">
       <div className="page-head">

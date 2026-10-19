@@ -14,11 +14,13 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { ObjectExplorer } from "@/components/object-explorer";
 import { useWorkspaceBySlug } from "@/components/use-workspace";
+import { usePageTitle } from "@/lib/page-title";
 
 export default function ExplorePage() {
   const params = useParams<{ workspace: string }>();
   const { workspace, isPending, notFound } = useWorkspaceBySlug(params.workspace);
 
+  usePageTitle("Explore", workspace?.name);
   if (isPending) return <main className="page"><div className="state">Loading…</div></main>;
   if (notFound || !workspace) {
     return (

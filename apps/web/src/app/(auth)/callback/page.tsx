@@ -4,6 +4,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useRef, useState } from "react";
 import { completeLogin, consumeReturnPath } from "@/lib/auth";
 import { callbackError } from "@/lib/auth-errors";
+import { usePageTitle } from "@/lib/page-title";
 
 function CallbackInner() {
   const router = useRouter();
@@ -42,6 +43,7 @@ function CallbackInner() {
 }
 
 export default function CallbackPage() {
+  usePageTitle("Signing in");
   return (
     <Suspense fallback={<div className="state">Completing sign-in…</div>}>
       <CallbackInner />

@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { api } from "@/lib/api";
 import { CreateWorkspaceButton } from "@/components/create-workspace";
+import { usePageTitle } from "@/lib/page-title";
 
 export default function HomePage() {
   const workspaces = useQuery({ queryKey: ["workspaces"], queryFn: api.workspaces });
@@ -11,6 +12,7 @@ export default function HomePage() {
   // Mirror of the API's floor (org admin) - the server is authoritative.
   const canCreate = me.data?.org_role === "owner" || me.data?.org_role === "admin";
 
+  usePageTitle("Workspaces");
   return (
     <main className="page">
       <div className="page-head">

@@ -34,6 +34,7 @@ import { ApiError, repositories as repoApi } from "@/lib/api";
 import { Dialog, Field } from "@/components/dialog";
 import { useProjectBySlug, useWorkspaceBySlug } from "@/components/use-workspace";
 import { canCreate, emptyReason, openHref, subtitle } from "@/lib/repository-list";
+import { usePageTitle } from "@/lib/page-title";
 
 function NewRepository({
   workspaceId,
@@ -134,6 +135,7 @@ export default function CodePage() {
   const repositories = list.data ?? [];
   const empty = list.isSuccess ? emptyReason(repositories.length, role) : null;
 
+  usePageTitle("Code", project?.name);
   return (
     <main>
       <div className="page-head">

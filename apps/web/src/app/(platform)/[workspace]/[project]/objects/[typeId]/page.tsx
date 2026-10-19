@@ -23,6 +23,7 @@ import type {
   ObjectTypeProperty,
   PropertyDataType,
 } from "@/lib/types";
+import { usePageTitle } from "@/lib/page-title";
 
 const PAGE_SIZE = 50;
 
@@ -197,6 +198,7 @@ export default function ObjectInstancesPage() {
   const hasNext = (page + 1) * PAGE_SIZE < total;
   const canEdit = (project ? project.effective_role !== "viewer" : false) && (actionTypes.data?.length ?? 0) > 0;
 
+  usePageTitle(type.data?.display_name, project?.name);
   return (
     <main>
       <div className="page-head">

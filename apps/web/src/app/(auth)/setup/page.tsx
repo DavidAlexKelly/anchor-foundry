@@ -6,6 +6,7 @@ import { useState } from "react";
 import { ApiError, bootstrap } from "@/lib/api";
 import { Field, slugPreview } from "@/components/dialog";
 import { AnchorGlyph } from "@/components/glyph";
+import { usePageTitle } from "@/lib/page-title";
 
 export default function SetupPage() {
   const status = useQuery({ queryKey: ["bootstrap-status"], queryFn: bootstrap.status });
@@ -31,6 +32,7 @@ export default function SetupPage() {
     if (!slugTouched) setSlug(slugPreview(value));
   }
 
+  usePageTitle("Set up");
   return (
     <div className="login-split">
       <aside className="login-brand">

@@ -30,6 +30,7 @@ import {
 } from "@/lib/pull-requests";
 import { ReviewSurface } from "@/components/code/review-surface";
 import { useUrlState } from "@/components/use-url-state";
+import { usePageTitle } from "@/lib/page-title";
 
 /** A unified diff, coloured by line kind.
  *
@@ -1219,6 +1220,7 @@ export default function ModelsPage() {
 
   const canEdit = project ? project.effective_role !== "viewer" : false;
 
+  usePageTitle("Models", project?.name);
   return (
     <main>
       <div className="page-head">

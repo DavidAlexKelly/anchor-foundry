@@ -18,6 +18,7 @@ import { CopyLinkButton } from "@/components/use-url-state";
 import { ApiError, resourceFavourites } from "@/lib/api";
 import { canShowStar, starGlyph, starLabel } from "@/lib/favourites";
 import type { ResolvedResource } from "@/lib/types";
+import { pageTitle, useDocumentTitle } from "@/lib/page-title";
 
 export function ApplicationShell({
   resource,
@@ -33,6 +34,9 @@ export function ApplicationShell({
   const projectHref = resource.project_slug
     ? `/${resource.workspace_slug}/${resource.project_slug}`
     : null;
+  // A module names its own tab, from its header (p.47).
+  useDocumentTitle(resource.kind === "canvas_app"
+    ? null : pageTitle(resource.name, resource.project_name ?? resource.workspace_name));
 
   return (
     <div className="app-shell">

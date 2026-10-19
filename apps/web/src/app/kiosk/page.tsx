@@ -20,6 +20,7 @@ import { ApiError, api, canvas as canvasApi, setKioskToken } from "@/lib/api";
 import { forgetKioskToken, storedKioskToken } from "@/lib/kiosk";
 import { PublishedModule } from "@/components/canvas/published-module";
 import { readerLayout } from "@/components/canvas/reader-layout";
+import { usePageTitle } from "@/lib/page-title";
 
 export default function KioskPage() {
   // Read after mount: session storage is the browser's, and the first render
@@ -60,6 +61,7 @@ export default function KioskPage() {
     leave(back);
   };
 
+  usePageTitle(app.data?.name);
   if (token === undefined) return null;
   const ended = [current.error, app.error].some((e) => e instanceof ApiError && e.status === 401);
   if (token === null || ended) {

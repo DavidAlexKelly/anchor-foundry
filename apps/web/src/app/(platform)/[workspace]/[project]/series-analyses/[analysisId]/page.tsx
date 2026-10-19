@@ -11,6 +11,7 @@ import { useParams } from "next/navigation";
 import { ApiError, seriesAnalyses } from "@/lib/api";
 import { SeriesAnalysisView } from "@/components/series-analysis-view";
 import { useProjectBySlug, useWorkspaceBySlug } from "@/components/use-workspace";
+import { usePageTitle } from "@/lib/page-title";
 
 export default function SeriesAnalysisPage() {
   const params = useParams<{ workspace: string; project: string; analysisId: string }>();
@@ -23,6 +24,7 @@ export default function SeriesAnalysisPage() {
     retry: false,
   });
   const a = analysis.data;
+  usePageTitle(analysis.data?.name, project?.name);
   return (
     <main>
       <p className="login-note">

@@ -10,6 +10,7 @@ import { useParams } from "next/navigation";
 
 import { ApiError, seriesAnalyses } from "@/lib/api";
 import { useProjectBySlug, useWorkspaceBySlug } from "@/components/use-workspace";
+import { usePageTitle } from "@/lib/page-title";
 
 export default function SeriesAnalysesPage() {
   const params = useParams<{ workspace: string; project: string }>();
@@ -20,6 +21,7 @@ export default function SeriesAnalysesPage() {
     queryFn: () => seriesAnalyses.list(workspace!.id, project!.id),
     enabled: !!workspace && !!project,
   });
+  usePageTitle("Time series analyses", project?.name);
   return (
     <main>
       <h1>Time series analyses</h1>
